@@ -1,0 +1,217 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id             String           @id @default(cuid())
+  email          String?          @unique
+  name           String?
+  emailVerified  DateTime?
+  image          String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  accounts       Account[]
+  sessions       Session[]
+  likes          Like[]
+  follows        Follow[]
+  recentlyPlayed RecentlyPlayed[]
+  searchHistory  SearchHistory[]
+  playlists      Playlist[]
+  playbackState  PlaybackState?
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Artist {
+  id               String   @id @default(cuid())
+  provider         String
+  providerArtistId String
+  name             String
+  image            String?
+  bio              String?
+  genres           Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  albums           Album[]
+  tracks           Track[]
+  follows          Follow[]
+
+  @@unique([provider, providerArtistId])
+  @@index([name])
+  @@index([provider])
+}
+
+model Album {
+  id              String   @id @default(cuid())
+  provider        String
+  providerAlbumId String
+  name            String
+  artistId        String
+  artist          Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  image           String?
+  releaseDate     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tracks          Track[]
+
+  @@unique([provider, providerAlbumId])
+  @@index([artistId])
+  @@index([provider])
+}
+
+model Track {
+  id              String           @id @default(cuid())
+  provider        String
+  providerTrackId String
+  title           String
+  artistId        String
+  artist          Artist           @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  albumId         String?
+  album           Album?           @relation(fields: [albumId], references: [id], onDelete: SetNull)
+  duration        Int?
+  artworkUrl      String?
+  streamUrl       String?
+  previewUrl      String?
+  genres          Json?
+  releaseDate     String?
+  providerUrl     String?
+  explicit        Boolean?
+  metadata        Json?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  playlistTracks  PlaylistTrack[]
+  likes           Like[]
+  recentPlays     RecentlyPlayed[]
+
+  @@unique([provider, providerTrackId])
+  @@index([artistId])
+  @@index([albumId])
+  @@index([title])
+  @@index([provider])
+}
+
+model Like {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trackId   String
+  track     Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, trackId])
+  @@index([userId])
+}
+
+model Follow {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artistId  String
+  artist    Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, artistId])
+  @@index([userId])
+}
+
+model RecentlyPlayed {
+  id       String   @id @default(cuid())
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trackId  String
+  track    Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  playedAt DateTime @default(now())
+
+  @@index([userId, playedAt])
+}
+
+model SearchHistory {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  query      String
+  searchedAt DateTime @default(now())
+
+  @@index([userId, searchedAt])
+}
+
+model Playlist {
+  id          String          @id @default(cuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  artwork     String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  tracks      PlaylistTrack[]
+
+  @@index([userId])
+}
+
+model PlaylistTrack {
+  id         String   @id @default(cuid())
+  playlistId String
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  trackId    String
+  track      Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  position   Int
+  addedAt    DateTime @default(now())
+
+  @@unique([playlistId, trackId])
+  @@unique([playlistId, position])
+  @@index([playlistId, position])
+}
+
+model PlaybackState {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider        String
+  providerTrackId String
+  position        Int
+  revision        Int      @default(0)
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+}

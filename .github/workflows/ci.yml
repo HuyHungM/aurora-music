@@ -1,0 +1,92 @@
+# Deterministic CI (Phase 24). No secrets, no live providers, no
+# credentials: the live playback suite self-skips without
+# AURORA_E2E_LIVE_PLAYBACK=1, and AUTH_SECRET below is a dummy dev value
+# (auth is not exercised here).
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aurora
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aurora
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:db
+      - run: npm run db:verify
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aurora
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aurora
+      AUTH_SECRET: ci-dev-placeholder-not-a-secret
+      CI: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run verify:client-bundle
+      - run: npm run test:e2e:playback
+      - run: npm run smoke:prod -- --spawn --port 3100
+      - name: production smoke checks
+        run: |
+          npm run start -- -p 3100 &
+          SERVER_PID=$!
+          trap "kill $SERVER_PID" EXIT
+          for attempt in $(seq 1 30); do
+            if node -e "fetch('http://127.0.0.1:3100/').then(()=>process.exit(0)).catch(()=>process.exit(1))"; then
+              break
+            fi
+            sleep 4
+          done
+          npm run smoke:prod -- http://127.0.0.1:3100
