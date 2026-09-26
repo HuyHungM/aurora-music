@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../../src/generated/prisma/client";
-import { FIXTURE_ARTIST, FIXTURE_TRACKS, TEST_USERS } from "./constants";
+import { E2E_LOCALE, FIXTURE_ARTIST, FIXTURE_CROSS_PROVIDER_TRACKS, FIXTURE_TRACKS, TEST_USERS } from "./constants";
 
 const envFile = resolve(process.cwd(), ".env");
 if (existsSync(envFile)) {
@@ -62,8 +62,11 @@ export async function ensureAuthTestData(): Promise<AuthTestData> {
     TEST_USERS.map((user) =>
       prisma.user.upsert({
         where: { email: user.email },
-        update: { name: user.name },
-        create: { email: user.email, name: user.name },
+        // Re-asserted on every run so a stale locale can never leak in
+        // from an earlier seed: the authenticated specs assert English
+        // accessible names (see E2E_LOCALE).
+        update: { name: user.name, locale: E2E_LOCALE },
+        create: { email: user.email, name: user.name, locale: E2E_LOCALE },
         select: { id: true, email: true },
       }),
     ),
@@ -86,7 +89,7 @@ export async function ensureAuthTestData(): Promise<AuthTestData> {
   });
 
   await Promise.all(
-    FIXTURE_TRACKS.map((track) =>
+    [...FIXTURE_TRACKS, ...FIXTURE_CROSS_PROVIDER_TRACKS].map((track) =>
       prisma.track.upsert({
         where: {
           provider_providerTrackId: {
@@ -181,6 +184,54 @@ export async function getPlaylistTrackTitles(
     orderBy: { position: "asc" },
   });
   return rows.map((row) => row.track.title);
+}
+
+/** Raw persisted queue snapshot JSON for the user (null when no row). */
+export async function getQueueSnapshotRaw(
+  email: string,
+): Promise<unknown> {
+  const prisma = getTestClient();
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true },
+  });
+  if (!user) {
+    return null;
+  }
+  const row = await prisma.playbackState.findUnique({
+    where: { userId: user.id },
+  });
+  return row?.queueSnapshot ?? null;
+}
+
+/** Whether the user (by email) currently follows the fixture artist. */
+export async function isArtistFollowedByEmail(
+  email: string,
+): Promise<boolean> {
+  const prisma = getTestClient();
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true },
+  });
+  if (!user) {
+    return false;
+  }
+  const artist = await prisma.artist.findUnique({
+    where: {
+      provider_providerArtistId: {
+        provider: FIXTURE_ARTIST.provider,
+        providerArtistId: FIXTURE_ARTIST.providerArtistId,
+      },
+    },
+    select: { id: true },
+  });
+  if (!artist) {
+    return false;
+  }
+  const count = await prisma.follow.count({
+    where: { userId: user.id, artistId: artist.id },
+  });
+  return count > 0;
 }
 
 /** Whether the user (by email) currently likes the track. */

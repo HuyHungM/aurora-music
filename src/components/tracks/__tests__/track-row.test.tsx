@@ -47,7 +47,7 @@ describe("TrackRow with collection context", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Play Track 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Track 2" }));
 
     const state = usePlayerStore.getState();
     expect(state.currentTrack?.id).toBe("t2");
@@ -70,7 +70,7 @@ describe("TrackRow with collection context", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Play Track 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Track 1" }));
 
     const state = usePlayerStore.getState();
     expect(state.currentTrack?.id).toBe("t1");
@@ -92,7 +92,7 @@ describe("TrackRow with collection context", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Play Track 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Track 2" }));
 
     const state = usePlayerStore.getState();
     expect(state.currentTrack?.id).toBe("t2");
@@ -112,7 +112,7 @@ describe("TrackRow with collection context", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Remove Track 1 from playlist" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Xóa Track 1 khỏi playlist" })).toBeTruthy();
   });
 
   it("hides remove button when onRemoveFromPlaylist is not provided", () => {
@@ -122,7 +122,7 @@ describe("TrackRow with collection context", () => {
       <TrackRow track={track} showMenu={true} showAddToPlaylist={false} />,
     );
 
-    expect(screen.queryByRole("button", { name: "Remove Track 1 from playlist" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Xóa Track 1 khỏi playlist" })).toBeNull();
   });
 
   it("calls onRemoveFromPlaylist when remove button is clicked", () => {
@@ -138,7 +138,7 @@ describe("TrackRow with collection context", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove Track 1 from playlist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa Track 1 khỏi playlist" }));
 
     expect(onRemove).toHaveBeenCalledOnce();
   });
@@ -183,7 +183,7 @@ describe("TrackRow", () => {
     const track = makePlayableTrack("t1", { artistName: "Row Artist" });
     render(<TrackRow track={track} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Play Track t1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Track t1" }));
     await waitFor(() => {
       const state = usePlayerStore.getState();
       expect(state.currentTrack?.id).toBe("t1");
@@ -199,14 +199,14 @@ describe("TrackRow", () => {
     });
     render(<TrackRow track={track} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Play Track t1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Track t1" }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Pause Track t1" })).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Tạm dừng Track t1" })).toBeTruthy(),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Pause Track t1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Tạm dừng Track t1" }));
     expect(usePlayerStore.getState().isPlaying).toBe(false);
-    expect(screen.getByRole("button", { name: "Play Track t1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Phát Track t1" })).toBeTruthy();
   });
 
   it("keeps separate rows for the same id across providers", async () => {
@@ -220,13 +220,13 @@ describe("TrackRow", () => {
       </>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Play Jamendo pick" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Jamendo pick" }));
     await waitFor(() =>
       expect(usePlayerStore.getState().currentTrack?.provider).toBe("jamendo"),
     );
 
     // playTrack replaces the queue; clicking the second track replaces with just that track
-    fireEvent.click(screen.getByRole("button", { name: "Play Mock pick" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Mock pick" }));
     await waitFor(() => {
       const state = usePlayerStore.getState();
       expect(state.currentTrack?.provider).toBe("mock");

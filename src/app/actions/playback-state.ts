@@ -6,7 +6,7 @@ import {
   getPlaybackState,
   savePlaybackState,
 } from "@/lib/dal/playback-state";
-import { fetchTrackDetail } from "@/lib/providers/server";
+import { fetchTrackDetail, getShellProviders } from "@/lib/providers/server";
 import { getProvider } from "@/lib/providers/registry";
 import type { Track } from "@/lib/domain";
 import {
@@ -14,6 +14,7 @@ import {
   playbackStateSaveSchema,
   providerIdSchema,
 } from "@/lib/validation/schemas";
+import { validateQueueSnapshot } from "@/lib/player/queue-snapshot";
 
 export interface PlaybackStatePayload {
   provider: string;
@@ -21,6 +22,12 @@ export interface PlaybackStatePayload {
   position: number;
   revision: number;
   updatedAt: string;
+  /**
+   * Validated versioned queue snapshot when the row carries one.
+   * Serialized JSON only — never playback URLs (rejected at the
+   * validation schema, at DAL write, and again at DAL read).
+   */
+  queueSnapshot?: unknown;
 }
 
 export async function getPlaybackStateAction(): Promise<
@@ -39,6 +46,7 @@ export async function getPlaybackStateAction(): Promise<
             position: state.position,
             revision: state.revision,
             updatedAt: state.updatedAt.toISOString(),
+            ...(state.queueSnapshot ? { queueSnapshot: state.queueSnapshot } : {}),
           }
         : null,
     };
@@ -55,12 +63,27 @@ export async function savePlaybackStateAction(
     if (!parsed.success) {
       return { ok: false };
     }
+    // The wire schema is structural only. Semantic validation and the
+    // v1 → v2 upgrade happen here, so an old tab's snapshot is migrated
+    // (never rejected, never half-restored) and a malformed one is
+    // dropped instead of being written.
+    //
+    // `undefined` must stay `undefined`: the DAL reads it as "leave the
+    // column untouched" while `null` is an explicit instruction to write
+    // SQL NULL. Coercing an absent field to null let any caller that
+    // omitted it — an older deployed tab mid-rollout, or a crafted
+    // request — erase a full persisted queue on a routine checkpoint.
+    const queueSnapshot =
+      parsed.data.queueSnapshot === undefined
+        ? undefined
+        : validateQueueSnapshot(parsed.data.queueSnapshot);
     const user = await requireUser();
     const saved = await savePlaybackState(user.id, {
       provider: parsed.data.provider,
       providerTrackId: parsed.data.providerTrackId,
       position: parsed.data.position,
       revision: parsed.data.revision,
+      queueSnapshot,
     });
     if (!saved) {
       return { ok: true, stale: true };
@@ -106,6 +129,15 @@ export async function resolvePlaybackTrackAction(
     return { ok: true, track: null };
   }
   try {
+    // The provider registry is populated lazily by getShellProviders(), so a
+    // cold process that has not yet rendered a provider-backed page has an
+    // empty registry. Warming it here makes resolution independent of which
+    // page happened to be the process's first request: without this, a cold
+    // `/library` visit reported the track as unresolvable, and the
+    // persistence layer treats an unresolvable persisted track as
+    // permission to delete the user's saved session and queue — silently,
+    // with no error surfaced anywhere. The ensure* calls are idempotent.
+    getShellProviders();
     let provider;
     try {
       provider = getProvider(providerParsed.data);

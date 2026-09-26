@@ -9,6 +9,7 @@ import {
   reorderPlaylistAction,
 } from "@/app/actions/playlist";
 import { Dialog, DialogTitle, DialogClose, DialogActions } from "@/components/ui/dialog";
+import { useLocale } from "@/components/i18n/locale-provider";
 import { Button } from "@/components/ui/button";
 import { PencilIcon, TrashIcon, ArrowUpIcon, ArrowDownIcon } from "@/components/ui/icons";
 import type { TrackRef } from "@/lib/domain";
@@ -24,6 +25,7 @@ function RenameForm({
   const [description, setDescription] = useState(playlist.description ?? "");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { t } = useLocale();
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -34,7 +36,7 @@ function RenameForm({
     e.preventDefault();
     const trimmedTitle = title.trim();
     if (!trimmedTitle) {
-      setError("Playlist name is required");
+      setError(t("playlist.nameRequired"));
       return;
     }
 
@@ -51,7 +53,7 @@ function RenameForm({
     if (result.ok) {
       onClose(true);
     } else {
-      setError(result.error ?? "Failed to update playlist");
+      setError(t("playlist.updateError"));
     }
   };
 
@@ -62,7 +64,7 @@ function RenameForm({
           htmlFor="rename-title"
           className="text-sm font-medium text-text-primary"
         >
-          Name
+          {t("playlist.nameLabel")}
         </label>
         <input
           ref={titleInputRef}
@@ -70,7 +72,7 @@ function RenameForm({
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Playlist name"
+          placeholder={t("playlist.namePlaceholder")}
           maxLength={200}
           className="h-10 rounded-lg border border-border-subtle bg-surface-2 px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
           aria-describedby={error ? "rename-error" : undefined}
@@ -83,13 +85,13 @@ function RenameForm({
           htmlFor="rename-description"
           className="text-sm font-medium text-text-primary"
         >
-          Description <span className="text-text-muted">(optional)</span>
+          {t("playlist.descriptionLabel")} <span className="text-text-muted">{t("playlist.descriptionOptional")}</span>
         </label>
         <textarea
           id="rename-description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="Add a description..."
+          placeholder={t("playlist.descriptionPlaceholder")}
           rows={3}
           maxLength={500}
           className="rounded-lg border border-border-subtle bg-surface-2 px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent resize-none"
@@ -104,10 +106,10 @@ function RenameForm({
 
       <DialogActions>
         <Button type="button" variant="ghost" onClick={() => onClose()} disabled={isSubmitting}>
-          Cancel
+          {t("common.cancel")}
         </Button>
         <Button type="submit" variant="primary" disabled={isSubmitting || !title.trim()}>
-          {isSubmitting ? "Saving..." : "Save"}
+          {isSubmitting ? t("playlist.saving") : t("common.save")}
         </Button>
       </DialogActions>
     </form>
@@ -125,6 +127,7 @@ function DeleteConfirmDialog({
 }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useLocale();
 
   const handleDelete = async () => {
     setIsSubmitting(true);
@@ -137,20 +140,20 @@ function DeleteConfirmDialog({
     if (result.ok) {
       onClose(true);
     } else {
-      setError(result.error ?? "Failed to delete playlist");
+      setError(t("playlist.deleteError"));
     }
   };
 
   return (
-    <Dialog open={open} onClose={() => onClose()} label="Delete playlist">
+    <Dialog open={open} onClose={() => onClose()} label={t("playlist.deleteTitle")}>
       <div className="relative">
-        <DialogTitle>Delete playlist</DialogTitle>
+        <DialogTitle>{t("playlist.deleteTitle")}</DialogTitle>
         <DialogClose onClick={() => onClose()} />
       </div>
 
       <div className="mt-4">
         <p className="text-sm text-text-muted">
-          Are you sure you want to delete &quot;{playlist.title}&quot;? This action cannot be undone.
+          {t("playlist.deleteConfirm", { title: playlist.title })}
         </p>
 
         {error ? (
@@ -161,7 +164,7 @@ function DeleteConfirmDialog({
 
         <DialogActions>
           <Button type="button" variant="ghost" onClick={() => onClose()} disabled={isSubmitting}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             type="button"
@@ -170,7 +173,7 @@ function DeleteConfirmDialog({
             disabled={isSubmitting}
             className="bg-red-600 hover:bg-red-700 text-white"
           >
-            {isSubmitting ? "Deleting..." : "Delete"}
+            {isSubmitting ? t("common.deleting") : t("common.delete")}
           </Button>
         </DialogActions>
       </div>
@@ -186,6 +189,7 @@ export function PlaylistActions({
   onPlaylistUpdated?: () => void;
 }) {
   const router = useRouter();
+  const { t } = useLocale();
   const [showRename, setShowRename] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [renameKey, setRenameKey] = useState(0);
@@ -216,27 +220,27 @@ export function PlaylistActions({
           variant="ghost"
           size="sm"
           onClick={handleOpenRename}
-          aria-label="Rename playlist"
+          aria-label={t("playlist.renamePlaylist")}
           className="gap-1.5"
         >
           <PencilIcon size={16} />
-          <span className="hidden sm:inline">Rename</span>
+          <span className="hidden sm:inline">{t("playlist.renamePlaylist")}</span>
         </Button>
         <Button
           variant="ghost"
           size="sm"
           onClick={() => setShowDelete(true)}
-          aria-label="Delete playlist"
+          aria-label={t("playlist.deletePlaylist")}
           className="gap-1.5 text-red-400 hover:text-red-300 hover:bg-red-400/10"
         >
           <TrashIcon size={16} />
-          <span className="hidden sm:inline">Delete</span>
+          <span className="hidden sm:inline">{t("common.delete")}</span>
         </Button>
       </div>
 
-      <Dialog open={showRename} onClose={() => setShowRename(false)} label="Rename playlist">
+      <Dialog open={showRename} onClose={() => setShowRename(false)} label={t("playlist.renameTitle")}>
         <div className="relative">
-          <DialogTitle>Rename playlist</DialogTitle>
+          <DialogTitle>{t("playlist.renameTitle")}</DialogTitle>
           <DialogClose onClick={() => setShowRename(false)} />
         </div>
         <div className="mt-4">
@@ -262,6 +266,7 @@ export function PlaylistTrackActions({
   onReorder?: () => void;
 }) {
   const [isReordering, setIsReordering] = useState(false);
+  const { t } = useLocale();
 
   const handleMoveUp = async () => {
     if (trackIndex <= 0) return;
@@ -309,7 +314,7 @@ export function PlaylistTrackActions({
     <div className="flex items-center gap-1">
       <button
         type="button"
-        aria-label="Move track up"
+        aria-label={t("playlist.moveUp")}
         onClick={handleMoveUp}
         disabled={trackIndex <= 0 || isReordering}
         className="grid h-8 w-8 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-2 hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed"
@@ -318,7 +323,7 @@ export function PlaylistTrackActions({
       </button>
       <button
         type="button"
-        aria-label="Move track down"
+        aria-label={t("playlist.moveDown")}
         onClick={handleMoveDown}
         disabled={trackIndex >= tracks.length - 1 || isReordering}
         className="grid h-8 w-8 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-2 hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed"

@@ -8,10 +8,25 @@ import { idSchema, providerIdSchema } from "@/lib/validation/schemas";
 import { isYouTubeVideoId } from "@/lib/providers/youtube/normalize";
 import { createInnertubePlaybackClient } from "@/lib/providers/youtube/playback/innertube-client";
 import { createYouTubeResolver } from "@/lib/providers/youtube/playback/youtube-resolver";
+import { guardServerAction, type GuardFailureMeta } from "@/lib/api/action-guard";
 
 export type ResolveAudioSourceResult =
   | { ok: true; source: SerializedAudioSource }
-  | { ok: false; error: SerializedEngineError };
+  // `error` here is a SerializedEngineError, not a string, so the guard's
+  // string field is omitted rather than intersected.
+  | { ok: false; error: SerializedEngineError } & GuardFailureMeta;
+
+/**
+ * Resolving a source is the most expensive single call in the product: it runs
+ * the Innertube client and returns a signed, short-lived media URL. It is also
+ * reachable anonymously, so it is budgeted (RULE 12).
+ *
+ * 120/minute is the loosest budget here because the legitimate rate is real: a
+ * listener skipping through a queue resolves once per track, and resolving the
+ * next few tracks eagerly is a normal implementation. The point of the budget
+ * is to stop an unattended loop, not to slow down a person.
+ */
+const RESOLVE_OFF_MESSAGE = "Playback is temporarily unavailable right now.";
 
 /**
  * Resolves an exact youtube source into a short-lived AudioSource payload
@@ -26,6 +41,33 @@ export async function resolveAudioSourceAction(
   provider: unknown,
   providerTrackId: unknown,
 ): Promise<ResolveAudioSourceResult> {
+  // Charged before any provider work, and before validation: the cost this
+  // protects is the outbound request, so the budget must not depend on whether
+  // the arguments happen to be well-formed.
+  const denied = await guardServerAction({
+    featureOffMessage: RESOLVE_OFF_MESSAGE,
+    bucket: "playbackResolve",
+  });
+  if (denied) {
+    return {
+      ok: false,
+      error: serializeEngineError(
+        new PlaybackResolutionError(
+          // The real track id is not read before the guard on purpose: a
+          // rejected caller should not be able to use this path to probe
+          // arguments. The stage is "resolve" and the error is retryable,
+          // because a budget denial is transient by construction.
+          { provider: "youtube", providerTrackId: "" },
+          "resolve",
+          denied.error,
+          { retryable: denied.code === "RATE_LIMITED" },
+        ),
+      ),
+      code: denied.code,
+      requestId: denied.requestId,
+      ...(denied.retryAfterMs !== undefined ? { retryAfterMs: denied.retryAfterMs } : {}),
+    };
+  }
   const providerParsed = providerIdSchema.safeParse(provider);
   const trackParsed = idSchema.safeParse(providerTrackId);
   if (!providerParsed.success || !trackParsed.success) {

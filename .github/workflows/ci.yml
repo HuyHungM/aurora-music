@@ -1,7 +1,14 @@
-# Deterministic CI (Phase 24). No secrets, no live providers, no
-# credentials: the live playback suite self-skips without
+# Deterministic CI (Phase 24; Bun migration in Phase 50). No secrets, no live
+# providers, no credentials: the live playback suite self-skips without
 # AURORA_E2E_LIVE_PLAYBACK=1, and AUTH_SECRET below is a dummy dev value
 # (auth is not exercised here).
+#
+# Bun is the canonical package manager: bun.lock is the only lockfile and
+# `bun install --frozen-lockfile` is the only dependency install. Node is
+# still provisioned because toolchain internals (Prisma's engine spawn, Next's
+# own helpers) shell out to a Node runtime; it is NOT used to install or run
+# project scripts. The `cache: npm` setting is deliberately gone — npm is no
+# longer a package manager here, so its cache would never be populated.
 name: ci
 
 on: [push, pull_request]
@@ -14,11 +21,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm test
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned to the version in package.json "packageManager".
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run test
 
   db:
     runs-on: ubuntu-latest
@@ -42,10 +52,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run test:db
-      - run: npm run db:verify
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun run test:db
+      - run: bun run db:verify
 
   e2e:
     runs-on: ubuntu-latest
@@ -71,22 +83,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run build
-      - run: npm run verify:client-bundle
-      - run: npm run test:e2e:playback
-      - run: npm run smoke:prod -- --spawn --port 3100
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run build
+      - run: bun run verify:client-bundle
+      - run: bun run test:e2e:playback
+      - run: bun run smoke:prod -- --spawn --port 3100
       - name: production smoke checks
         run: |
-          npm run start -- -p 3100 &
+          bun run start -- -p 3100 &
           SERVER_PID=$!
           trap "kill $SERVER_PID" EXIT
           for attempt in $(seq 1 30); do
-            if node -e "fetch('http://127.0.0.1:3100/').then(()=>process.exit(0)).catch(()=>process.exit(1))"; then
+            if bun -e "fetch('http://127.0.0.1:3100/').then(()=>process.exit(0)).catch(()=>process.exit(1))"; then
               break
             fi
             sleep 4
           done
-          npm run smoke:prod -- http://127.0.0.1:3100
+          bun run smoke:prod -- http://127.0.0.1:3100

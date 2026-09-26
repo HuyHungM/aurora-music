@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { jsonResponse } from "@/lib/api/transport";
 import { getEnv } from "@/lib/config/env";
 import { prisma } from "@/lib/db";
 
@@ -49,7 +50,7 @@ async function checkDatabase(): Promise<DatabaseState> {
  * Response shape is fixed and minimal: no versions, paths, user data,
  * secrets, or provider details. Safe to expose to load balancers.
  */
-export async function GET(): Promise<NextResponse<HealthBody>> {
+export async function GET(request?: Request): Promise<NextResponse<HealthBody>> {
   let environment: EnvironmentState;
   try {
     getEnv();
@@ -59,7 +60,7 @@ export async function GET(): Promise<NextResponse<HealthBody>> {
       status: "error",
       checks: { environment: "invalid", database: "unknown" },
     };
-    return NextResponse.json(body, { status: 503 });
+    return jsonResponse(body, { request, status: 503 });
   }
 
   const database = await checkDatabase();
@@ -68,5 +69,8 @@ export async function GET(): Promise<NextResponse<HealthBody>> {
     status: ready ? "ok" : "degraded",
     checks: { environment, database },
   };
-  return NextResponse.json(body, { status: ready ? 200 : 503 });
+  // The correlation id rides in a header, not the body: this route's body shape
+  // is a published, key-for-key contract, and a load balancer diffing the body
+  // must not see a field appear and disappear.
+  return jsonResponse(body, { request, status: ready ? 200 : 503 });
 }

@@ -7,26 +7,31 @@ vi.mock("@/lib/dal/session", () => ({
 
 vi.mock("@/lib/dal/playlist", () => ({
   createPlaylist: vi.fn(),
-  getPlaylist: vi.fn(),
   listUserPlaylists: vi.fn(),
   updatePlaylist: vi.fn(),
+  setPlaylistVisibility: vi.fn(),
   deletePlaylist: vi.fn(),
   addTrackToPlaylist: vi.fn(),
   removeTrackFromPlaylist: vi.fn(),
   reorderPlaylist: vi.fn(),
 }));
 
+vi.mock("@/lib/dal/library", () => ({
+  getOwnedPlaylist: vi.fn(),
+}));
+
 import { requireUser } from "@/lib/dal/session";
 import {
   createPlaylist,
-  getPlaylist,
   listUserPlaylists,
   updatePlaylist,
+  setPlaylistVisibility,
   deletePlaylist,
   addTrackToPlaylist,
   removeTrackFromPlaylist,
   reorderPlaylist,
 } from "@/lib/dal/playlist";
+import { getOwnedPlaylist } from "@/lib/dal/library";
 import {
   createPlaylistAction,
   updatePlaylistAction,
@@ -36,6 +41,7 @@ import {
   reorderPlaylistAction,
   getPlaylistAction,
   listUserPlaylistsAction,
+  setPlaylistVisibilityAction,
 } from "../playlist";
 
 const mockUser = { id: "user-1" } as never;
@@ -56,6 +62,7 @@ const mockPlaylist = {
   ownerId: "user-1",
   title: "My Playlist",
   description: "A great mix",
+  visibility: "private" as const,
   items: [],
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -273,6 +280,22 @@ describe("addTrackToPlaylistAction", () => {
 
     expect(result.ok).toBe(false);
   });
+
+  it("maps duplicate membership to a conflict result, not a server error", async () => {
+    const { ConflictError } = await import("@/lib/errors");
+    vi.mocked(requireUser).mockResolvedValue(mockUser);
+    vi.mocked(addTrackToPlaylist).mockRejectedValue(
+      new ConflictError("This track is already in the playlist"),
+    );
+
+    const result = await addTrackToPlaylistAction("pl1", mockTrack);
+
+    expect(result).toEqual({
+      ok: false,
+      conflict: true,
+      error: "Already in playlist",
+    });
+  });
 });
 
 describe("removeTrackFromPlaylistAction", () => {
@@ -385,27 +408,101 @@ describe("getPlaylistAction", () => {
     vi.clearAllMocks();
   });
 
-  it("returns playlist", async () => {
-    vi.mocked(getPlaylist).mockResolvedValue(mockPlaylist);
+  it("returns the caller's own playlist", async () => {
+    vi.mocked(requireUser).mockResolvedValue(mockUser);
+    vi.mocked(getOwnedPlaylist).mockResolvedValue(mockPlaylist);
 
     const result = await getPlaylistAction("pl1");
 
     expect(result).toEqual({ ok: true, playlist: mockPlaylist });
-    expect(getPlaylist).toHaveBeenCalledWith("pl1");
+    expect(getOwnedPlaylist).toHaveBeenCalledWith("user-1", "pl1");
   });
 
-  it("returns ok:false when playlist not found", async () => {
-    vi.mocked(getPlaylist).mockResolvedValue(null);
+  it("returns no playlist when it is not the caller's", async () => {
+    vi.mocked(requireUser).mockResolvedValue(mockUser);
+    vi.mocked(getOwnedPlaylist).mockResolvedValue(null);
 
-    const result = await getPlaylistAction("nonexistent");
+    const result = await getPlaylistAction("pl1");
 
     expect(result).toEqual({ ok: true, playlist: undefined });
   });
 
   it("returns ok:false when DB fails", async () => {
-    vi.mocked(getPlaylist).mockRejectedValue(new Error("DB error"));
+    vi.mocked(requireUser).mockResolvedValue(mockUser);
+    vi.mocked(getOwnedPlaylist).mockRejectedValue(new Error("DB error"));
 
     const result = await getPlaylistAction("pl1");
+
+    expect(result.ok).toBe(false);
+  });
+
+  // Phase 47 regression: this action used to call an ungated by-id DAL read
+  // with no session, so an anonymous caller could read any playlist by id.
+  it("never reads a playlist without a session", async () => {
+    vi.mocked(requireUser).mockRejectedValue(new Error("Not authenticated"));
+
+    const result = await getPlaylistAction("pl1");
+
+    expect(result.ok).toBe(false);
+    expect(getOwnedPlaylist).not.toHaveBeenCalled();
+  });
+});
+
+describe("setPlaylistVisibilityAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shares a playlist and returns the minted token", async () => {
+    vi.mocked(requireUser).mockResolvedValue(mockUser);
+    vi.mocked(setPlaylistVisibility).mockResolvedValue({
+      visibility: "shared",
+      shareToken: "tok_abc",
+    });
+
+    const result = await setPlaylistVisibilityAction("pl1", "shared");
+
+    expect(result).toEqual({ ok: true, visibility: "shared", shareToken: "tok_abc" });
+    expect(setPlaylistVisibility).toHaveBeenCalledWith("user-1", "pl1", "shared");
+  });
+
+  it("unshares a playlist and returns a null token", async () => {
+    vi.mocked(requireUser).mockResolvedValue(mockUser);
+    vi.mocked(setPlaylistVisibility).mockResolvedValue({
+      visibility: "private",
+      shareToken: null,
+    });
+
+    const result = await setPlaylistVisibilityAction("pl1", "private");
+
+    expect(result).toEqual({ ok: true, visibility: "private", shareToken: null });
+  });
+
+  it("rejects an unknown visibility without touching the DAL", async () => {
+    vi.mocked(requireUser).mockResolvedValue(mockUser);
+
+    const result = await setPlaylistVisibilityAction("pl1", "public");
+
+    expect(result).toEqual({ ok: false, error: "Invalid input" });
+    expect(setPlaylistVisibility).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for an unauthenticated caller", async () => {
+    vi.mocked(requireUser).mockRejectedValue(new Error("Not authenticated"));
+
+    const result = await setPlaylistVisibilityAction("pl1", "shared");
+
+    expect(result.ok).toBe(false);
+    expect(setPlaylistVisibility).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the caller does not own the playlist", async () => {
+    vi.mocked(requireUser).mockResolvedValue(mockUser);
+    vi.mocked(setPlaylistVisibility).mockRejectedValue(
+      new Error("You do not own this playlist"),
+    );
+
+    const result = await setPlaylistVisibilityAction("pl1", "shared");
 
     expect(result.ok).toBe(false);
   });

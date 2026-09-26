@@ -5,7 +5,9 @@ import { getSessionUserId } from "@/lib/dal/session";
 import { isTrackLiked } from "@/lib/dal/like";
 import { mapTrackRow } from "@/lib/dal/mappers";
 import { LikeButton } from "@/components/tracks/like-button";
+import { FollowButton } from "@/components/artist/follow-button";
 import { TrackRow } from "@/components/tracks/track-row";
+import { isFollowing } from "@/lib/dal/follow";
 import { E2E_AUTH_FLAG } from "@/../e2e/auth/constants";
 
 export const metadata: Metadata = { title: "E2E fixture library" };
@@ -48,6 +50,23 @@ export default async function E2EFixtureLibraryPage() {
     }
   }
 
+  const fixtureArtist =
+    tracks.length > 0
+      ? {
+          id: tracks[0].artistId,
+          provider: tracks[0].provider,
+          providerArtistId: tracks[0].artistId,
+          name: tracks[0].artistName,
+        }
+      : null;
+  const artistFollowing =
+    userId && fixtureArtist
+      ? await isFollowing(userId, {
+          provider: fixtureArtist.provider,
+          providerArtistId: fixtureArtist.providerArtistId,
+        })
+      : false;
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
@@ -58,6 +77,18 @@ export default async function E2EFixtureLibraryPage() {
           Deterministic catalog for authenticated persistence tests.
         </p>
       </div>
+
+      {fixtureArtist ? (
+        <div className="flex items-center gap-3 rounded-card border border-border-subtle bg-surface-1 p-4">
+          <FollowButton
+            artist={fixtureArtist}
+            initialFollowing={artistFollowing}
+          />
+          <span className="text-sm text-text-muted">
+            {fixtureArtist.name} — {artistFollowing ? "Following" : "Not following"}
+          </span>
+        </div>
+      ) : null}
 
       {tracks.length === 0 ? (
         <p className="text-sm text-text-muted">

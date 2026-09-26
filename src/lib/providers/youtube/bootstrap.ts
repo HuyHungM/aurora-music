@@ -6,12 +6,38 @@
  *
  * Idempotent: safe to call on every server request path. Re-registers only
  * when the configured key changed since the last call.
+ *
+ * PHASE 55 — SOURCE WIRING. Registration is unchanged, but what gets
+ * registered changed: the provider now receives a *tiered* transport rather
+ * than a Data API transport. InnerTube serves discovery (search, video
+ * metadata) and the official API remains the fallback plus the only source for
+ * channel metadata and playlists. `docs/youtube-request-map.md` records the
+ * per-endpoint decision; `tiered-transport.ts` is the code.
+ *
+ * The registration GATE is deliberately still the API key, even though
+ * InnerTube needs no key. Two reasons, both about blast radius rather than
+ * principle:
+ *
+ * 1. Making the YouTube provider keyless would change WHICH providers exist in
+ *    every deployment that has no key today — including the entire test suite,
+ *    which asserts that "no key" means "no YouTube". That is a different
+ *    phase from the one that moves the request path, and bundling them would
+ *    make both harder to verify.
+ * 2. With no key there is no official fallback at all. A keyless provider whose
+ *    InnerTube path degrades has nothing to fall back to, which is a worse
+ *    product than no provider. The trade is only worth it once the fallback
+ *    story for a keyless deployment is designed.
+ *
+ * It is recorded in `docs/scope-boundaries.md` as a deliberate deferral with
+ * this reasoning, rather than left as an undocumented gap.
  */
 
 import type { EnvConfig } from "@/lib/config/env";
 import { getEnv } from "@/lib/config/env";
 import { getProvider, registerProvider } from "../registry";
 import { createYouTubeApiTransport } from "./client";
+import { createInnerTubeTransport } from "./innertube/transport";
+import { createTieredTransport } from "./tiered-transport";
 import { createYouTubeProvider } from "./youtube-provider";
 import type { YouTubeProvider } from "./youtube-provider";
 
@@ -31,7 +57,11 @@ export function ensureYouTubeProvider(
       // Registry was cleared (e.g. tests): fall through and re-register.
     }
   }
-  const provider = createYouTubeProvider(createYouTubeApiTransport(apiKey));
+  const transport = createTieredTransport({
+    primary: createInnerTubeTransport(),
+    fallback: createYouTubeApiTransport(apiKey),
+  });
+  const provider = createYouTubeProvider(transport);
   registerProvider(provider);
   registeredKey = apiKey;
   return provider;

@@ -53,6 +53,56 @@ export async function listUserFollows(
   return rows.map(mapFollow);
 }
 
+export interface FollowedArtist {
+  followedAt: string;
+  artist: Artist;
+}
+
+function mapArtistRow(row: {
+  provider: string;
+  providerArtistId: string;
+  name: string;
+  image: string | null;
+  bio: string | null;
+  genres: unknown;
+}): Artist {
+  const genres = Array.isArray(row.genres)
+    ? row.genres.filter((genre): genre is string => typeof genre === "string")
+    : undefined;
+  return {
+    id: row.providerArtistId,
+    provider: row.provider as Artist["provider"],
+    providerArtistId: row.providerArtistId,
+    name: row.name,
+    image: row.image ?? undefined,
+    bio: row.bio ?? undefined,
+    genres,
+  };
+}
+
+/**
+ * Artists the user follows, most-recent first, for the Library
+ * Following Artists collection. Reuses the Follow rows — no second
+ * favorites system.
+ */
+export async function listFollowedArtists(
+  userId: string,
+  pagination: { limit?: number; offset?: number } = {},
+  db: PrismaClient = prisma,
+): Promise<FollowedArtist[]> {
+  const rows = await db.follow.findMany({
+    where: { userId },
+    include: { artist: true },
+    orderBy: { createdAt: "desc" },
+    take: pagination.limit,
+    skip: pagination.offset,
+  });
+  return rows.map((row) => ({
+    followedAt: row.createdAt.toISOString(),
+    artist: mapArtistRow(row.artist),
+  }));
+}
+
 export async function isFollowing(
   userId: string,
   ref: ArtistRef,

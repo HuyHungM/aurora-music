@@ -5,12 +5,17 @@ type Variant = "primary" | "secondary" | "ghost" | "subtle";
 
 const variantClasses: Record<Variant, string> = {
   primary:
-    "bg-accent text-accent-foreground hover:bg-accent-hover active:bg-accent",
+    "bg-accent text-accent-foreground hover:bg-accent-hover active:bg-accent-hover",
+  // Phase 54: the three non-primary variants had NO `:active` rule at all,
+  // so on a touch device - where there is no hover to fall back on - tapping
+  // a ghost or secondary button produced no acknowledgement whatsoever.
+  // `:active` is the touch equivalent of `:hover` and is what makes a tap
+  // feel like it landed.
   secondary:
-    "bg-surface-3 text-text-primary border border-border-strong hover:border-accent/50 hover:text-accent",
+    "bg-surface-3 text-text-primary border border-border-strong hover:border-accent/50 hover:text-accent active:border-accent active:text-accent",
   ghost:
-    "text-text-secondary hover:text-text-primary hover:bg-surface-2",
-  subtle: "text-text-muted hover:text-text-secondary",
+    "text-text-secondary hover:text-text-primary hover:bg-surface-2 active:bg-surface-2 active:text-text-primary",
+  subtle: "text-text-muted hover:text-text-secondary active:text-text-secondary",
 };
 
 const sizeClasses = {
@@ -28,11 +33,33 @@ interface SharedProps {
   children: ReactNode;
 }
 
+/**
+ * What the two primitives share, and nothing else: the box, the type, and the
+ * colour transition.
+ *
+ * The two things that used to live here alongside those - `select-none` and the
+ * absence of any cursor - are exactly the things that differ between an action
+ * and a navigation, so they moved out of this string and into the two per-
+ * primitive strings below. That split is what lets `Button` and `ButtonLink`
+ * stop being the same component with a different tag: a `<button>` is a
+ * command, an `<a href>` is a place, and those two answer the "can I select
+ * this?" question differently.
+ */
 const baseClasses =
-  "inline-flex items-center justify-center gap-2 rounded-full font-medium transition-colors select-none";
+  "aurora-touch inline-flex items-center justify-center gap-2 rounded-full font-medium transition-colors";
 
-function classes(variant: Variant, size: Size, className?: string): string {
-  return [baseClasses, variantClasses[variant], sizeClasses[size], className]
+/**
+ * `interaction` is the per-primitive half - cursor and selection - and is
+ * required rather than defaulted, because a caller that forgets it would
+ * silently ship a control with no affordance and no test would notice.
+ */
+function classes(
+  interaction: string,
+  variant: Variant,
+  size: Size,
+  className?: string,
+): string {
+  return [baseClasses, interaction, variantClasses[variant], sizeClasses[size], className]
     .filter(Boolean)
     .join(" ");
 }
@@ -45,7 +72,24 @@ export function Button({
   ...props
 }: SharedProps & Omit<ComponentProps<"button">, keyof SharedProps>) {
   return (
-    <button className={classes(variant, size, className)} {...props}>
+    <button
+      // A command. The label is part of the control, not text the user came to
+      // read, so it is unselectable: a pointer drag that starts on "Play" and
+      // crosses the row should not paint "Play" into the selection. The cursor
+      // classes are redundant with the semantic default in `globals.css` and
+      // are stated here anyway, because a component that can be rendered
+      // outside that stylesheet - a test, a storybook, an embedded widget -
+      // should not silently lose the one affordance that says "this is a
+      // button". `disabled:` is the other half: a control that refuses the
+      // interaction must not keep claiming it.
+      className={classes(
+        "cursor-pointer select-none disabled:cursor-not-allowed",
+        variant,
+        size,
+        className,
+      )}
+      {...props}
+    >
       {children}
     </button>
   );
@@ -60,7 +104,20 @@ export function ButtonLink({
   ...props
 }: SharedProps & Omit<ComponentProps<typeof Link>, keyof SharedProps> & { href: string }) {
   return (
-    <Link href={href} className={classes(variant, size, className)} {...props}>
+    <Link
+      href={href}
+      // Navigation, so `select-text` where `Button` has `select-none`. This was
+      // the one genuine contradiction in the primitive: `ButtonLink` rendered an
+      // `<a href>` and therefore inherited the same "the text is part of the
+      // control" rule that applies to a command, even though the rule's own
+      // reasoning does not reach a link. The user clicks a destination and then
+      // still wants to drag-select the label to paste it elsewhere, and a
+      // `<button>` dressed as a link is not a way to make that impossible - it
+      // is just a way to lose the middle-click, the open-in-new-tab, and the
+      // status-bar destination preview that a real link gives for free.
+      className={classes("cursor-pointer select-text", variant, size, className)}
+      {...props}
+    >
       {children}
     </Link>
   );

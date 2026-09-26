@@ -60,31 +60,31 @@ afterEach(() => {
 });
 
 function bar() {
-  return within(screen.getByRole("region", { name: "Player bar" }));
+  return within(screen.getByRole("region", { name: "Thanh phát nhạc" }));
 }
 
 describe("player control names and states", () => {
   it("exposes play state through the accessible name", async () => {
     usePlayerStore.setState({ currentTrack: youtubeTrack("t1") });
     render(<PlayerBar />);
-    expect(bar().getByRole("button", { name: "Play" })).toBeTruthy();
+    expect(bar().getByRole("button", { name: "Phát" })).toBeTruthy();
     await act(async () => {
       usePlayerStore.setState({ isPlaying: true });
     });
-    expect(bar().getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(bar().getByRole("button", { name: "Tạm dừng" })).toBeTruthy();
   });
 
   it("disables transport controls without a track", () => {
     render(<PlayerBar />);
-    expect(bar().getByRole("button", { name: "Play" })).toHaveProperty(
+    expect(bar().getByRole("button", { name: "Phát" })).toHaveProperty(
       "disabled",
       true,
     );
-    expect(bar().getByRole("button", { name: "Previous track" })).toHaveProperty(
+    expect(bar().getByRole("button", { name: "Bài trước" })).toHaveProperty(
       "disabled",
       true,
     );
-    expect(bar().getByRole("button", { name: "Next track" })).toHaveProperty(
+    expect(bar().getByRole("button", { name: "Bài tiếp theo" })).toHaveProperty(
       "disabled",
       true,
     );
@@ -99,38 +99,86 @@ describe("player control names and states", () => {
       position: 0,
     });
     render(<PlayerBar />);
-    const shuffle = bar().getByRole("button", { name: "Enable shuffle" });
+    const shuffle = bar().getByRole("button", { name: "Bật phát ngẫu nhiên" });
     expect(shuffle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(shuffle);
     expect(
-      bar().getByRole("button", { name: "Disable shuffle" }),
+      bar().getByRole("button", { name: "Tắt phát ngẫu nhiên" }),
     ).toBeTruthy();
 
-    const repeat = bar().getByRole("button", { name: "Repeat: off" });
+    const repeat = bar().getByRole("button", { name: "Repeat: tắt" });
     fireEvent.click(repeat);
-    expect(bar().getByRole("button", { name: "Repeat: all" })).toBeTruthy();
-    fireEvent.click(bar().getByRole("button", { name: "Repeat: all" }));
-    expect(bar().getByRole("button", { name: "Repeat: one" })).toBeTruthy();
+    expect(bar().getByRole("button", { name: "Repeat: tất cả" })).toBeTruthy();
+    fireEvent.click(bar().getByRole("button", { name: "Repeat: tất cả" }));
+    expect(bar().getByRole("button", { name: "Repeat: một bài" })).toBeTruthy();
   });
 
   it("exposes mute state through its label", () => {
     usePlayerStore.setState({ currentTrack: youtubeTrack("t1") });
     render(<PlayerBar />);
-    fireEvent.click(bar().getByRole("button", { name: "Mute" }));
-    expect(bar().getByRole("button", { name: "Unmute" })).toBeTruthy();
+    fireEvent.click(bar().getByRole("button", { name: "Tắt tiếng" }));
+    expect(bar().getByRole("button", { name: "Bật tiếng" })).toBeTruthy();
   });
 
   it("mini player exposes play state and expand controls", async () => {
     usePlayerStore.setState({ currentTrack: youtubeTrack("t1") });
     render(<MiniPlayer />);
-    const mini = within(screen.getByRole("region", { name: "Mini player" }));
-    expect(mini.getByRole("button", { name: "Play" })).toBeTruthy();
-    expect(mini.getByRole("button", { name: "Expand player" })).toBeTruthy();
-    expect(mini.getByRole("button", { name: "Up next" })).toBeTruthy();
+    const mini = within(screen.getByRole("region", { name: "Trình phát thu gọn" }));
+    expect(mini.getByRole("button", { name: "Phát" })).toBeTruthy();
+    expect(mini.getByRole("button", { name: "Mở rộng trình phát" })).toBeTruthy();
+    expect(mini.getByRole("button", { name: "Tiếp theo" })).toBeTruthy();
     await act(async () => {
       usePlayerStore.setState({ isPlaying: true });
     });
-    expect(mini.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(mini.getByRole("button", { name: "Tạm dừng" })).toBeTruthy();
+  });
+});
+
+/**
+ * The pending state of the play control.
+ *
+ * A spinner on its own is decoration: it tells a sighted user something is
+ * happening and tells a screen-reader user nothing. `aria-busy` is the part that
+ * is machine-readable, and the disabled attribute is what stops a second tap
+ * from firing a second `togglePlay` against one intent.
+ *
+ * These are asserted for the mini player specifically because it is the surface
+ * that had drifted. The bar and the full player already blocked the toggle while
+ * a track was resolving; the mini player showed the spinner and stayed live, so
+ * the behaviour differed between two renderings of the same control.
+ */
+describe("play control pending state", () => {
+  function miniPlay() {
+    return within(screen.getByRole("region", { name: "Trình phát thu gọn" })).getByRole(
+      "button",
+      { name: /Phát|Tạm dừng/ },
+    );
+  }
+
+  it("blocks a second toggle in every player surface while a track resolves", async () => {
+    usePlayerStore.setState({ currentTrack: youtubeTrack("t1") });
+    await act(async () => {
+      usePlayerStore.setState({ isLoading: true });
+    });
+    render(<MiniPlayer />);
+    expect(miniPlay().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("publishes the pending state to assistive technology, not only to the eye", async () => {
+    usePlayerStore.setState({ currentTrack: youtubeTrack("t1") });
+    await act(async () => {
+      usePlayerStore.setState({ isLoading: true });
+    });
+    render(<MiniPlayer />);
+    // `aria-busy` must be ABSENT rather than "false" when idle, so that a
+    // control which is not busy is not announced as busy.
+    expect(miniPlay().getAttribute("aria-busy")).toBe("true");
+
+    await act(async () => {
+      usePlayerStore.setState({ isLoading: false });
+    });
+    expect(miniPlay().hasAttribute("aria-busy")).toBe(false);
+    expect(miniPlay().hasAttribute("disabled")).toBe(false);
   });
 });
 
@@ -142,7 +190,7 @@ describe("seek slider semantics", () => {
       currentTime: 42,
     });
     render(<PlayerBar />);
-    const slider = bar().getByRole("slider", { name: "Seek" });
+    const slider = bar().getByRole("slider", { name: "Tua" });
     expect(slider.getAttribute("min")).toBe("0");
     expect(slider.getAttribute("max")).toBe("200");
     expect(slider.getAttribute("value")).toBe("42");
@@ -156,7 +204,7 @@ describe("seek slider semantics", () => {
       currentTime: 100,
     });
     render(<PlayerBar />);
-    const slider = bar().getByRole("slider", { name: "Seek" });
+    const slider = bar().getByRole("slider", { name: "Tua" });
 
     fireEvent.keyDown(slider, { key: "ArrowRight" });
     expect(usePlayerStore.getState().currentTime).toBe(105);
@@ -171,7 +219,7 @@ describe("seek slider semantics", () => {
   it("volume slider exposes name and value", () => {
     usePlayerStore.setState({ currentTrack: youtubeTrack("t1") });
     render(<PlayerBar />);
-    const volume = bar().getByRole("slider", { name: "Volume" });
+    const volume = bar().getByRole("slider", { name: "Âm lượng" });
     expect(volume.getAttribute("value")).toBe("1");
   });
 });

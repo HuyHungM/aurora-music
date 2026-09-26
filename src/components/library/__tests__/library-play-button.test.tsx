@@ -64,21 +64,21 @@ function makeTrack(id: string): Track {
 
 describe("LibraryPlayButton", () => {
   it("renders play button with correct label", () => {
-    render(<LibraryPlayButton tracks={[makeTrack("t1")]} label="liked music" />);
-    expect(screen.getByRole("button", { name: "Play liked music" })).toBeTruthy();
+    render(<LibraryPlayButton tracks={[makeTrack("t1")]} labelKey="library.playLiked" />);
+    expect(screen.getByRole("button", { name: "Phát nhạc đã thích" })).toBeTruthy();
   });
 
   it("renders Play text", () => {
-    render(<LibraryPlayButton tracks={[makeTrack("t1")]} label="liked music" />);
-    expect(screen.getByText("Play")).toBeTruthy();
+    render(<LibraryPlayButton tracks={[makeTrack("t1")]} labelKey="library.playLiked" />);
+    expect(screen.getByText("Phát")).toBeTruthy();
   });
 
   it("calls playCollection with all tracks when clicked", async () => {
     const user = userEvent.setup();
     const tracks = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
-    render(<LibraryPlayButton tracks={tracks} label="recently played" />);
+    render(<LibraryPlayButton tracks={tracks} labelKey="library.playRecent" />);
 
-    await user.click(screen.getByRole("button", { name: "Play recently played" }));
+    await user.click(screen.getByRole("button", { name: "Phát mới nghe" }));
 
     const state = usePlayerStore.getState();
     expect(state.queue.map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
@@ -87,9 +87,9 @@ describe("LibraryPlayButton", () => {
 
   it("does nothing when tracks array is empty", async () => {
     const user = userEvent.setup();
-    render(<LibraryPlayButton tracks={[]} label="liked music" />);
+    render(<LibraryPlayButton tracks={[]} labelKey="library.playLiked" />);
 
-    await user.click(screen.getByRole("button", { name: "Play liked music" }));
+    await user.click(screen.getByRole("button", { name: "Phát nhạc đã thích" }));
 
     const state = usePlayerStore.getState();
     expect(state.queue).toEqual([]);

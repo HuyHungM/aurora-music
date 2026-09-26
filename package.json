@@ -2,6 +2,7 @@
   "name": "aurora-music",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "bun@1.4.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -12,10 +13,14 @@
     "test:watch": "vitest",
     "test:db": "prisma migrate deploy && vitest run --config vitest.db.config.mts",
     "db:verify": "tsx scripts/verify-db.mts",
+    "db:integrity": "tsx scripts/verify-data-integrity.mts",
+    "db:restore-drill": "tsx scripts/verify-restore.mts",
     "db:studio": "prisma studio",
     "test:e2e:playback": "vitest run --config vitest.live.config.mts && playwright test --project=chromium",
-    "verify:client-bundle": "node scripts/verify-client-bundle.mjs",
-    "smoke:prod": "node scripts/smoke-prod.mjs"
+    "verify:client-bundle": "bun scripts/verify-client-bundle.mjs",
+    "verify:share-route": "tsx scripts/verify-share-route.mts",
+    "smoke:prod": "bun scripts/smoke-prod.mjs",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.3",

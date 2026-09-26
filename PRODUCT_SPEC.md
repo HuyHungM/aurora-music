@@ -8,8 +8,10 @@ contracts > automated tests and gates > this document > `docs/security.md` >
 `docs/deployment.md` > `docs/scope-boundaries.md` > historical phase reports.
 
 > Scope note: `docs/scope-boundaries.md` records deliberate exclusions and
-> deferred features. Phase reports (`PHASE_*.md`, `MUSIC_PROVIDER_PLAN.md`)
-> are historical evidence, not the ongoing specification.
+> deferred features. Phase reports are historical evidence, not the ongoing
+> specification. Where an earlier phase report once held a rule, the rule now
+> lives in this document or `ARCHITECTURE.md`, and the report is not a
+> citation target.
 
 ---
 
@@ -48,11 +50,12 @@ YouTube-backed browser playback and authenticated personal-library features.
 | Playlists (create, rename, describe, artwork URL, delete, add, remove, reorder) | Implemented, owner-only |
 | Recently played recording + display | Implemented, auth-required |
 | Search history recording + display + clear | Implemented, auth-required |
-| Playback-state persistence (track + position + revision, cross-session resume) | Implemented, auth-required |
+| Persistent playback session (full queue + cursor + play order + shuffle/repeat + current track + position + volume/mute, automatic restore) | Implemented, auth-required |
 | Media Session (OS controls, metadata, position state) | Implemented |
 | PWA shell (installable manifest, shell-only offline fallback, offline indicator) | Implemented |
-| Radio | **Deliberately partial** — static catalog preview only (see §13) |
-| Mood stations | **Not implemented** — static labels marked "coming in a later phase" |
+| Radio (seed-based track / artist / discovery stations, bounded batches, continuous extension) | Implemented (see §13) |
+| Multilingual UI (Vietnamese default, English option, persisted preference) | Implemented (see §16) |
+| Mood stations | **Not implemented** — no mood-station product (the static labels were removed) |
 | Playlist artwork | **Partial** — URL field only; no upload-based cover management |
 
 ## 3. Authentication model
@@ -86,13 +89,17 @@ Mechanics:
 ## 4. Provider model
 
 Exactly three production providers: **YouTube, Deezer, Spotify**.
-(`MUSIC_PROVIDER_PLAN.md` freezes this list and forbids recreating removed
-providers — Mock, Jamendo, ZingMP3, mp3-api, Audius — as production
-providers. Test doubles stay test-only.)
+This list is frozen: removed providers — Mock, Jamendo, ZingMP3, mp3-api,
+Audius — must not be recreated as production providers, and no fourth
+production provider may be added without a new phase authorization. Test
+doubles stay test-only. Enforced by
+`src/lib/providers/__tests__/provider-boundary.test.ts` and ARCHITECTURE.md
+invariant 10.
 
 | | YouTube | Deezer | Spotify |
 |---|---|---|---|
 | Metadata / search / catalog | Yes, gated by server-side `YOUTUBE_API_KEY` | Yes, always registered (keyless catalog endpoints) | Yes, gated by `SPOTIFY_CLIENT_ID` + `SPOTIFY_CLIENT_SECRET` pair |
+| Search / track-metadata source | **InnerTube-first**, official Data API as fallback (Phase 55) | Official API | Official API |
 | Detail (track / album / artist) | Yes | Yes | Yes |
 | Playback | **Yes — the only playback provider** (Innertube, server-only) | No — metadata/catalog only | No — metadata/catalog only |
 | Credentials | Server-only API key; absent = unregistered | None | Server-only Client Credentials; absent = unregistered |
@@ -101,6 +108,15 @@ Explicit rules:
 
 - **YouTube = actual playback provider. Deezer/Spotify = metadata/catalog
   providers only** in the current implementation.
+- **YouTube search and track metadata resolve from InnerTube, not the official
+  API** (Phase 55). The official `search.list` costs 100 units against a
+  separate 100/day default, so it is used only when InnerTube is unavailable
+  or returns something unparseable, and it remains the only source for channel
+  metadata and playlists. See `ARCHITECTURE.md` §8a and
+  `docs/youtube-request-map.md`.
+- **The user-visible behaviour does not change with the source.** The same
+  Track comes back either way, and when the official budget is exhausted the
+  product still works — it is the official API that is scarce, not YouTube.
 - **Spotify Web Playback SDK is not used.** No Spotify audio playback of
   any kind (asserted by boundary tests).
 - **Deezer preview is not a playback fallback.** `previewUrl` (30s preview)
@@ -130,13 +146,25 @@ Explicit rules:
   URL-lexicographic tie-break), **muxed audio+video as acceptable last
   resort**. Video-carrying formats never outrank audio-only.
 - **Browser-shaped validation (critical rule):** a resolved YouTube URL is
-  **not** automatically considered browser-playable. Some adaptive URLs
-  return 403 for the browser's initial open-ended range request
-  (`Range: bytes=0-`) even when bounded ranges return 206, surfacing as
-  `MEDIA_ERR_SRC_NOT_SUPPORTED`. Every candidate is therefore probed with a
-  browser-shaped open-ended range request (status only, body cancelled,
-  5s timeout); only 200/206 becomes an `AudioSource`. Rejected adaptive
-  candidates fall through to the documented muxed fallback.
+  **not** automatically considered browser-playable. YouTube's adaptive (DASH)
+  audio URLs return 403 for the browser's initial whole-body request
+  (`Range: bytes=0-`, no `Range`, or `HEAD`) even when a bounded range returns
+  206 from the same URL, surfacing as `MEDIA_ERR_SRC_NOT_SUPPORTED`. Every
+  candidate is therefore probed with a browser-shaped open-ended range request
+  (status only, body cancelled, 5s timeout); 200 or 206 becomes an
+  `AudioSource`. Rejected adaptive candidates fall through to the documented
+  muxed fallback. This is the common case, not a rare one: measured 2026-09-26
+  over 14 videos, 13 refused whole-body reads and resolved via the muxed
+  format, so muxed is currently the steady-state selection for real content
+  and audio-only selection is unreachable (see `ARCHITECTURE.md` §7).
+- **Diagnosable rejections:** a rejected candidate logs `itag`, a stable
+  `reason` (`probe_status_403` / `_404` / `_416` / `_other`, `probe_timeout`,
+  `probe_network_error`, `missing_url`), the observed `status`, the
+  parameter-stripped `contentType`, and `boundedRangeOk` — which separates "the
+  CDN refuses whole-body reads of this adaptive URL" (expected) from "this URL
+  is dead". A total failure emits one `playback_resolution_failed` summary
+  with candidate/valid/rejected counts and the top reasons. No signed playback
+  URL is ever logged, and none is ever persisted.
 - **Ephemeral `AudioSource`.** Memory-only (`url`, `mimeType`,
   `durationMs`, `expiresAt`, `bitrate`). Expiry is checked before load;
   expired sources are never handed out — re-resolution is the recovery path,
@@ -156,6 +184,43 @@ Explicit rules:
   paused, never autoplay). Persistence restore never overrides live user
   intent.
 
+## 5.1 Shuffle (control)
+
+- **One control, three surfaces.** The player bar, the mini player and the full
+  player each expose shuffle, in that order in the row (shuffle, then repeat) on
+  every surface. The mini player previously offered Repeat, Autoplay access and
+  a queue control but no shuffle at all, so on a narrow viewport there was no
+  way to see or change the one transport mode that changes what plays next.
+- **It renders the engine's own state.** There is no local flag anywhere in the
+  UI. Turning shuffle on reorders the play order; the current track stays
+  playing. Turning it off restores the queue's own order. The physical queue is
+  never touched.
+- **Three states, all real.**
+  - *Off* — not pressed, muted glyph, tooltip "Shuffle: Off".
+  - *On* — pressed, accent glyph, and a ring as well as the accent, so the state
+    survives greyscale, high contrast and a future light theme. Tooltip
+    "Shuffle: On".
+  - *Unavailable* — the queue is empty. There is no order to randomise, so the
+    control is genuinely disabled rather than inert: it does not accept a
+    pointer press, does not paint a hover state, and its tooltip explains the
+    condition instead of reporting a state that cannot change. It re-enables by
+    itself as soon as anything is queued. It is **not** disabled merely because
+    the current state is unknown.
+- **The accessible name states the action** ("Turn shuffle on" / "Turn shuffle
+  off") **and the tooltip states the state** ("Shuffle: On" / "Shuffle: Off"). A
+  bare "Shuffle" tells a screen-reader user the control exists and nothing about
+  what it does now. `aria-pressed` is present in every state, including while
+  disabled, because a toggle that cannot currently be toggled is still a toggle.
+- **The glyph means shuffle and nothing else.** Two crossing lines, each ending
+  in an arrowhead. It is never confused with Repeat (a loop), Repeat-one (a loop
+  plus a numeral), Autoplay (a one-way flow), Queue (a stack) or Radio (a dial).
+- **The hit target is the button, not the glyph**, matching the project's 44px
+  accessibility floor in every surface, and the target does not change size
+  between states.
+- **Motion is a fade, not a movement.** The active ring fades in and out; it
+  never animates layout, never shifts neighbouring controls, and is never
+  constant. Press feedback respects reduced motion.
+
 ## 6. Queue model
 
 - **Physical queue + logical play order.** The store holds `queue: Track[]`
@@ -172,8 +237,10 @@ Explicit rules:
 - **Previous:** moves within `playOrder` history cursor semantics of the
   store; there is no separate cross-session history stack.
 - **Explicitly out of scope:** queue history navigation across sessions is
-  not part of current product scope; autoplay / related-track insertion is
-  not part of current product scope.
+  not part of current product scope. Related-track insertion exists only
+  as user-initiated Radio: an active radio session appends bounded
+  discovery batches near queue exhaustion (§13); any manual play,
+  replace, or clear ends the session and is never overridden.
 
 ## 7. Library model
 
@@ -185,11 +252,49 @@ Authenticated users own:
   server action), library shows up to 20.
 - **Search history** — recorded per query, shown (up to 8) on the empty
   search page, clearable.
+- **Search is URL-driven and navigates as an SPA** — the submitted query
+  lives at `/search?q=…` and that URL alone reconstructs the page: a
+  reload, a deep link, and Back/Forward all restore the same query and
+  the same results, with no client bootstrap and no reliance on
+  `localStorage`/`sessionStorage`. Typing is transient input state only.
+  Submitting trims surrounding whitespace, preserves internal spacing,
+  and percent-encodes the query; re-submitting the query already shown
+  does not re-navigate. Searching never interrupts playback, replaces the
+  queue, or drops an active radio session.
 - **Playlists** — see §8.
-- **Playback-state persistence** — provider + providerTrackId + position +
-  revision per user (one row, `userId @unique`); CAS-guarded saves
-  (newer-save-wins), restore on boot for the current user only, cleanup on
-  sign-out. Playback URLs are never persisted — only the track ref.
+- **Persistent playback session** — one row per user (`userId @unique`)
+  holding `provider` + `providerTrackId` + `position` + `revision`, plus a
+  versioned session snapshot (ordered entries, logical play order, cursor,
+  media position, shuffle, repeat, volume, mute, write timestamp; capped at
+  200 entries). Saving: queue mutations, track changes, and volume/mute
+  changes coalesce through a trailing debounce; periodic checkpoints run
+  while playing; `visibilitychange` (hidden) and `pagehide` are a final
+  best-effort flush, never the primary mechanism. Clearing the queue
+  deletes the row so a cleared session can never return, and replacing the
+  queue overwrites it, so the previous session never comes back. Restore is
+  automatic on boot for the current user only, ordered load → validate →
+  migrate → queue → current entry → shuffle/repeat → position → volume/mute,
+  and it never autoplays: the user presses Play and Aurora resolves a
+  **fresh** source through PlaybackResolver. Cleanup happens on sign-out.
+  Anonymous users get no persistence (browser storage is banned by the
+  quality gates).
+  Playback URLs are never persisted — only stable track refs and display
+  metadata; every restored entry is re-resolved on play, because a
+  persisted stream URL would have expired. Explicit seeks feed the debounced
+  session snapshot via same-track position discontinuity detection.
+  Volume and mute are session state, not device preferences: they ride in
+  the same versioned snapshot and are restored with the queue, so a resumed
+  session sounds as it was left. Restore is verified positionally — the
+  session returns to the same queue *occurrence* at the persisted position
+  (accepted within 3 seconds, not millisecond-exact, and clamped to the
+  real duration once the fresh source reports metadata). Older snapshot
+  versions are migrated forward on read and on write rather than
+  discarded, so an account written by an earlier build keeps its queue.
+  The session row is per user, not per tab, so with several tabs open only
+  the live listening session writes it: a tab that has yielded to another
+  tab which is actually playing stops persisting, and resumes as soon as
+  that tab stops or goes away. With one tab open — and in any browser
+  without cross-tab support — nothing changes. See ARCHITECTURE §26.4.
 
 Ownership: every library row is keyed to its user; the DAL rechecks
 ownership on read and write. There is no saved-albums collection; albums
@@ -204,14 +309,67 @@ appear only as catalog detail and inside home sections.
   position])` constraint), **duplicate handling** (`@@unique([playlistId,
   trackId])` — re-adding is a no-op/conflict, never a duplicate row).
 - **Ownership:** create binds `userId`; all mutations require the owner.
-  Detail pages `notFound()` for non-owners.
+  Detail pages `notFound()` for non-owners. Authorization is server-side in
+  the DAL, never a client-side or UI-only check.
 - **Persistence:** Prisma `Playlist` + `PlaylistTrack(position, addedAt)`,
   ordered reads by `position asc`.
 - **Position integrity:** dense ordering maintained by the DAL reorder path;
   concurrent position writes are constrained by the unique index, not by
   client logic.
-- **Verified non-goals:** collaborative playlists, privacy/sharing controls,
-  upload-based cover management (URL field only), social features.
+
+### 8.1 Custom artwork
+
+- Artwork is the pre-existing `Playlist.artwork` column — a URL, never a
+  second field and never an upload. There is no object storage, no
+  file-upload endpoint, and no image proxy in the product.
+- Owner path: open the playlist → Edit → Change artwork → paste a URL or pick
+  from artwork the playlist's own tracks already carry → Preview → Save.
+  Removing it writes an explicit `null`, and every surface falls back to the
+  default playlist artwork.
+- Validation happens on the server and again in the client for feedback:
+  `http`/`https` only, host required, ≤2048 characters. `javascript:`,
+  `data:`, `blob:`, `file:` and protocol-relative values are rejected. The
+  client-supplied content type is never trusted, because no bytes are ever
+  accepted.
+- The same value renders identically in the library card, the playlist page,
+  the add-to-playlist picker, and the shared-playlist preview.
+- Changing artwork never changes the playlist's tracks.
+
+### 8.2 Sharing (read-only public link)
+
+- Two states only: **private** (owner only) and **shared**. There is no
+  unlisted, friends-only, passworded, expiring, or collaborative state.
+- The owner enables sharing from the playlist's `Share` control
+  (`[Play] [Share] [More]` → Share Playlist). The server mints an opaque
+  token and returns a link; the owner can copy it or revoke it.
+- The public URL is `/playlist/share/<token>` and carries **only** the token:
+  no playlist id, no owner id, no provider id, no Prisma identifier. The
+  token is 24 random bytes (192 bits) rendered base64url, so it is not
+  guessable and not enumerable.
+- Access requires a matching token **and** `visibility = "shared"`. A private
+  playlist is therefore unreachable by guessing a database id, and revoking
+  nulls the token so an old link stops working immediately. A miss, a
+  malformed token, a revoked link and a deleted playlist are
+  indistinguishable to a prober: one 404, one metadata shape, no redirect to
+  sign-in.
+- The public read model (`SharedPlaylist`) has no `ownerId` and no
+  `shareToken` field at all, so no public code path can hand the owner out or
+  re-share the link by scraping the page. Attribution is a display name.
+- **Shared viewer may:** view, play, queue, like, and add tracks to their own
+  playlist. **May not:** rename, delete, change artwork, change sharing, or
+  mutate the owner's tracks. Those paths are owner-gated server-side, so the
+  prohibition holds for an anonymous visitor and for a signed-in non-owner
+  alike.
+- A shared playlist is a live, static collection: the viewer sees the
+  owner's current tracks and order, and is never served a personalized or
+  re-ranked version of it.
+- Viewing is unauthenticated. The page uses the existing design system and
+  exposes only safe metadata (title, description, artwork, owner display
+  name, track display metadata).
+
+**Verified non-goals:** collaborative playlists, per-viewer edits, social
+features, upload-based cover management (URL field only), link expiry, view
+counts, and password protection. See `docs/scope-boundaries.md`.
 
 ## 9. PWA / offline model
 
@@ -231,10 +389,57 @@ Not available offline:
   intercepted, never cached; no HTML is ever cached so no personalized page
   can leak across users)
 
+The offline fallback page is shown in the language the visitor chose, and
+defaults to Vietnamese when no choice is known. It is built by the service
+worker, which is handed the language by the page rather than reading it itself:
+on Chromium a navigation request reaches a service worker with no `cookie` and
+no `accept-language` header — measured, not assumed — so the worker cannot
+discover the visitor's language on its own, and an earlier version that tried
+silently showed Vietnamese to every offline visitor regardless of their
+language. The page announces its resolved locale on load and again on every
+change, and the worker keeps it in a small dedicated cache
+(`aurora-sw-v2:meta`) that holds a two-letter locale and nothing else.
+
 Service-worker boundaries: single versioned static cache
-(`aurora-sw-v1:static`); activation deletes older `aurora-` caches only;
-nothing precached at install; registration is failure-tolerant and decoupled
-from player lifecycle.
+(`aurora-sw-v2:static`); activation deletes older `aurora-` caches only;
+nothing precached at install; registration is production-only (development
+sessions never register, so Turbopack dev chunks are never served from PWAcache), failure-tolerant, and decoupled from player lifecycle. A new worker
+waits rather than taking over: the page releases it at `pagehide`, so a deploy
+never interrupts a listening session and the new build is picked up on the next
+launch. The offline page is rendered in the visitor's own language.
+
+## 9b. Installable web app
+
+Aurora is a web application that can also be installed from the browser
+(Android/Chromium, iOS/iPadOS Safari, Windows/macOS/Linux desktop browsers).
+Installing changes only how the window is presented — never what the
+application is. The site stays fully functional when not installed, and there
+is no separate installed build, no duplicated product logic, and no second
+manifest.
+
+- **Identity:** "Aurora Music", launcher name "Aurora". Stated once and reused
+  by the manifest, page titles, Open Graph, the install affordance and the
+  icons. Browser tab titles carry the app name on every route.
+- **Manifest** (`src/app/manifest.ts`, served at `/manifest.webmanifest`):
+  stable id, `start_url`/`scope` `/`, standalone display degrading to
+  `minimal-ui` then `browser`, no orientation lock, dark canvas for browser
+  chrome and the splash screen, launcher icons including a distinct maskable
+  icon, and shortcuts for Search, Library and Radio — real routes only.
+- **Install offer:** a small dismissible card in the sidebar (desktop) and at
+  the top of the content area (small viewports). It appears only when the
+  browser can actually install, is never a full-width banner, and never shows
+  a control that would do nothing. On iOS, where no browser install prompt
+  exists, it gives Share → Add to Home Screen instructions instead. Declining
+  is remembered, so it does not return on every route.
+- **Display modes:** standalone, minimal-ui, fullscreen and browser are all
+  detected centrally, so the shell adapts to installed mode without any
+  component sniffing `window` itself.
+- **Safe areas:** the viewport extends under the notch and home indicator, and
+  the header, content column, navigation, mini player, full player and queue
+  panel all respect the correct insets in both orientations.
+- **Not offered:** no install-only experience, no native wrapper, no offline
+  music, no push notifications, and no `window-controls-overlay` title bar
+  until the header is laid out for one.
 
 ## 10. Accessibility contract
 
@@ -250,7 +455,67 @@ Concrete guarantees (no WCAG certification claimed):
   home affordances; retries never reset playback).
 - Offline status announced via `role=status aria-live=polite`.
 - Touch targets: 44px minimum (`h-11 w-11` icon buttons).
+- **Overlays are removed from the accessibility tree as they close.** A
+  dialog, popover, menu or sheet that is animating out is `inert` and
+  `pointer-events: none` for the whole of its exit, so it cannot be reached
+  by Tab, announced, or used to swallow a click meant for what is behind it.
+  Focus is restored to the trigger exactly once the element has left the
+  document, never while it is still mounted and never onto a node that has
+  already been removed.
 - `prefers-reduced-motion` disables non-essential motion (tested).
+  Decorative motion — press compression, hover lift, the now-playing
+  equalizer — is declared only under a `prefers-reduced-motion:
+  no-preference` query, so it is never applied when reduced motion is
+  requested. A blanket `reduce` rule covers any transition declared
+  elsewhere, including by dependencies; it shortens motion only and never
+  alters `opacity`, `visibility`, `display`, or `transform`, so focus
+  rings, selection, and every control's visual state survive intact.
+  Enforced by `src/app/__tests__/design-tokens.test.ts`.
+
+## 10.1 Layer and motion model
+
+- **One named layer stack, no exceptions.** Every surface that can overlap
+  another is placed on a named layer (`rail`, `player`, `dropdown`,
+  `popover`, `sheet`, `dialog`, `toast`) whose relative order is part of the
+  design system. Components never write a layer number themselves, so two
+  surfaces cannot silently collide by DOM order or by an invented `z-9999`.
+- **The stack is total and one-directional.** Content sits below the player;
+  the player sits below the bottom navigation on mobile; a toast is above
+  every dialog. A full-viewport takeover (the full player) is below a panel
+  that must be reachable *from* it (the queue) — otherwise the "Up next"
+  control inside the full player opens a panel it immediately hides behind
+  itself.
+- **Every overlay has a motion vocabulary.** Tooltips, popovers, menus,
+  dialogs, bottom sheets and toasts enter and leave on distinct, named
+  curves; exit is faster than entry, and only `opacity` and `transform`
+  animate. Nothing loops, and no overlay is driven by a JS animation loop,
+  a repeated layout read, or a per-frame scroll/resize listener.
+- **Closing is animated, not instantaneous.** An overlay stays in the
+  document for its exit and is then removed. A rapid open → close → open
+  never flickers, never leaves an element stuck half-open, and never
+  unmounts before its exit has played.
+
+## 10.2 Text selection (Phase 51 addendum)
+
+**Everything the user came to read can be selected and copied. Everything the
+user aims at with a pointer does not fight the pointer.**
+
+Selectable, always: track titles, artist and album names, playlist names and
+descriptions, error messages, share URLs, ids, and anything else whose text is
+the product. A user must be able to select a track title to search for it, or an
+error message to send it in a bug report.
+
+Not selectable, by design: transport buttons, the seek bar and volume sliders,
+drag handles, navigation links, queue remove/move/menu controls, and icon
+glyphs. A pointer drag that starts on a control should move the control, not
+paint a selection across the page.
+
+Text entry fields - search, the playlist name field, the share link - are always
+selectable, even where the control sitting next to them is not.
+
+There is no global rule. A blanket `user-select: none` would make every title
+and every error message uncopyable, and the damage would be invisible in a
+screenshot.
 
 ## 11. Responsive model
 
@@ -260,8 +525,71 @@ Concrete guarantees (no WCAG certification claimed):
 - **Mobile mini player** (`lg:hidden`, above bottom nav, shown only when a
   track is loaded) expands to the **mobile full player** (modal dialog with
   focus management, `lg:hidden`).
+- **Bottom stack on mobile is content → mini player → bottom navigation.**
+  The navigation owns the viewport bottom; the mini player sits on top of it
+  by exactly the navigation's own height plus the safe-area inset. Only the
+  bottom-most element consumes `env(safe-area-inset-bottom)` — an inset
+  applied twice double-counts it and opens a gap.
+- **Page content is never trapped behind the player.** Main content carries
+  bottom padding sized so the last element on a page can be scrolled clear of
+  the player chrome at every supported width.
 - Dialogs, menus, and cards adapt grid columns by breakpoint
   (2 → 3 → 4 → 5); detail headers stack vertically on small screens.
+- **The header wordmark collapses to the logomark below 393px.** The header is
+  one row of fixed-width items — brand, search, language, settings, and the
+  account group when signed in — and below `md` the search *field* is hidden in
+  favour of its icon, so the row's slack is a function of the viewport alone.
+  Measured signed in, the row needs 393px of content (44px logomark + 47px
+  wordmark + four 44px controls + the 98px account group + gaps + 32px page
+  padding), so the wordmark is the 47px that makes the difference between
+  fitting and scrolling sideways. It is gone, not truncated, and the link keeps
+  its full accessible name. At 393px and above there is room and it stays.
+  The threshold is derived from that measurement rather than picked as a round
+  number, and the brand wrapper is elastic rather than fixed-width, so the
+  row's slack is spent on the wordmark first and on the controls never.
+- **The full player in landscape is a two-column composition, not a squeezed
+  portrait one.** At `(max-height: 560px) and (min-aspect-ratio: 1)` —
+  landscape phones, and any short wide window — the artwork moves into its own
+  grid column beside the title, seek, transport and volume rows, and the
+  artwork is bounded on *both* axes by `min(18rem, 52svh)`. A percentage cap
+  cannot bound an item against an indefinite grid row, so the bound has to be
+  a length: without it the artwork sat at its intrinsic 280px, the grid
+  overflowed the panel, and the volume slider, queue, like and actions
+  controls fell off a 375px-tall screen inside a container that did not
+  scroll, leaving them unreachable rather than merely cramped.
+- **Touch targets have a 44px floor on touch-primary devices.** Under
+  `(hover: none) and (pointer: coarse)` every interactive control clears 44px in
+  both axes. The floor is opt-in per call site rather than a blanket rule,
+  because a pointer device is deliberately denser (`h-8`/`h-10` chips) and does
+  not need 44px to be accurate; each opt-in is a decision about what yields the
+  4–10px, and the honest candidate is text, which is already `truncate`.
+  A mouse browser is not held to the floor, and asserting it there would fail
+  by design.
+- **The queue is a modal sheet below `lg` and a side panel at `lg` and above.**
+  The modal half carries `aria-modal="true"`, a focus trap, a scroll lock, and
+  a backdrop; the `lg` panel deliberately carries none of those, because a
+  panel beside the content is not a layer over it. The backdrop is `lg:hidden`
+  for the same reason.
+- **Reordering the queue works on a phone, through the row's overflow menu.**
+  Below `sm` the row's move-up/move-down buttons are not rendered — at 360px
+  the sheet is 328px, and after artwork, play and overflow there are 124px
+  left; two more 44px buttons would leave 24px and a 44px drag handle would
+  leave 68px, which is not a usable track title. The move actions therefore
+  live in the row menu, which is already on screen at zero additional width
+  cost, is a real menu (arrow keys, Escape, focus return) rather than a
+  gesture, and is the platform convention for secondary row actions. Above
+  `sm` the visible pair remains, because on a pointer device a visible control
+  beats a menu. The currently playing row carries no menu at all.
+- **Empty states lead with the next action.** Every empty state offers a
+  control that does something — a search, a radio station, a discovery link —
+  using copy that already exists in both shipped locales. A dead end rendered
+  as prose is a defect, not a state.
+- **Horizontal overflow is zero at every supported width, without
+  `overflow-x: hidden` on a container.** Hiding overflow hides the symptom and
+  keeps the content unreachable, so the layout is fixed rather than clipped,
+  and the zero-overflow guarantee is asserted at 1px steps through the band
+  where the authenticated header row actually breaks (375–420px), not only at
+  round widths.
 
 ## 12. Error model
 
@@ -286,17 +614,175 @@ User-visible semantics (implementation taxonomy stays in
   retryable unavailability — never raw DB errors.
 - **Offline behavior:** offline-mapped errors ("Music playback requires an
   internet connection"), shell stays usable, indicator announces status.
+- **Localization:** every curated message above is localized (Vietnamese
+  default, English option — see §16). Error codes, categories, and the
+  `preservePlayback` flag are never localized.
 
-## 13. Deliberately partial features
+## 13. Radio (seed-based discovery stations)
 
-- **Radio:** static catalog preview. Mood stations are hard-coded labels
-  marked "coming in a later phase"; the page states live audio streaming
-  "arrives in a later phase" and the list is "a static preview of the
-  catalog, not a live stream."
-- **Playlist artwork UI:** URL field only; no upload, picker, or generated
-  covers.
-- **Install/update UX:** manifest + service-worker registration exist; no
-  update-prompt or install-prompt UI.
+- **Aurora Radio is algorithmic discovery, not live radio.** A station
+  starts from a track, artist, or open discovery seed; a deterministic,
+  rule-based service generates bounded batches (seed + 5, then 5 more as
+  the queue runs low) from existing catalog data (same-artist/album
+  relations, cross-provider matching, popular catalog, library signals
+  for signed-in listeners). No ML, no embeddings, no external
+  recommendation APIs.
+- **One unified queue.** Radio hands normalized tracks to QueueManager
+  (the single queue authority) and extends it near exhaustion; manual
+  play/replace/clear always wins, and clearing never refills. Radio
+  tracks are ordinary queue entries (reorderable, removable, likeable,
+  playlistable) and persist/restore as such; the session itself is
+  memory-only and never resumes generation after reload.
+- **Playback stays YouTube-backed.** Radio never resolves or persists
+  playback URLs; Spotify/Deezer contribute catalog discovery only.
+- **Partial features remaining here:** none — the former static
+  catalog preview and hard-coded mood labels were removed.
+- **Install/update UX:** a dismissible install card in the sidebar (desktop)
+  and at the top of the content area (small viewports), shown only when the
+  browser can install and replaced by Share → Add to Home Screen instructions
+  on iOS. Service-worker updates are applied between documents at `pagehide`,
+  so there is deliberately no "reload to update" prompt: a deploy must not
+  interrupt playback.
+
+## 13.1 Recommendations (deterministic, in-process)
+
+- **Aurora's recommendations are computed here, not learned elsewhere.** No
+  ML, no vector database, no embeddings, no LLM, and no external
+  recommendation API. Ranking is a documented rule set over signals Aurora
+  already holds, so the same inputs always produce the same ordered list.
+- **The pipeline is a real pipeline, not a component:** Signals → candidate
+  generation → normalization → canonical track matching → dedupe → filtering
+  → ranking → result. It lives in `src/lib/recommendations/` and returns
+  plain Aurora `Track`s, so no surface can render a provider-branded product
+  or a provider-specific playback affordance.
+- **Signals:** the current track and its artists, recently played, liked
+  songs, followed artists, the current queue and its recent predecessors,
+  playlist context, and the active radio/discovery context. Current-queue
+  context is mandatory — a recommendation set is never computed without it.
+  Personalization signals are read from Aurora's own database on the server;
+  the client sends only the shape of the request. No listening history is
+  ever forwarded anywhere.
+- **Guarantees:** the same canonical track appears once; artist diversity is
+  enforced; the current track, the current queue, and recently played or
+  recently recommended tracks are excluded; and when filters would leave
+  nothing, they are relaxed in a defined order rather than returning an
+  empty shelf. A provider failure degrades to the remaining avenues and,
+  failing that, to non-personalized discovery for an anonymous listener.
+- **Surfaces (four, each with a distinct purpose — not everywhere):** Home,
+  a track's detail page, an artist page, and an album page. Radio (§13) stays
+  separate and authoritative. A surface with nothing to show renders nothing
+  rather than filler.
+- **No invented scores.** The UI never displays a percentage, a match
+  quality, or any other number that would imply a model.
+
+## 13.2 Infinite listening ("Autoplay")
+
+- **Opt-in and off by default.** One control, one implementation, offered on
+  every surface that owns a queue: the player bar and the full player beside
+  the queue button, and the queue panel, which additionally explains the
+  feature in words. It is a plain button with `aria-pressed` — deliberately
+  matching the shuffle and repeat buttons it sits beside, so one transport row
+  speaks one language — and it is not offered to an anonymous listener, who has
+  no account to store the preference on. The preference is per-account server
+  state — never browser storage.
+- **Its icon means "the current queue, continued automatically."** Two queue
+  lines, the lower running off the end into a one-way chevron: open rather than
+  closed (so it never reads as repeat), uncrossed (never shuffle), without a
+  returning hook (never the queue itself) and without notes (never a list). It
+  never shares an icon with Shuffle, Repeat, Repeat-one, Queue or Radio, and it
+  is not a radio-style glyph. The active state is an accent ring as well as an
+  accent colour, so the state survives greyscale, high contrast and a future
+  light theme.
+- **Naming.** The user-facing term is "Autoplay" / "Tự động phát". The internal
+  name stays `keepListening` (column, action, coordinator), which describes the
+  mechanism rather than the setting. The accessible name states the action
+  ("Turn autoplay on" / "Turn autoplay off"); the tooltip states the state
+  ("Autoplay: On" / "Autoplay: Off"). A bare "Autoplay" label is not used: it
+  would tell a screen-reader user the control exists and nothing about what it
+  does now.
+- **The control renders the coordinator's own state.** There is no local mirror
+  of the setting anywhere in the UI. Turning it on is optimistic, but the
+  optimism lives in the coordinator — the same object the control renders from —
+  and a failed write is rolled back there, so the control cannot drift from the
+  behaviour.
+- **It is not live radio.** It continues a queue the listener already
+  started, using the deterministic recommendation layer in §13.1.
+- **It triggers near the end, not only at it:** when the remaining queue
+  drops to a small threshold (currently 2), a bounded batch (6 tracks) is
+  generated and appended, so a transition is never delayed waiting on the
+  network. Candidates are generated and normalized ahead of time; a playback
+  source is resolved only when a track is actually about to play.
+- **Manual control always wins.** Play, Play Playlist, Play Album, Play
+  Track, Next, Previous, Stop, Clear Queue and Replace Queue all override.
+  Clearing the queue does not silently repopulate it; replacing it resets the
+  context. With the toggle off, the queue ends normally at its end.
+- **Bounded by construction:** one request in flight at a time, a cooldown
+  between attempts, a per-session cap on generated tracks, a cap on
+  remembered recommendation keys, and a barren-attempt limit after which the
+  coordinator stops asking. A provider that keeps failing ends the queue
+  safely instead of retrying forever.
+- **The coordinator decides when and how much; `QueueManager` remains the
+  only writer.** Playback stays with `PlaybackController`, and a
+  recommendation failure never duplicates playback recovery.
+- **Nothing about the algorithm is persisted.** The persistent session still
+  saves the real queue, current track, position, shuffle and repeat.
+
+## 13.3 Multi-tab behaviour (Phase 52)
+
+**One tab plays. Every other tab knows.**
+
+Playback ownership is coordinated across tabs of the same browser. Queue and
+session content are not synchronized, and are not intended to be.
+
+What a user sees:
+
+- Starting playback in a tab claims ownership for that tab.
+- A tab that is currently playing, and hears a newer claim from another tab,
+  pauses itself. It is not stopped by the other tab - it stops itself, and it
+  says why rather than going quietly mute.
+- A pill appears in the non-playing tabs reading "Đang phát ở tab khác" /
+  "Playing in another tab", with a "Phát ở đây" / "Play here" action that takes
+  playback back immediately.
+- Closing or pausing a tab hands playback back at once; it does not wait for a
+  timeout.
+- If a tab crashes, another tab takes over within a few seconds.
+
+What is deliberately **not** there: a shared queue, a merged history, or a
+"transfer your queue to this tab" control. Two tabs are two listening sessions.
+
+`BroadcastChannel` is the transport. Where it is unavailable the feature is off
+rather than degraded - the app is fully usable in a single tab, which is the
+common case, and there is no cross-tab storage fallback.
+
+## 13.4 Rate limits and kill switches (Phase 52)
+
+The expensive operations - starting a radio station, resolving a stream URL,
+searching, fetching recommendations, mutating a playlist, sharing a playlist,
+recording a play - are rate limited per account, and per hashed
+address+user-agent for signed-out visitors.
+
+The limits are generous enough that ordinary use never reaches them. They exist
+to stop runaway loops and provider-quota exhaustion, not to meter the product.
+When one is reached the user is told plainly, in their language, and is not
+charged for the failed attempt.
+
+Provider quota is reduced structurally rather than by limiting the user
+(Phase 55): repeated identical searches are coalesced in flight and cached
+briefly, an expired official quota pauses official calls instead of failing
+each request, and the result is the same list of tracks either way. The
+per-account limits above are unchanged by this and still apply.
+
+Every one of these features can also be switched off server-side, individually,
+without a deploy. Turning a feature off never throttles the user and never
+looks like a rate limit.
+
+## 13.5 Correlation and error behaviour (Phase 52)
+
+A failed action always returns a stable, documented error code and a
+correlation id. The message is written for a person; the id is for support. An
+unexpected internal failure never shows its own text to the user - it shows a
+fixed message plus the id, because the internal text is where a query, a path
+or an identifier would leak.
 
 ## 14. Non-goals
 
@@ -314,13 +800,16 @@ NON-GOALS
 - Offline music / downloads
 - Lyrics display (only the `explicit_lyrics` boolean is mapped)
 - Social features (comments, feeds, activity)
-- Collaborative playlists / privacy / sharing
-- Upload-based cover management
+- Collaborative playlists / multi-owner playlists / shared editing
+- Upload-based cover management (artwork is a URL; see §8.1)
+- Link expiry, view counts, or password-protected share links (see §8.2)
 - Payments / subscriptions
 - Analytics / external telemetry
 - Live radio / live streams (rejected by the resolver)
 - Equalizer / sleep timer / crossfade / gapless playback
 - New providers beyond YouTube / Deezer / Spotify
+- Machine-learned, embedding-based, or externally-served recommendations
+  (see §15.1)
 
 ## 15. Testability contract (product view)
 
@@ -333,3 +822,183 @@ NON-GOALS
   and excluded from CI by default.
 - `smoke:prod` post-deploy checks; `verify:client-bundle` post-build gate;
   architecture/security/dependency gates in CI.
+
+## 16. Multilingual UI
+
+- **Supported locales:** Vietnamese (`vi`, default) and English (`en`)
+  only. The selector shows full language names ("Tiếng Việt", "English"),
+  never bare codes.
+- **First-run experience is always Vietnamese.** No Accept-Language
+  sniffing, no `/en`|`/vi` route prefixes; `<html lang>` follows the
+  active locale.
+- **Resolution precedence:** explicit authenticated preference →
+  anonymous cookie preference → Vietnamese default. A saved account
+  preference is never overwritten by the cookie on read.
+- **Persistence:** anonymous `aurora-locale` cookie (1 year, `Path=/`,
+  `SameSite=Lax`) plus a nullable `User.locale` column (no dedicated
+  table); the set-locale action writes both. No `localStorage` /
+  `sessionStorage` / `indexedDB` (banned by gates).
+- **Switching:** the selector lives in existing shell surfaces (never a
+  top-level destination); switching updates instantly, syncs the cookie,
+  persists via the server action, and refreshes server-rendered parts —
+  no reload, no remount. Playback engines never consume locale context,
+  so switching cannot interrupt music, reset the queue, or recreate
+  players.
+- **Dictionaries:** `src/lib/i18n/vi.ts` is the source of truth for the
+  `Messages` contract; `en.ts` must satisfy it exactly (enforced by type
+  plus parity test). Translation via dotted keys with `{name}`
+  interpolation, Vietnamese fallback, then the key itself; plurals,
+  dates, and numbers via `Intl` (never manual suffixing or
+  concatenation).
+
+## 17. Appearance (Aurora Glass)
+
+**Reachability.** Appearance lives on `/settings`, reached from the sidebar
+footer on desktop and a header control on mobile. It is not a top-level
+destination and adds no navigation item: a presentation preference is not a
+place, and the Settings route was already reachable from the shell.
+
+### 17.1 What a visitor gets
+
+- **One switch, four looks, one background, and a disclosure.** The default
+  view is a glass switch, a four-option preset group, a background section and
+  a reset control. The eight individual sliders live behind "Advanced", because
+  a form of ten controls whose defaults are already good reads as unfinished.
+- **Presets are starting points, not modes.** Each sets glass alpha, blur,
+  saturation, border intensity and ambient intensity together. A preset owns
+  exactly those five values and nothing else — choosing a look never discards a
+  background image or the ambience setting, and nudging one slider after
+  choosing a preset is expected and supported.
+- **Minimal is the performance choice.** It sets blur to zero, which removes
+  every backdrop filter in the application in one selection. This is offered
+  rather than inferred: the product does not inspect the device's hardware to
+  decide (see `docs/scope-boundaries.md`).
+
+### 17.2 Backgrounds
+
+- Five shipped presets, one of which is the current default look, and a custom
+  **https image address**. There is no upload.
+- A custom address is checked before it is applied: https only, no embedded
+  credentials, at most 4 MiB, at least 480×320, at most 16 MP, and the type is
+  determined from the bytes rather than the extension. An address that fails is
+  never stored and never shown.
+- Typing previews; **applying is a separate act.** A half-typed address never
+  drives the application.
+- Remove and Reset both clear it. The background sits behind the whole
+  application, is fixed, and does not move while the page scrolls.
+
+### 17.3 What is guaranteed
+
+- **Nothing interrupts.** Changing the glass, the background or the presets
+  never pauses or restarts playback, never rebuilds the queue, and never
+  recreates the engine. Glass settings are not part of the playback session
+  snapshot and do not follow a restored session to another device.
+- **There is no flash.** The first paint is already the chosen look, because the
+  appearance is written onto the document during rendering rather than in an
+  effect that runs after it.
+- **A failure changes nothing.** A browser without backdrop filters, an image
+  that will not load, a storage write that fails, or a refused address all fall
+  back to the plain Aurora theme, which is fully usable.
+- **Reduced motion is honoured,** and no ambient motion runs when it is asked
+  for.
+- **Persisted per account when signed in, per browser otherwise,** following the
+  same precedence and the same two sinks as the locale preference (§16). The
+  account and the browser copy cannot disagree.
+- **Every control is a native element where one exists**, every state is
+  exposed as text or a glyph as well as a colour, and every error is a
+  translated sentence in both supported languages.
+
+### 17.4 What is deliberately absent
+
+- Upload-based backgrounds, and multi-megabyte binaries in the database.
+- Automatic quality downgrade based on the device.
+- Per-track colour schemes driven by a faithful reproduction of the cover: the
+  ambience is a restrained wash, opt-in, and off by default.
+- A light theme, and any second presentation mode alongside this one.
+## 18. Equalizer (Aurora V-Shape)
+
+**What it is for.** Musical colouration, not correction. It is a taste control
+that changes how the music is presented on the device you are listening on; it
+is not a headphone or room-correction profile, and it is not derived from
+anyone's measurements. See "Phase 53 addendum — Aurora V-Shape equalizer" in
+`docs/scope-boundaries.md`, and `ARCHITECTURE.md` §33.6.
+
+**Reachability.** Settings → Audio, on the same page as Appearance. The
+equalizer adds no navigation item of its own. It is disabled by default: a
+listener who has not chosen a curve hears music exactly as before this phase.
+
+### 18.1 What a visitor gets
+
+- **A switch, three presets, a comparison, and a disclosure.** The default view
+  is the switch, a preset group (Aurora V-Shape / Flat / Custom), a hold-to-
+  compare control and a reset. The ten band sliders and the preamp sit behind
+  "Advanced".
+- **Aurora V-Shape is the signature curve** and the default choice: a lifted low
+  end, a relaxed midrange so vocals sit forward, and a raised top. It is a
+  starting point — moving any band makes the preset Custom, which keeps the
+  listener's shape rather than the name.
+- **Flat is genuinely flat.** Every band at 0 dB and no preamp at all, so
+  choosing it never leaves the V-Shape's headroom behind as a quiet preset.
+- **A/B comparison is a hold, not a setting.** Press and hold to hear the
+  uncorrected signal, release to come back. The stored curve is never modified,
+  and no preference is written.
+- **The preamp is headroom management, not a volume control.** It is labelled and
+  explained as such, and while automatic is selected there is no slider at all
+  — a control showing a value the system is about to overrule is worse than no
+  control. The preset shows its declared figure (`Preamp: -3.5 dB`); automatic
+  shows `Auto Headroom` and the figure it computed.
+
+### 18.2 Aurora V-Shape
+
+| Band | 31 Hz | 62 Hz | 125 Hz | 250 Hz | 500 Hz | 1 kHz | 2 kHz | 4 kHz | 8 kHz | 16 kHz |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Gain (dB) | +2.5 | +3.0 | +2.0 | +0.5 | −0.5 | −1.0 | −0.5 | +0.5 | +2.0 | +1.5 |
+
+The engineering rationale for every band is recorded in `ARCHITECTURE.md` §33.6.
+Two constraints are worth stating in product terms: the bands run 31 Hz – 16 kHz
+rather than 20 Hz – 20 kHz, because a control centred below a device's
+reproduction limit is a control that appears to do nothing; and the filter width
+is a constant Q of 1.41 throughout, so a band behaves the same way wherever it
+sits.
+
+**Measured, and stated because it is a fact about the shipped curve:** the ten
+filters overlap, and the curve's true peak is **+3.83 dB at about 62 Hz**, not
+the +3.0 dB the largest single boost suggests. With the −3.5 dB preamp this
+leaves roughly +0.3 dB of headroom consumed. This is documented rather than
+tuned away, and automatic headroom (which measures the whole chain) offers
+−4.33 dB for a listener who would rather have a genuine safety margin.
+
+### 18.3 What is guaranteed
+
+- **Playback never depends on the equalizer.** If the browser has no Web Audio,
+  or the graph cannot be built, or the audio element cannot be connected, the
+  music plays exactly as it would with the equalizer off, and the interface says
+  so in the same sentence as the failure. There is no configuration of this
+  feature in which a listener hears silence because of it.
+- **Nothing about playback changes.** The equalizer has no playback controls: it
+  cannot start, pause, skip, seek, replace a track or touch the queue. The curve
+  is not part of the playback session, so clearing a restored session does not
+  clear the equalizer and restoring one does not import a device's tuning.
+- **The curve survives everything playback does** — play, pause, seek, next,
+  previous, queues, playlists, radio, infinite listening and resolver retries —
+  without rebuilding the audio graph or duplicating it. Changing the curve
+  changes parameters, not structure.
+- **No clicks.** Every band and preamp change is smoothed over 30 ms rather than
+  stepped.
+- **Persisted per account when signed in, per browser otherwise,** on the same
+  two sinks and the same precedence as the appearance preference (§17.3). It is
+  a column on the existing account, not a new preference system, and an untouched
+  account stores nothing at all.
+- **Every control is a native element where one exists**, every slider states its
+  region, its frequency, its value with a sign, and its unit, and every string
+  is translated in both supported languages.
+
+### 18.4 What is deliberately absent
+
+- Loudness normalisation, dynamic range compression, limiting and upsampling.
+  The preamp exists to prevent clipping, not to shape a sound.
+- A visible output level meter, and any claim that the preamp is doing more than
+  it is.
+- Per-device or per-headphone correction profiles.
+- Anything audible that is not a direct consequence of the ten bands and the
+  preamp.

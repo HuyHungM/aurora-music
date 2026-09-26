@@ -1,5 +1,9 @@
 import { create } from "zustand";
 import type { Track } from "@/lib/domain";
+import {
+  CanonicalDuplicateIndex,
+  dedupeCanonicalTracks,
+} from "@/lib/domain";
 import { PlayerEngine, PlayerError } from "./engine";
 import type { PlayerErrorKind } from "./engine";
 import { trackKey } from "./identity";
@@ -90,6 +94,8 @@ interface PlayerState {
   seek: (seconds: number) => void;
   setVolume: (value: number) => void;
   toggleMute: () => void;
+  /** Sets mute explicitly (restore path); toggleMute stays the UI action. */
+  setMuted: (value: boolean) => void;
   clearError: () => void;
   /** Controller error sink: mirrors engine error state shape. Additive. */
   reportPlaybackError: (kind: PlayerErrorKind, message: string) => void;
@@ -130,10 +136,36 @@ interface PlayerState {
   pendingRestorePosition: number | null;
 
   /**
+   * Track key of a restored entry that has not been loaded into the engine
+   * yet (Phase 43). A restored session holds identity only, so the first
+   * user-initiated Play must route through the controller for a fresh
+   * resolution instead of resuming a source that no longer exists.
+   * Cleared by any user-initiated load.
+   */
+  restoredTrackKey: string | null;
+
+  /**
    * Applies an authenticated restore: loads the track without autoplay and
    * without counting as user intent. Never triggers recently-played.
    */
   restoreTrack: (track: Track, position: number) => void;
+  /**
+   * Applies an authenticated queue-snapshot restore: installs the exact
+   * persisted queue/playOrder/cursor/shuffle/repeat as live state without
+   * autoplay, recomputation, or user-intent counting. The restored queue
+   * is immediately fully operable. Never triggers recently-played.
+   */
+  restoreQueueSnapshot: (input: {
+    tracks: Track[];
+    playOrder: number[];
+    position: number;
+    shuffle: boolean;
+    repeat: RepeatMode;
+    mediaPosition: number;
+    currentTrack?: Track | null;
+    volume?: number;
+    muted?: boolean;
+  }) => void;
 }
 
 let engine: PlayerEngine | null = null;
@@ -196,6 +228,70 @@ function sequentialPlayOrder(length: number): number[] {
   return Array.from({ length }, (_, i) => i);
 }
 
+/* ==========================================================================
+   CANONICAL QUEUE INVARIANT
+
+   The active queue holds AT MOST ONE entry per canonical track. "Canonical"
+   is Aurora's existing identity (`domain/track-dedupe.ts`), not a title, a
+   URL or an object reference: a Spotify row and a Deezer row for one
+   recording are the same entry, and so is a merged search group re-added.
+
+   WHY HERE AND NOWHERE ELSE. Every queue mutation in the product lands on one
+   of the four actions below — `replaceQueue` (play / playCollection /
+   restore), `addToQueue` (QueueManager.add, radio, keep-listening),
+   `playNext` (QueueManager.playNext) and `restoreQueueSnapshot`
+   (authenticated persistence). Deduplicating at this layer therefore covers
+   every caller with one implementation, and no component, coordinator or
+   hook needs its own filter. The stable entry identity is untouched: the
+   queue ARRAY SLOT is still the entry id, and a duplicate is rejected or
+   merged BEFORE a slot is ever allocated, so no id churns.
+
+   The persisted snapshot doc comment ("occurrences are preserved") predates
+   this rule and is corrected in `queue-snapshot.ts`; a snapshot written
+   before this change can still hold repeats, and `restoreQueueSnapshot`
+   repairs one rather than trusting it.
+   ========================================================================== */
+
+/**
+ * Memoized duplicate index over the live queue, keyed by the queue array's
+ * identity. Every queue mutation produces a new array, so the cache is
+ * invalidated exactly when the queue changes and never between two reads of
+ * an unchanged queue. Building it is O(n) key insertions; a query is O(1)
+ * for an exact key and O(n) matcher evaluations only on a miss.
+ */
+let queueDuplicateCache: {
+  queueRef: readonly Track[];
+  index: CanonicalDuplicateIndex;
+} | null = null;
+
+function queueDuplicateIndexOf(queue: readonly Track[]): CanonicalDuplicateIndex {
+  if (queueDuplicateCache && queueDuplicateCache.queueRef === queue) {
+    return queueDuplicateCache.index;
+  }
+  const index = new CanonicalDuplicateIndex(queue);
+  queueDuplicateCache = { queueRef: queue, index };
+  return index;
+}
+
+/**
+ * Moves `queueIndex` to play-order position `targetPosition`, leaving the
+ * queue array (and therefore every stable entry id) untouched.
+ *
+ * `fromPosition` is where the entry currently sits in the play order. When it
+ * sits BEFORE the cursor, removing it shifts the cursor down by one, so
+ * inserting at the cursor's old target would place it one slot too late; the
+ * caller resolves that by passing the already-adjusted target.
+ */
+function moveWithinPlayOrder(
+  playOrder: number[],
+  queueIndex: number,
+  targetPosition: number,
+): number[] {
+  const without = playOrder.filter((entry) => entry !== queueIndex);
+  const target = Math.max(0, Math.min(targetPosition, without.length));
+  return [...without.slice(0, target), queueIndex, ...without.slice(target)];
+}
+
 /**
  * Builds a fresh play order for the given queue, respecting shuffle state.
  * When shuffle is on, pins the startIndex track to position 0.
@@ -239,6 +335,7 @@ function loadAt(
     isPlaying: false,
     qualifiedTrackKey: null,
     pendingRestorePosition: null,
+    restoredTrackKey: null,
   });
 
   if (playbackController) {
@@ -382,6 +479,32 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
     }
   };
 
+  /**
+   * Resumes playback through the single PlaybackController.
+   *
+   * A restored session (Phase 43) carries track IDENTITY only, so the
+   * controller has no active source for it. ensurePlaying() would then
+   * resume an element with no media, silently doing nothing. Detect that
+   * case and issue a normal load instead, so the resolver produces a
+   * FRESH source (persisted/expired URLs are never reused) and the
+   * pending restore position is applied once metadata arrives.
+   */
+  const resumeThroughController = async (state: PlayerState) => {
+    const track = state.currentTrack;
+    if (!track) {
+      return;
+    }
+    const needsFreshLoad =
+      state.restoredTrackKey !== null &&
+      state.restoredTrackKey === trackKey(track);
+    if (needsFreshLoad) {
+      set({ isLoading: true, error: null, restoredTrackKey: null });
+      playbackController?.loadTrack(track, { autoplay: true });
+      return;
+    }
+    await playbackController?.ensurePlaying();
+  };
+
   return {
     currentTrack: null,
     isPlaying: false,
@@ -405,6 +528,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
     persistenceInitState: "idle",
     userActionGeneration: 0,
     pendingRestorePosition: null,
+    restoredTrackKey: null,
 
     qualifiedTrackKey: null,
 
@@ -416,10 +540,10 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
 
     replaceQueue: (tracks, options = {}) => {
       const { startIndex: rawStart = 0, autoplay = true, preserveCurrent = false } = options;
-      countUserAction();
       const state = get();
 
       if (tracks.length === 0) {
+        countUserAction();
         set({
           queue: [],
           playOrder: [],
@@ -432,31 +556,48 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
           isPlaying: false,
           qualifiedTrackKey: null,
           pendingRestorePosition: null,
+          restoredTrackKey: null,
         });
         engine?.pause();
         return;
       }
 
-      // Clamp startIndex
-      const startIndex = rawStart < 0 ? 0 : rawStart >= tracks.length ? tracks.length - 1 : rawStart;
+      // One entry per canonical track BEFORE any index is consumed. A
+      // collection that arrives with repeats (a radio batch, a raw provider
+      // list, a playlist re-played after a cross-provider add) collapses here
+      // once, and every index below - the requested start, the preserved
+      // current track, the shuffle pin - is computed against the survivors.
+      const { kept, resolve } = dedupeCanonicalTracks(tracks);
 
-      // preserveCurrent: if the current track is in the new queue, keep it as the starting point
+      countUserAction();
+
+      // Clamp startIndex, then re-point it at the surviving entry. A
+      // requested track that was itself a duplicate resolves to the survivor
+      // that absorbed it, so "play this one" always starts on that song.
+      const boundedStart =
+        rawStart < 0 ? 0 : rawStart >= tracks.length ? tracks.length - 1 : rawStart;
+      const startIndex = resolve[boundedStart] ?? 0;
+
+      // preserveCurrent: if the current track is in the new queue, keep it as
+      // the starting point. Matched by canonical key, so a current entry
+      // carried over under a different provider still counts.
       let actualStart = startIndex;
       if (preserveCurrent && state.currentTrack) {
         const currentKey = trackKey(state.currentTrack);
-        const idx = tracks.findIndex((t) => trackKey(t) === currentKey);
+        const idx = kept.findIndex((t) => trackKey(t) === currentKey);
         if (idx !== -1) {
           actualStart = idx;
         }
       }
 
-      const { playOrder, position } = buildPlayOrder(tracks.length, actualStart, state.shuffle);
+      const { playOrder, position } = buildPlayOrder(kept.length, actualStart, state.shuffle);
+      const starting = kept[actualStart] as Track;
 
       set({
-        queue: tracks,
+        queue: kept,
         playOrder,
         position,
-        currentTrack: tracks[actualStart],
+        currentTrack: starting,
         currentTime: 0,
         duration: 0,
         error: null,
@@ -464,23 +605,52 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
         isPlaying: false,
         qualifiedTrackKey: null,
         pendingRestorePosition: null,
+        restoredTrackKey: null,
       });
 
       if (playbackController) {
-        playbackController.loadTrack(tracks[actualStart], { autoplay });
+        playbackController.loadTrack(starting, { autoplay });
       } else if (engine) {
-        engine.load(tracks[actualStart], autoplay);
+        engine.load(starting, autoplay);
       }
     },
 
     playCollection: (tracks, startIndex = 0) => {
-      countUserAction();
       get().replaceQueue(tracks, { startIndex, autoplay: true });
     },
 
     playNext: (track) => {
-      countUserAction();
       const state = get();
+      const duplicate = queueDuplicateIndexOf(state.queue).find(track);
+
+      if (duplicate) {
+        const existingQueueIndex = duplicate.index;
+        const existingPosition = state.playOrder.indexOf(existingQueueIndex);
+        // The track is already queued. The single occurrence is REPOSITIONED
+        // rather than duplicated: moving it to the slot after the cursor is
+        // the whole point of "play next", and a second copy would defeat it.
+        // An entry that is ALREADY next is left alone.
+        //
+        // A repeat of the track currently playing is a no-op: the cursor
+        // entry cannot move without interrupting playback, and "play this
+        // next" when it is already playing has no meaning.
+        const isCurrent =
+          state.position >= 0 && state.playOrder[state.position] === existingQueueIndex;
+        if (existingPosition === -1 || isCurrent || existingPosition === state.position + 1) {
+          return;
+        }
+        countUserAction();
+        // Removing an entry that sits before the cursor pulls the cursor back
+        // by one, so the insertion target moves back with it.
+        const target = existingPosition < state.position ? state.position : state.position + 1;
+        const playOrder = moveWithinPlayOrder(state.playOrder, existingQueueIndex, target);
+        const currentQueueIndex = state.playOrder[state.position];
+        const moved = currentQueueIndex === undefined ? -1 : playOrder.indexOf(currentQueueIndex);
+        set({ playOrder, position: moved === -1 ? state.position : moved });
+        return;
+      }
+
+      countUserAction();
       const queueIndex = state.queue.length;
       const nextQueue = [...state.queue, track];
 
@@ -499,8 +669,14 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
     },
 
     addToQueue: (track) => {
-      countUserAction();
       const state = get();
+      // A track already in the queue is a no-op. Deliberately BEFORE
+      // countUserAction: nothing changes, so there is no new state to persist
+      // and no user intent for an in-flight restore to protect.
+      if (queueDuplicateIndexOf(state.queue).find(track)) {
+        return;
+      }
+      countUserAction();
       const queueIndex = state.queue.length;
       set({
         queue: [...state.queue, track],
@@ -535,7 +711,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
         set({ error: null });
       }
       if (playbackController) {
-        await playbackController.ensurePlaying();
+        await resumeThroughController(state);
         return;
       }
       try {
@@ -554,7 +730,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
     play: async () => {
       countUserAction();
       if (playbackController) {
-        await playbackController.ensurePlaying();
+        await resumeThroughController(get());
         return;
       }
       try {
@@ -591,6 +767,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
         currentTime: snapshot.currentTime,
         duration: snapshot.duration,
         pendingRestorePosition: null,
+        restoredTrackKey: null,
       });
       playbackController?.notifySeekRequest(seconds);
     },
@@ -606,6 +783,17 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
     toggleMute: () => {
       engine?.toggleMute();
       set({ muted: !get().muted });
+    },
+
+    setMuted: (value) => {
+      const next = value === true;
+      const engineSurface = engine;
+      if (engineSurface) {
+        if (engineSurface.isMuted() !== next) {
+          engineSurface.toggleMute();
+        }
+      }
+      set({ muted: next });
     },
 
     clearError: () => set({ error: null }),
@@ -667,6 +855,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
         isLoading: false,
         error: null,
         pendingRestorePosition: null,
+        restoredTrackKey: null,
       });
     },
 
@@ -785,9 +974,90 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
       } finally {
         suppressUserActionCounting = false;
       }
+      // No restoredTrackKey here: replaceQueue already routed this
+      // track through the engine, so a source is loaded and paused.
+      // ensurePlaying() resumes it directly.
       if (safe > 0) {
         set({ pendingRestorePosition: safe });
       }
+    },
+
+    restoreQueueSnapshot: (input) => {
+      const safeMedia =
+        Number.isFinite(input.mediaPosition) && input.mediaPosition > 0
+          ? Math.floor(input.mediaPosition)
+          : 0;
+
+      // A persisted snapshot written before the canonical-queue invariant can
+      // hold repeats (measured on real data: 8 entries, 2 distinct). Repair
+      // it HERE, at the one point a persisted queue becomes live state, and
+      // rebuild coherently rather than splicing arrays: entries collapse to
+      // survivors, the play order is re-pointed and de-duplicated as a
+      // permutation, and the cursor is re-resolved to the surviving slot for
+      // the same song. Nothing is discarded except a repeat of a track the
+      // restored queue already contains, so the cursor, the shuffle order and
+      // the persisted media position all still describe the same listening.
+      const { kept, resolve } = dedupeCanonicalTracks(input.tracks);
+      const repairedPlayOrder: number[] = [];
+      const seenEntries = new Set<number>();
+      for (const rawIndex of input.playOrder) {
+        if (!Number.isInteger(rawIndex)) {
+          continue;
+        }
+        const mapped = resolve[rawIndex];
+        if (mapped === undefined || seenEntries.has(mapped)) {
+          continue;
+        }
+        seenEntries.add(mapped);
+        repairedPlayOrder.push(mapped);
+      }
+      // The cursor followed the track it pointed at. If that track was a
+      // repeat, `resolve` sends the cursor to the surviving entry for the
+      // same song, so the listener resumes the same music.
+      const rawCursor = input.position >= 0 ? input.playOrder[input.position] : undefined;
+      const cursorEntry =
+        rawCursor === undefined ? undefined : resolve[rawCursor];
+      const repairedPosition =
+        cursorEntry === undefined
+          ? -1
+          : repairedPlayOrder.indexOf(cursorEntry);
+      const restoredPosition = repairedPosition === -1 ? -1 : repairedPosition;
+      const cursorTrack =
+        input.currentTrack ??
+        (restoredPosition >= 0
+          ? (kept[repairedPlayOrder[restoredPosition] as number] as Track)
+          : null);
+      // Player preferences travel with the session: reapply them to the
+      // live engine so volume/mute match before the first play.
+      if (typeof input.volume === "number" && engine) {
+        engine.setVolume(input.volume);
+      }
+      if (typeof input.muted === "boolean") {
+        get().setMuted(input.muted);
+      }
+      // Direct set: no user-action counting, no engine calls, no
+      // autoplay. Playback resolution happens on demand when the user
+      // presses play (autoplay policy intact).
+      set({
+        queue: kept.slice(),
+        playOrder: repairedPlayOrder,
+        position: restoredPosition,
+        shuffle: input.shuffle,
+        repeat: input.repeat,
+        currentTrack: cursorTrack,
+        currentTime: 0,
+        duration: 0,
+        isPlaying: false,
+        isLoading: false,
+        error: null,
+        qualifiedTrackKey: null,
+        pendingRestorePosition: safeMedia > 0 && cursorTrack ? safeMedia : null,
+        // Marks the cursor entry as identity-only: no source is loaded
+        // until the user presses Play, which then resolves a fresh one.
+        restoredTrackKey: cursorTrack ? trackKey(cursorTrack) : null,
+        ...(typeof input.volume === "number" ? { volume: input.volume } : {}),
+        ...(typeof input.muted === "boolean" ? { muted: input.muted } : {}),
+      });
     },
   };
 });

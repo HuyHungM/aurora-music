@@ -37,7 +37,7 @@ describe("ArtistCard", () => {
 
   it("renders first genre when available", () => {
     render(<ArtistCard artist={makeArtist({ genres: ["Rock", "Pop"] })} />);
-    expect(screen.getByText("Rock")).toBeTruthy();
+    expect(screen.getByText("Nghệ sĩ · Rock")).toBeTruthy();
   });
 
   it("hides genre when none available", () => {

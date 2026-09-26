@@ -3,10 +3,19 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * youtubei.js lives ONLY inside the playback-resolution boundary
- * (innertube-client.ts). Resolver, format selection, contracts, and every
- * consumer must depend on the narrow `YouTubePlaybackClient` abstraction.
- * The browser receives serialized AudioSources, never library internals.
+ * youtubei.js lives ONLY inside two designated boundaries: `playback/` for
+ * stream resolution, and `innertube/` for discovery and the shared session
+ * (Phase 55 widened this; see `../__tests__/boundary.test.ts`). Resolver,
+ * format selection, contracts, and every consumer must depend on the narrow
+ * `YouTubePlaybackClient` abstraction. The browser receives serialized
+ * AudioSources, never library internals.
+ *
+ * Playback and discovery share ONE `Innertube` session, not one each. A session
+ * carries a visitor identity and the player scripts derived from it; two
+ * sessions means two identities and no shared in-flight state, which is the
+ * duplication the sharing exists to prevent. The assertion below is that the
+ * playback adapter reaches youtubei.js through `innertube/session.ts` for
+ * session construction, and never builds its own.
  */
 
 const playbackDir = resolve(
@@ -32,12 +41,44 @@ function productionFiles(): string[] {
   return walk(playbackDir);
 }
 
+/**
+ * Removes `//` and block comments so a boundary can be checked by grepping for
+ * a *usage* rather than a mention. The adapter's header explains the
+ * single-session rule by naming the `Innertube.create()` it must not call, so
+ * a raw grep reports the explanation as the violation. Same trap, same fix, as
+ * `../__tests__/boundary.test.ts`.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+}
+
 describe("playback-resolution boundary", () => {
   it("imports youtubei.js only in the designated adapter", () => {
     const importers = productionFiles()
-      .filter((file) => /from\s+["']youtubei\.js["']/.test(readFileSync(file, "utf8")))
+      .filter((file) => /from\s+["']youtubei\.js["']/.test(stripComments(readFileSync(file, "utf8"))))
       .map((file) => file.split(/[\\/]/).pop());
     expect(importers).toEqual(["innertube-client.ts"]);
+  });
+
+  it("borrows the shared session instead of creating one", () => {
+    // Phase 55 moved session construction to `innertube/session.ts`. The
+    // playback adapter must consume it: a local `Innertube.create()` here
+    // would be a second visitor identity in the same process, and it is the
+    // exact mistake the one-session boundary test in `../__tests__/` guards.
+    const offenders = productionFiles().filter(
+      (file) => /\bInnertube\s*\.\s*create\b/.test(stripComments(readFileSync(file, "utf8"))),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("takes its session from the shared module", () => {
+    // The positive half of the same rule: the adapter really does use the
+    // shared session, rather than passing the test above by having no session
+    // at all.
+    const source = readFileSync(join(playbackDir, "innertube-client.ts"), "utf8");
+    expect(stripComments(source)).toMatch(/from\s+["'][^"']*innertube\/session["']/);
   });
 
   it("never touches cookies, storage, or auth tokens", () => {

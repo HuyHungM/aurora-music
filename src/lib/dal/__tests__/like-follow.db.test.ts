@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import {
   followArtist,
   isFollowing,
+  listFollowedArtists,
   listUserFollows,
   unfollowArtist,
 } from "@/lib/dal/follow";
@@ -92,6 +93,29 @@ describe("followArtist / unfollowArtist", () => {
     const follows = await listUserFollows(userId, {}, prisma);
     expect(follows.map((follow) => follow.artistId)).toEqual(["artist-1"]);
     expect(follows[0].provider).toBe(namespace);
+  });
+
+  it("lists followed artists with catalog metadata for Library", async () => {
+    // Fresh indices: earlier like-tests upsert tracks whose artist rows
+    // already exist (created without genre richness), so untouched
+    // artists exercise the create path with full metadata.
+    const first = dbTest.makeArtist(namespace, 7);
+    const second = dbTest.makeArtist(namespace, 8);
+    await followArtist(userId, first, prisma);
+    await followArtist(userId, second, prisma);
+    const followed = await listFollowedArtists(userId, { limit: 2 }, prisma);
+    expect(followed.map((entry) => entry.artist.name)).toEqual([
+      "Artist 8",
+      "Artist 7",
+    ]);
+    expect(followed[0].artist).toMatchObject({
+      providerArtistId: "artist-8",
+      image: "https://img/artist-8.jpg",
+      genres: ["rock"],
+    });
+    expect(typeof followed[0].followedAt).toBe("string");
+    await unfollowArtist(userId, artistRef(first), prisma);
+    await unfollowArtist(userId, artistRef(second), prisma);
   });
 
   it("unfollows an artist", async () => {

@@ -10,6 +10,8 @@ import {
   TrackNotFoundError,
 } from "@/lib/domain";
 import { PlayerError } from "@/lib/player/engine";
+import type { Locale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/translate";
 
 /**
  * User-facing error taxonomy (Phase 21). A single deterministic mapping
@@ -78,13 +80,33 @@ function sanitizeMessage(text: string): string {
     .replace(/www\.\S+\.\S+/g, "[removed]");
 }
 
-function networkOrOffline(context?: UserErrorContext): UserFacingError {
+/**
+ * Phase 42: every user-facing message is an English canonical literal plus
+ * its dictionary key. English callers (and all existing tests) see byte-
+ * identical output; Vietnamese callers get the curated translation.
+ * Internal codes, categories, and retry/preserve flags never localize.
+ */
+function msg(
+  locale: Locale,
+  en: string,
+  key: Parameters<typeof t>[1],
+): string {
+  return locale === "vi" ? t(locale, key) : en;
+}
+
+function networkOrOffline(
+  context?: UserErrorContext,
+  locale: Locale = "en",
+): UserFacingError {
   if (!isOnline(context)) {
     return {
       category: "offline",
       code: "OFFLINE",
-      message:
+      message: msg(
+        locale,
         "You're offline. Music playback requires an internet connection.",
+        "errors.offlineMessage",
+      ),
       retryable: true,
       preservePlayback: true,
     };
@@ -92,7 +114,11 @@ function networkOrOffline(context?: UserErrorContext): UserFacingError {
   return {
     category: "network",
     code: "NETWORK_UNAVAILABLE",
-    message: "Couldn't reach the service. Check your connection and try again.",
+    message: msg(
+      locale,
+      "Couldn't reach the service. Check your connection and try again.",
+      "errors.networkUnavailable",
+    ),
     retryable: true,
     preservePlayback: true,
   };
@@ -101,11 +127,15 @@ function networkOrOffline(context?: UserErrorContext): UserFacingError {
 const NETWORK_MESSAGE_PATTERN =
   /fetch failed|failed to fetch|networkerror|network request failed|timeout|timed out|econn|enotfound|offline|load failed/i;
 
-function unknownError(): UserFacingError {
+function unknownError(locale: Locale = "en"): UserFacingError {
   return {
     category: "unknown",
     code: "UNKNOWN_ERROR",
-    message: "Something went wrong. Please try again.",
+    message: msg(
+      locale,
+      "Something went wrong. Please try again.",
+      "errors.unknownError",
+    ),
     retryable: true,
     preservePlayback: true,
   };
@@ -115,12 +145,26 @@ function unknownError(): UserFacingError {
  * Maps any thrown value to safe, deterministic UI content. Pure and
  * total: never throws, never leaks. The existing engine error classes
  * stay authoritative — this only translates them for display.
+ * Pass the request locale for a translated message; categories, codes,
+ * and flags are locale-independent and never change.
  */
 export function toUserFacingError(
   error: unknown,
   context?: UserErrorContext,
+  locale: Locale = "en",
 ): UserFacingError {
   if (error instanceof PlayerError) {
+    // Engine diagnostics stay English-only at their source; the
+    // Vietnamese UI shows the curated playback message instead.
+    if (locale === "vi") {
+      return {
+        category: "playback-unavailable",
+        code: "PLAYBACK_UNAVAILABLE",
+        message: t(locale, "errors.playbackUnavailable"),
+        retryable: true,
+        preservePlayback: true,
+      };
+    }
     return {
       category: "playback-unavailable",
       code: "PLAYBACK_UNAVAILABLE",
@@ -134,30 +178,42 @@ export function toUserFacingError(
       return {
         category: "provider-unavailable",
         code: "PROVIDER_UNAVAILABLE",
-        message: "That isn't available from the current sources right now.",
+        message: msg(
+          locale,
+          "That isn't available from the current sources right now.",
+          "errors.providerUnavailable",
+        ),
         retryable: false,
         preservePlayback: true,
       };
     }
     if (error.retryable) {
-      return networkOrOffline(context);
+      return networkOrOffline(context, locale);
     }
     return {
       category: "provider-unavailable",
       code: "PROVIDER_UNAVAILABLE",
-      message: "That track can't be played right now.",
+      message: msg(
+        locale,
+        "That track can't be played right now.",
+        "errors.playbackUnavailable",
+      ),
       retryable: false,
       preservePlayback: true,
     };
   }
   if (error instanceof ExtractorError) {
     if (error.retryable) {
-      return networkOrOffline(context);
+      return networkOrOffline(context, locale);
     }
     return {
       category: "provider-unavailable",
       code: "PROVIDER_UNAVAILABLE",
-      message: "The music service didn't return that track.",
+      message: msg(
+        locale,
+        "The music service didn't return that track.",
+        "errors.providerEmpty",
+      ),
       retryable: false,
       preservePlayback: true,
     };
@@ -166,7 +222,7 @@ export function toUserFacingError(
     return {
       category: "not-found",
       code: "NOT_FOUND",
-      message: "We couldn't find that.",
+      message: msg(locale, "We couldn't find that.", "errors.notFoundMessage"),
       retryable: false,
       preservePlayback: true,
     };
@@ -175,7 +231,11 @@ export function toUserFacingError(
     return {
       category: "provider-unavailable",
       code: "PROVIDER_UNAVAILABLE",
-      message: "That isn't available right now.",
+      message: msg(
+        locale,
+        "That isn't available right now.",
+        "errors.matchUnavailable",
+      ),
       retryable: false,
       preservePlayback: true,
     };
@@ -184,7 +244,11 @@ export function toUserFacingError(
     return {
       category: "validation",
       code: "VALIDATION_FAILED",
-      message: "That request doesn't look right.",
+      message: msg(
+        locale,
+        "That request doesn't look right.",
+        "errors.validationFailed",
+      ),
       retryable: false,
       preservePlayback: true,
     };
@@ -193,7 +257,7 @@ export function toUserFacingError(
     return {
       category: "authentication",
       code: "AUTH_REQUIRED",
-      message: "Please sign in to continue.",
+      message: msg(locale, "Please sign in to continue.", "errors.authRequired"),
       retryable: false,
       preservePlayback: true,
     };
@@ -209,7 +273,7 @@ export function toUserFacingError(
       return {
         category: "authentication",
         code: "AUTH_REQUIRED",
-        message: "Please sign in to continue.",
+        message: msg(locale, "Please sign in to continue.", "errors.authRequired"),
         retryable: false,
         preservePlayback: true,
       };
@@ -218,23 +282,23 @@ export function toUserFacingError(
       return {
         category: "not-found",
         code: "NOT_FOUND",
-        message: "We couldn't find that.",
+        message: msg(locale, "We couldn't find that.", "errors.notFoundMessage"),
         retryable: false,
         preservePlayback: true,
       };
     }
   }
   if (error instanceof AuroraError) {
-    return unknownError();
+    return unknownError(locale);
   }
   if (error instanceof Error) {
     if (NETWORK_MESSAGE_PATTERN.test(error.message)) {
-      return networkOrOffline(context);
+      return networkOrOffline(context, locale);
     }
-    return unknownError();
+    return unknownError(locale);
   }
   if (typeof error === "string" && NETWORK_MESSAGE_PATTERN.test(error)) {
-    return networkOrOffline(context);
+    return networkOrOffline(context, locale);
   }
-  return unknownError();
+  return unknownError(locale);
 }

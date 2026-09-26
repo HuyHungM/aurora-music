@@ -1,77 +1,53 @@
 /**
  * Real `YouTubePlaybackClient` over youtubei.js (pinned 18.0.0).
  *
- * SERVER-ONLY. This is the single module allowed to import youtubei.js;
- * everything it produces is normalized into `PlaybackMediaInfo` before it
- * leaves. Anonymous, stateless operation: no login, no cookies persisted,
- * no user data. One lazily created shared session is reused process-wide
- * (sessions hold no per-user state); simultaneous resolutions of the same
- * video share one in-flight request and results are never cached, so an
- * expired URL can never be re-served.
+ * SERVER-ONLY. One of the two modules allowed to import youtubei.js; the other
+ * is `innertube/transport.ts` (discovery). Everything this file produces is
+ * normalized into `PlaybackMediaInfo` before it leaves. Anonymous, stateless
+ * operation: no login, no cookies persisted, no user data.
+ *
+ * THE SESSION IS NOT THIS FILE'S (Phase 55). It used to be. When InnerTube
+ * discovery was added, keeping a second `Innertube.create()` here would have
+ * meant two sessions per process, so the session moved to
+ * `innertube/session.ts` and BOTH halves import it. There is exactly one
+ * `Innertube.create()` call in the repository.
+ *
+ * RESULTS ARE NEVER CACHED, and that is load-bearing rather than an omission.
+ * A resolved `googlevideo` URL is signed and expires in hours, so caching one
+ * means eventually serving a dead stream to a user who sees a track that will
+ * not play (§56). `createInnerTubePlaybackClient` keeps its own in-flight map
+ * so simultaneous resolutions of the SAME video share one request — that is
+ * deduplication, not caching, and the entry is gone the moment the request
+ * settles.
  *
  * Library objects are treated as untrusted input: every consumed field is
  * validated before use, so library upgrades fail closed into typed errors.
  */
 
-import { Innertube } from "youtubei.js";
-import type { Misc, Types, YT } from "youtubei.js";
-import { Platform } from "youtubei.js";
-import vm from "node:vm";
-
-type Format = Misc.Format;
-type VideoInfo = YT.VideoInfo;
-type PlayerRequestClient = Types.InnerTubeClient;
+import type { Innertube, Types } from "youtubei.js";
 import { ExtractorError } from "@/lib/domain";
 import type {
   PlaybackFormatCandidate,
   PlaybackMediaInfo,
   YouTubePlaybackClient,
 } from "./types";
+import {
+  asNonEmptyString,
+  asRecord,
+  decipherFormatUrl,
+  ensureJsEvaluator,
+  sessionPlayer,
+  sharedInnertubeSession,
+  toFormatCandidate,
+} from "../innertube/session";
+import type { SessionFactory } from "../innertube/session";
+import type { Format, VideoInfo } from "../innertube/session";
 
 const PROVIDER_ID = "youtube";
 const OPERATION = "getMediaInfo";
 const RESOLVE_TIMEOUT_MS = 15_000;
 
-type SessionFactory = () => Promise<Innertube>;
-
-let sharedSession: Promise<Innertube> | null = null;
-
-function defaultSessionFactory(): Promise<Innertube> {
-  if (!sharedSession) {
-    // generate_session_locally avoids extra round-trips; failures clear
-    // the slot so the next call retries with a fresh session.
-    sharedSession = Innertube.create({ generate_session_locally: true }).catch(
-      (error: unknown) => {
-        sharedSession = null;
-        throw error;
-      },
-    );
-  }
-  return sharedSession;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function asPositiveInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true;
-}
+type PlayerRequestClient = Types.InnerTubeClient;
 
 function withTimeout<T>(promise: Promise<T>, operation: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -95,106 +71,6 @@ function withTimeout<T>(promise: Promise<T>, operation: string): Promise<T> {
   });
 }
 
-function toCandidate(format: Format): PlaybackFormatCandidate | null {
-  const record = asRecord(format);
-  const hasAudio = record?.has_audio === true;
-  const hasVideo = record?.has_video === true;
-  const url = asNonEmptyString(record?.url);
-  // Ciphered formats carry no direct URL until deciphered (YouTube serves
-  // `signature_cipher` + a decipher hook instead). They must pass the gate
-  // here — the loop below deciphers and only usable URLs are surfaced.
-  const decipherable = typeof record?.decipher === "function";
-  if (!hasAudio || (!url && !decipherable)) {
-    return null;
-  }
-  const candidate: PlaybackFormatCandidate = {
-    url: url ?? "",
-    hasAudio,
-    hasVideo,
-  };
-  const mimeType = asNonEmptyString(record?.mime_type);
-  if (mimeType) {
-    candidate.mimeType = mimeType;
-  }
-  const bitrate = asPositiveInt(record?.bitrate);
-  if (bitrate !== undefined) {
-    candidate.bitrate = bitrate;
-  }
-  const durationMs = asPositiveInt(record?.approx_duration_ms);
-  if (durationMs !== undefined) {
-    candidate.durationMs = durationMs;
-  }
-  return candidate;
-}
-
-async function decipherUrl(format: Format, player: unknown): Promise<string | undefined> {
-  try {
-    const decipher = (format as unknown as { decipher?: unknown }).decipher;
-    if (typeof decipher !== "function") {
-      return undefined;
-    }
-    const url = await (decipher as (player?: unknown) => Promise<unknown>).call(
-      format,
-      player,
-    );
-    return asNonEmptyString(url);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Reads the decipher-capable player object from a session using only
- * runtime validation (library internals are untrusted input like any
- * payload). Returns undefined when the shape is unfamiliar so callers
- * fail closed into typed errors instead of throwing on internals.
- */
-export function sessionPlayer(session: unknown): unknown {
-  const inner = asRecord(asRecord(session)?.session);
-  return inner?.player;
-}
-
-type EvaluatorEnv = Record<string, string | number | boolean | null | undefined>;
-
-/**
- * Runs a library-extracted player script in a bare `node:vm` context (no
- * Node globals) with a hard timeout. The generated script ends with a
- * top-level `return`, so it is wrapped in a function scope before running.
- * Anything unexpected fails closed (undefined) and the caller skips the
- * format.
- */
-export function evaluatePlayerScript(
-  data: { output: string },
-  env: EvaluatorEnv,
-): Record<string, unknown> | undefined {
-  try {
-    const context = vm.createContext({ ...env });
-    const wrapped = `(function(){\n${data.output}\n})()`;
-    const result = vm.runInContext(wrapped, context, { timeout: 5000 });
-    return asRecord(result) ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-let evaluatorInstalled = false;
-
-/**
- * Installs the stdlib evaluator exactly once per process. Safe to call
- * repeatedly (dev HMR, tests); a frozen shim simply keeps failing closed.
- */
-export function ensureJsEvaluator(): void {
-  if (evaluatorInstalled) {
-    return;
-  }
-  evaluatorInstalled = true;
-  try {
-    Platform.shim.eval = evaluatePlayerScript;
-  } catch {
-    evaluatorInstalled = false;
-  }
-}
-
 function mapInfoError(videoId: string, error: unknown): never {
   if (error instanceof ExtractorError) {
     throw error;
@@ -212,6 +88,10 @@ function mapInfoError(videoId: string, error: unknown): never {
 }
 
 export interface InnertubeClientOptions {
+  /**
+   * Overrides the shared session. Tests inject a fake; production does not,
+   * because one session per process is the point (see the file header).
+   */
   sessionFactory?: SessionFactory;
 }
 
@@ -246,7 +126,7 @@ export function createInnertubePlaybackClient(
   options: InnertubeClientOptions = {},
 ): YouTubePlaybackClient {
   ensureJsEvaluator();
-  const sessionFactory = options.sessionFactory ?? defaultSessionFactory;
+  const sessionFactory = options.sessionFactory ?? sharedInnertubeSession;
   const inflight = new Map<string, Promise<PlaybackMediaInfo>>();
 
   async function fetchInfo(videoId: string): Promise<PlaybackMediaInfo> {
@@ -303,13 +183,13 @@ export function createInnertubePlaybackClient(
     const player = sessionPlayer(session);
     const formats: PlaybackFormatCandidate[] = [];
     for (const raw of rawFormats) {
-      const base = toCandidate(raw as Format);
+      const base = toFormatCandidate(raw as Format);
       if (!base) {
         continue;
       }
       // URLs from adaptive formats may require deciphering; formats that
       // cannot produce a usable URL are skipped, never surfaced.
-      const url = await decipherUrl(raw as Format, player);
+      const url = await decipherFormatUrl(raw as Format, player);
       if (url) {
         formats.push({ ...base, url });
       }
@@ -337,9 +217,9 @@ export function createInnertubePlaybackClient(
     if (durationSeconds !== undefined) {
       media.durationMs = Math.floor(durationSeconds * 1000);
     }
-    media.isPrivate = asBoolean(details.is_private);
-    media.isLiveContent = asBoolean(details.is_live_content);
-    media.isUpcoming = asBoolean(details.is_upcoming);
+    media.isPrivate = details.is_private === true;
+    media.isLiveContent = details.is_live_content === true;
+    media.isUpcoming = details.is_upcoming === true;
     if (expiresAt) {
       media.expiresAt = expiresAt;
     }
@@ -362,3 +242,19 @@ export function createInnertubePlaybackClient(
     },
   };
 }
+
+/**
+ * Re-exported for compatibility.
+ *
+ * These three helpers now LIVE in `innertube/session.ts` (Phase 55), because
+ * the session and its evaluator are properties of the shared session rather
+ * than of the playback half. They are re-exported here so the playback
+ * module's public surface is unchanged: the existing tests, and any caller
+ * that imported them, keep working without knowing the session moved.
+ */
+export {
+  ensureJsEvaluator,
+  evaluatePlayerScript,
+  sessionPlayer,
+  sharedInnertubeSession as innertubeSession,
+} from "../innertube/session";

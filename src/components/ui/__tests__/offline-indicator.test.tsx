@@ -65,7 +65,7 @@ describe("useOnlineStatus", () => {
   it("is SSR-safe and renders nothing while online", () => {
     expect(() => renderToString(<OfflineIndicator />)).not.toThrow();
     expect(renderToString(<OfflineIndicator />)).not.toContain(
-      "You&#x27;re offline",
+      "Bạn đang ngoại tuyến",
     );
   });
 });
@@ -80,8 +80,8 @@ describe("OfflineIndicator", () => {
       window.dispatchEvent(new Event("offline"));
     });
     const banner = screen.getByRole("status");
-    expect(banner.textContent).toContain("You're offline");
-    expect(banner.textContent).toContain("internet connection");
+    expect(banner.textContent).toContain("Bạn đang ngoại tuyến");
+    expect(banner.textContent).toContain("kết nối internet");
     setOnline(true);
     act(() => {
       window.dispatchEvent(new Event("online"));

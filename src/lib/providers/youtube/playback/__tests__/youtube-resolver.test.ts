@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PlaybackResolutionError } from "@/lib/domain";
 import type {
+  PlaybackFormatCandidate,
   PlaybackMediaInfo,
   YouTubePlaybackClient,
 } from "@/lib/providers/youtube/playback/types";
@@ -296,5 +297,165 @@ describe("YouTubeResolver format validation", () => {
       expect(serialized).not.toContain("cdn.example");
       expect(serialized).not.toMatch(/https?:\/\//);
     }
+  });
+});
+
+describe("YouTubeResolver format diagnostics", () => {
+  const GOOD_MUXED = "https://cdn.example/good.mp4";
+
+  function aac(url: string, itag: number): PlaybackFormatCandidate {
+    return {
+      url,
+      itag,
+      mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+      bitrate: 131_115,
+      hasAudio: true,
+      hasVideo: false,
+    };
+  }
+
+  function opus(url: string, itag: number): PlaybackFormatCandidate {
+    return {
+      url,
+      itag,
+      mimeType: 'audio/webm; codecs="opus"',
+      bitrate: 180_658,
+      hasAudio: true,
+      hasVideo: false,
+    };
+  }
+
+  /** The measured production shape: an audio ladder then one progressive muxed. */
+  function adaptiveLadder(): PlaybackMediaInfo {
+    return media({
+      formats: [
+        opus("https://cdn.example/opus-high.webm", 251),
+        aac("https://cdn.example/aac.m4a", 140),
+        opus("https://cdn.example/opus-low.webm", 249),
+        {
+          url: GOOD_MUXED,
+          itag: 18,
+          mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+          bitrate: 255_920,
+          hasAudio: true,
+          hasVideo: true,
+        },
+      ],
+    });
+  }
+
+  async function capture(
+    run: () => Promise<unknown>,
+  ): Promise<{ records: LogRecord[]; error: unknown }> {
+    const records: LogRecord[] = [];
+    const restore = setLogSink((record) => {
+      records.push(record);
+    });
+    setLogLevel("debug");
+    try {
+      const error = await run().catch((cause) => cause);
+      return { records, error };
+    } finally {
+      restore();
+      setLogLevel("error");
+    }
+  }
+
+  it("reports itag and a stable reason for every skipped candidate", async () => {
+    const { records } = await capture(async () => {
+      const resolver = resolverWith(adaptiveLadder(), async (url) => url === GOOD_MUXED);
+      return await resolver.resolveSource({ source: "youtube", id: VIDEO_ID });
+    });
+    const skips = records.filter((r) => r.event === "playback_format_skipped");
+    expect(skips).toHaveLength(3);
+    // Rank order is preserved (audio/mp4 outranks audio/webm per the selection
+    // policy) and each line identifies the exact rendition by itag.
+    expect(skips.map((r) => r.fields.itag)).toEqual([140, 251, 249]);
+    for (const skip of skips) {
+      expect(skip.fields.reason).toBe("validator_injected");
+      expect(skip.fields.mimeType).toBeTypeOf("string");
+      expect(skip.fields.bitrate).toBeTypeOf("number");
+    }
+  });
+
+  it("emits one playback_resolution_failed summary when every candidate fails", async () => {
+    const { records, error } = await capture(async () =>
+      resolverWith(adaptiveLadder(), async () => false).resolveSource({
+        source: "youtube",
+        id: VIDEO_ID,
+      }),
+    );
+    expect(error).toMatchObject({ name: "PlaybackResolutionError", stage: "stream" });
+    const summaries = records.filter((r) => r.event === "playback_resolution_failed");
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.fields).toMatchObject({
+      candidateCount: 4,
+      validCount: 0,
+      rejectedCount: 4,
+    });
+    expect(summaries[0]?.fields.topRejectionReasons).toBe("validator_injected=4");
+  });
+
+  it("reports a zero-candidate resolution instead of failing silently", async () => {
+    const { records, error } = await capture(async () =>
+      resolverWith(media({ formats: [] }), async () => true).resolveSource({
+        source: "youtube",
+        id: VIDEO_ID,
+      }),
+    );
+    expect(error).toMatchObject({ stage: "stream" });
+    const summary = records.find((r) => r.event === "playback_resolution_failed");
+    expect(summary?.fields).toMatchObject({ candidateCount: 0, rejectedCount: 0 });
+    expect(summary?.fields.topRejectionReasons).toBe("");
+  });
+
+  it("records the fallthrough so a later candidate is not a silent downgrade", async () => {
+    const { records } = await capture(async () => {
+      const resolver = resolverWith(adaptiveLadder(), async (url) => url === GOOD_MUXED);
+      return await resolver.resolveSource({ source: "youtube", id: VIDEO_ID });
+    });
+    const fallbacks = records.filter((r) => r.event === "playback_format_fallback");
+    expect(fallbacks).toHaveLength(1);
+    expect(fallbacks[0]?.fields).toMatchObject({ rejectedCount: 3, selectedItag: 18 });
+  });
+
+  it("emits no fallthrough record when the first candidate passes", async () => {
+    const { records } = await capture(async () => {
+      const seen: string[] = [];
+      const resolver = resolverWith(adaptiveLadder(), async (url) => {
+        seen.push(url);
+        return true;
+      });
+      const source = await resolver.resolveSource({ source: "youtube", id: VIDEO_ID });
+      expect(source.url).toBe("https://cdn.example/aac.m4a");
+      return source;
+    });
+    expect(records.filter((r) => r.event === "playback_format_fallback")).toHaveLength(0);
+  });
+
+  it("keeps a validator that throws visible as a reason, not a silent skip", async () => {
+    const { records } = await capture(async () =>
+      resolverWith(adaptiveLadder(), async () => {
+        throw new Error("probe exploded");
+      }).resolveSource({ source: "youtube", id: VIDEO_ID }),
+    );
+    const skips = records.filter((r) => r.event === "playback_format_skipped");
+    expect(skips).toHaveLength(4);
+    for (const skip of skips) {
+      expect(skip.fields.reason).toBe("validator_injected");
+    }
+    expect(records.some((r) => r.event === "playback_resolution_failed")).toBe(true);
+  });
+
+  it("never leaks a URL through the new diagnostic fields", async () => {
+    const { records } = await capture(async () =>
+      resolverWith(adaptiveLadder(), async () => false).resolveSource({
+        source: "youtube",
+        id: VIDEO_ID,
+      }),
+    );
+    const blob = JSON.stringify(records);
+    expect(blob).not.toContain("cdn.example");
+    expect(blob).not.toMatch(/https?:\/\//);
   });
 });

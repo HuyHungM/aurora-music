@@ -7,17 +7,26 @@ export interface EmptyStateProps {
   action?: ReactNode;
 }
 
+/**
+ * Unified empty-state system (Phase 36): every state answers
+ * what is empty, why, and what to do next via one clear action.
+ */
 export function EmptyState({ icon, title, description, action }: EmptyStateProps) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-card border border-border-subtle bg-surface-1 px-6 py-12 text-center">
+    <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border-strong bg-surface-1 px-6 py-12 text-center">
       {icon ? (
-        <div className="text-text-muted">{icon}</div>
+        <div
+          aria-hidden="true"
+          className="mb-1 grid h-12 w-12 place-items-center rounded-full bg-surface-3 text-text-secondary"
+        >
+          {icon}
+        </div>
       ) : null}
-      <h3 className="text-base font-semibold text-text-primary">{title}</h3>
+      <h3 className="t-card-title">{title}</h3>
       {description ? (
         <p className="max-w-sm text-sm leading-relaxed text-text-muted">{description}</p>
       ) : null}
-      {action ? <div className="mt-2">{action}</div> : null}
+      {action ? <div className="mt-3">{action}</div> : null}
     </div>
   );
 }

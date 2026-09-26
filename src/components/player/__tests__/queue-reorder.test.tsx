@@ -65,7 +65,32 @@ function mountWithEngine() {
   return { surface, engine };
 }
 
-const bar = () => within(screen.getByRole("region", { name: "Player bar" }));
+const bar = () => within(screen.getByRole("region", { name: "Thanh phát nhạc" }));
+
+/**
+ * Titles in the order the panel actually renders them.
+ *
+ * Asserting `usePlayerStore.getState().playOrder` alone is a false positive:
+ * the model reorders correctly while the panel keeps painting the previous
+ * order, because the rendered list was driven by a subscription that read
+ * playOrder outside the store. The user-visible contract is the DOM.
+ *
+ * Scoped to the "Tiếp theo" section because the panel renders the current
+ * track in its own "Đang phát" section ahead of the rest — whole-dialog DOM
+ * order is the grouping, not the play sequence.
+ */
+function renderedOrder(): string[] {
+  const section = screen.getByRole("region", { name: "Tiếp theo" });
+  return within(section)
+    .getAllByRole("listitem")
+    .map((row) => row.querySelector("p")?.textContent ?? "");
+}
+
+/** Title of the track the panel shows as the current one. */
+function renderedCurrent(): string | undefined {
+  const section = screen.getByRole("region", { name: "Đang phát" });
+  return within(section).getByRole("listitem").querySelector("p")?.textContent;
+}
 
 describe("Queue reorder buttons", () => {
   beforeEach(() => {
@@ -89,15 +114,15 @@ describe("Queue reorder buttons", () => {
       yt("c", { title: "Track C" }),
     ]);
 
-    fireEvent.click(bar().getByRole("button", { name: "Up next" }));
-    await screen.findByRole("dialog", { name: "Queue" });
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
 
-    expect(screen.getByRole("button", { name: 'Move "Track A" up' })).toBeTruthy();
-    expect(screen.getByRole("button", { name: 'Move "Track A" down' })).toBeTruthy();
-    expect(screen.getByRole("button", { name: 'Move "Track B" up' })).toBeTruthy();
-    expect(screen.getByRole("button", { name: 'Move "Track B" down' })).toBeTruthy();
-    expect(screen.getByRole("button", { name: 'Move "Track C" up' })).toBeTruthy();
-    expect(screen.getByRole("button", { name: 'Move "Track C" down' })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chuyển “Track A” lên" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chuyển “Track A” xuống" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chuyển “Track B” lên" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chuyển “Track B” xuống" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chuyển “Track C” lên" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chuyển “Track C” xuống" })).toBeTruthy();
   });
 
   it("disables Move Up for the first item", async () => {
@@ -109,11 +134,11 @@ describe("Queue reorder buttons", () => {
       yt("b", { title: "Track B" }),
     ]);
 
-    fireEvent.click(bar().getByRole("button", { name: "Up next" }));
-    await screen.findByRole("dialog", { name: "Queue" });
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
 
-    expect(screen.getByRole("button", { name: 'Move "Track A" up' })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: 'Move "Track A" down' })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Chuyển “Track A” lên" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Chuyển “Track A” xuống" })).toHaveProperty("disabled", false);
   });
 
   it("disables Move Down for the last item", async () => {
@@ -125,11 +150,11 @@ describe("Queue reorder buttons", () => {
       yt("b", { title: "Track B" }),
     ]);
 
-    fireEvent.click(bar().getByRole("button", { name: "Up next" }));
-    await screen.findByRole("dialog", { name: "Queue" });
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
 
-    expect(screen.getByRole("button", { name: 'Move "Track B" down' })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: 'Move "Track B" up' })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Chuyển “Track B” xuống" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Chuyển “Track B” lên" })).toHaveProperty("disabled", false);
   });
 
   it("moves an item up when Move Up is clicked", async () => {
@@ -142,16 +167,25 @@ describe("Queue reorder buttons", () => {
       yt("c", { title: "Track C" }),
     ]);
 
-    fireEvent.click(bar().getByRole("button", { name: "Up next" }));
-    await screen.findByRole("dialog", { name: "Queue" });
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Move "Track B" up' }));
+    fireEvent.click(screen.getByRole("button", { name: "Chuyển “Track B” lên" }));
 
     await waitFor(() => {
       const { playOrder, queue } = usePlayerStore.getState();
       expect(queue[playOrder[0]]?.id).toBe("b");
       expect(queue[playOrder[1]]?.id).toBe("a");
       expect(queue[playOrder[2]]?.id).toBe("c");
+    });
+    // The panel must repaint, not just the model. Regression: the rendered
+    // order came from a non-reactive facade read, so the list kept showing
+    // the old sequence while the engine played a different one. Track A is
+    // still current, so it stays in the "Đang phát" section and only the
+    // "Tiếp theo" sequence changes.
+    await waitFor(() => {
+      expect(renderedOrder()).toEqual(["Track B", "Track C"]);
+      expect(renderedCurrent()).toBe("Track A");
     });
   });
 
@@ -165,16 +199,20 @@ describe("Queue reorder buttons", () => {
       yt("c", { title: "Track C" }),
     ]);
 
-    fireEvent.click(bar().getByRole("button", { name: "Up next" }));
-    await screen.findByRole("dialog", { name: "Queue" });
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Move "Track B" down' }));
+    fireEvent.click(screen.getByRole("button", { name: "Chuyển “Track B” xuống" }));
 
     await waitFor(() => {
       const { playOrder, queue } = usePlayerStore.getState();
       expect(queue[playOrder[0]]?.id).toBe("a");
       expect(queue[playOrder[1]]?.id).toBe("c");
       expect(queue[playOrder[2]]?.id).toBe("b");
+    });
+    await waitFor(() => {
+      expect(renderedOrder()).toEqual(["Track C", "Track B"]);
+      expect(renderedCurrent()).toBe("Track A");
     });
   });
 });

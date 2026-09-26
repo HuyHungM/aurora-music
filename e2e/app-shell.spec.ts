@@ -27,7 +27,9 @@ test.describe("app shell", () => {
     page,
   }) => {
     await page.goto("/search");
-    await expect(page.getByLabel("Search tracks")).toBeVisible();
+    // Scoped to main: the global header search is a separate landmark;
+    // this asserts the page-level search input is visible.
+    await expect(page.getByRole("main").getByLabel("Search tracks")).toBeVisible();
     await expect(page.getByText("Search the catalog")).toBeVisible();
     // Scoped to main: Next.js renders its own visually-hidden
     // #__next-route-announcer__ (role=alert) at the body level, which

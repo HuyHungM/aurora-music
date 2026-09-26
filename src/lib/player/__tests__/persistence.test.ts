@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "@/lib/domain";
 import {
   PlaybackPersistenceController,
+  isSeekJump,
   type PersistenceControllerDeps,
   type PlaybackStatePayload,
 } from "@/lib/player/persistence";
@@ -44,6 +45,7 @@ interface Harness {
     clearPlaybackStateAction: ReturnType<typeof vi.fn>;
     resolveTrack: ReturnType<typeof vi.fn>;
     applyRestore: ReturnType<typeof vi.fn>;
+    applyQueueRestore: ReturnType<typeof vi.fn>;
     setInitState: ReturnType<typeof vi.fn>;
   };
   store: {
@@ -51,15 +53,29 @@ interface Harness {
     currentTime: number;
     isPlaying: boolean;
     userActionGeneration: number;
+    queue: Track[];
+    playOrder: number[];
+    position: number;
+    shuffle: boolean;
+    repeat: "off" | "all" | "one";
+    volume: number;
+    muted: boolean;
   };
 }
 
 function createHarness(): Harness {
-  const store = {
+  const store: Harness["store"] = {
     currentTrack: null as Track | null,
     currentTime: 0,
     isPlaying: false,
     userActionGeneration: 0,
+    queue: [],
+    playOrder: [],
+    position: -1,
+    shuffle: false,
+    repeat: "off",
+    volume: 1,
+    muted: false,
   };
   const deps = {
     getPlaybackStateAction: vi.fn(async () => ({ ok: true as const, state: null })),
@@ -70,6 +86,29 @@ function createHarness(): Harness {
     applyRestore: vi.fn((track: Track) => {
       store.currentTrack = track;
     }),
+    applyQueueRestore: vi.fn(
+      (restored: {
+        tracks: Track[];
+        playOrder: number[];
+        position: number;
+        shuffle: boolean;
+        repeat: "off" | "all" | "one";
+        mediaPosition: number;
+        currentTrack?: Track | null;
+        volume?: number;
+        muted?: boolean;
+      }) => {
+        store.queue = restored.tracks;
+        store.playOrder = restored.playOrder;
+        store.position = restored.position;
+        store.shuffle = restored.shuffle;
+        store.repeat = restored.repeat;
+        store.currentTrack = restored.currentTrack ?? null;
+        store.currentTime = restored.mediaPosition;
+        if (restored.volume !== undefined) store.volume = restored.volume;
+        if (restored.muted !== undefined) store.muted = restored.muted;
+      },
+    ),
     setInitState: vi.fn(),
   };
   const controller = new PlaybackPersistenceController(deps);
@@ -204,6 +243,228 @@ describe("PlaybackPersistenceController", () => {
       await h.controller.initialize("user-1");
 
       expect(h.deps.applyRestore).toHaveBeenCalledWith(restored, 0);
+    });
+  });
+
+  describe("queue snapshot restore (Phase 40)", () => {
+    function queuePayload() {
+      return makePayload({
+        provider: "mock",
+        providerTrackId: "t-b",
+        position: 12,
+        revision: 2,
+        queueSnapshot: {
+          version: 2,
+          entries: [
+            {
+              provider: "mock",
+              providerTrackId: "t-a",
+              title: "Track A",
+              artistId: "a1",
+              artistName: "Artist",
+            },
+            {
+              provider: "mock",
+              providerTrackId: "t-b",
+              title: "Track B",
+              artistId: "a1",
+              artistName: "Artist",
+            },
+            {
+              provider: "mock",
+              providerTrackId: "t-c",
+              title: "Track C",
+              artistId: "a1",
+              artistName: "Artist",
+            },
+          ],
+          playOrder: [1, 2, 0],
+          position: 1,
+          mediaPosition: 34,
+          shuffle: true,
+          repeat: "all" as const,
+          volume: 0.75,
+          muted: false,
+          savedAt: 1_700_000_000_000,
+        },
+      });
+    }
+
+    it("restores the full queue, cursor, shuffle, repeat, and position", async () => {
+      const h = reg(createHarness());
+      const resolved = makeTrack("t-c", { title: "Track C fresh" });
+      h.deps.getPlaybackStateAction.mockResolvedValue({
+        ok: true,
+        state: queuePayload(),
+      });
+      h.deps.resolveTrack.mockResolvedValue(resolved);
+
+      await h.controller.initialize("user-1");
+
+      // Only the current entry is re-resolved; the rest stay identity-only.
+      expect(h.deps.resolveTrack).toHaveBeenCalledTimes(1);
+      expect(h.deps.resolveTrack).toHaveBeenCalledWith("mock", "t-c");
+      expect(h.deps.applyQueueRestore).toHaveBeenCalledTimes(1);
+      const restored = h.deps.applyQueueRestore.mock.calls[0]?.[0];
+      expect(restored?.tracks.map((t: Track) => t.providerTrackId)).toEqual([
+        "t-a",
+        "t-b",
+        "t-c",
+      ]);
+      expect(restored?.playOrder).toEqual([1, 2, 0]);
+      expect(restored?.position).toBe(1);
+      expect(restored?.shuffle).toBe(true);
+      expect(restored?.repeat).toBe("all");
+      expect(restored?.mediaPosition).toBe(34);
+      expect(restored?.currentTrack).toBe(resolved);
+      // Legacy single-track restore must not fire alongside queue restore.
+      expect(h.deps.applyRestore).not.toHaveBeenCalled();
+      expect(h.deps.setInitState).toHaveBeenCalledWith("ready");
+    });
+
+    it("keeps the queue when the current entry no longer resolves", async () => {
+      const h = reg(createHarness());
+      h.deps.getPlaybackStateAction.mockResolvedValue({
+        ok: true,
+        state: queuePayload(),
+      });
+      h.deps.resolveTrack.mockResolvedValue(null);
+
+      await h.controller.initialize("user-1");
+
+      expect(h.deps.clearPlaybackStateAction).not.toHaveBeenCalled();
+      const restored = h.deps.applyQueueRestore.mock.calls[0]?.[0];
+      expect(restored?.tracks).toHaveLength(3);
+      // Unresolvable current: snapshot entry kept, position reset.
+      expect(restored?.currentTrack?.providerTrackId).toBe("t-c");
+      expect(restored?.mediaPosition).toBe(0);
+    });
+
+    it("restores an empty queue without resolving or clearing", async () => {
+      const h = reg(createHarness());
+      h.deps.getPlaybackStateAction.mockResolvedValue({
+        ok: true,
+        state: makePayload({
+          queueSnapshot: {
+            version: 2,
+            entries: [],
+            playOrder: [],
+            position: -1,
+            mediaPosition: 0,
+            shuffle: false,
+            repeat: "off" as const,
+            volume: 1,
+            muted: false,
+            savedAt: 1_700_000_000_000,
+          },
+        }),
+      });
+
+      await h.controller.initialize("user-1");
+
+      expect(h.deps.resolveTrack).not.toHaveBeenCalled();
+      expect(h.deps.clearPlaybackStateAction).not.toHaveBeenCalled();
+      const restored = h.deps.applyQueueRestore.mock.calls[0]?.[0];
+      expect(restored?.tracks).toEqual([]);
+      expect(restored?.position).toBe(-1);
+    });
+
+    it("falls back to the legacy path on an invalid snapshot version", async () => {
+      const h = reg(createHarness());
+      const restored = makeTrack("t-restore");
+      h.deps.getPlaybackStateAction.mockResolvedValue({
+        ok: true,
+        state: makePayload({ queueSnapshot: { version: 999 } }),
+      });
+      h.deps.resolveTrack.mockResolvedValue(restored);
+
+      await h.controller.initialize("user-1");
+
+      expect(h.deps.applyQueueRestore).not.toHaveBeenCalled();
+      expect(h.deps.applyRestore).toHaveBeenCalledWith(restored, 83);
+    });
+  });
+
+  describe("queue snapshot saving (Phase 40)", () => {
+    async function readyHarness() {
+      const h = reg(createHarness());
+      await h.controller.initialize("user-1");
+      vi.clearAllMocks();
+      return h;
+    }
+
+    function fillStore(h: { store: Harness["store"] }) {
+      h.store.queue = [makeTrack("a"), makeTrack("b")];
+      h.store.playOrder = [0, 1];
+      h.store.position = 0;
+      h.store.currentTrack = h.store.queue[0];
+      h.store.currentTime = 17;
+    }
+
+    it("saves track checkpoints with the queue snapshot attached", async () => {
+      const h = await readyHarness();
+      fillStore(h);
+      h.controller.notifyTrackChanged(makeTrack("old"), 10);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+      const input = h.deps.savePlaybackStateAction.mock.calls[0]?.[0];
+      expect(input?.provider).toBe("mock");
+      expect(input?.queueSnapshot?.entries).toHaveLength(2);
+      expect(input?.queueSnapshot?.playOrder).toEqual([0, 1]);
+    });
+
+    it("coalesces rapid queue mutations into one debounced write", async () => {
+      const h = await readyHarness();
+      fillStore(h);
+      h.controller.notifyQueueChanged();
+      h.controller.notifyQueueChanged();
+      h.controller.notifyQueueChanged();
+      expect(h.deps.savePlaybackStateAction).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+      const input = h.deps.savePlaybackStateAction.mock.calls[0]?.[0];
+      expect(
+        input?.queueSnapshot?.entries.map(
+          (e: { providerTrackId: string }) => e.providerTrackId,
+        ),
+      ).toEqual([
+        "a",
+        "b",
+      ]);
+    });
+
+    it("skips writes when the snapshot is unchanged", async () => {
+      const h = await readyHarness();
+      fillStore(h);
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("deletes the row when the queue empties (clear never returns)", async () => {
+      const h = await readyHarness();
+      fillStore(h);
+      h.store.queue = [];
+      h.store.playOrder = [];
+      h.store.position = -1;
+      h.store.currentTrack = null;
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.clearPlaybackStateAction).toHaveBeenCalledTimes(1);
+      expect(h.deps.savePlaybackStateAction).not.toHaveBeenCalled();
+    });
+
+    it("does not save queue snapshots when anonymous", async () => {
+      const h = reg(createHarness());
+      await h.controller.initialize(null);
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(h.deps.savePlaybackStateAction).not.toHaveBeenCalled();
+      expect(h.deps.clearPlaybackStateAction).not.toHaveBeenCalled();
     });
   });
 
@@ -430,6 +691,23 @@ describe("PlaybackPersistenceController", () => {
     });
   });
 
+  describe("isSeekJump", () => {
+    it("detects large discontinuities as seeks", () => {
+      expect(isSeekJump(10, 92)).toBe(true);
+      expect(isSeekJump(92, 10)).toBe(true);
+    });
+
+    it("ignores natural timeupdate progress", () => {
+      expect(isSeekJump(10, 10.2)).toBe(false);
+      expect(isSeekJump(10, 11.4)).toBe(false);
+    });
+
+    it("rejects non-finite inputs", () => {
+      expect(isSeekJump(Number.NaN, 10)).toBe(false);
+      expect(isSeekJump(10, Number.POSITIVE_INFINITY)).toBe(false);
+    });
+  });
+
   describe("revision handling", () => {
     it("increments local revision after a successful save", async () => {
       const h = reg(createHarness());
@@ -485,6 +763,361 @@ describe("PlaybackPersistenceController", () => {
           h.deps.savePlaybackStateAction.mock.calls.length - 1
         ][0];
       expect(last.revision).toBe(9);
+    });
+  });
+
+  describe("Phase 43 session persistence", () => {
+    async function readyHarness() {
+      const h = reg(createHarness());
+      await h.controller.initialize("user-1");
+      vi.clearAllMocks();
+      return h;
+    }
+
+    function fillQueue(h: ReturnType<typeof createHarness>) {
+      h.store.queue = [makeTrack("a"), makeTrack("b")];
+      h.store.playOrder = [0, 1];
+      h.store.position = 0;
+      h.store.currentTrack = h.store.queue[0];
+      h.store.currentTime = 20;
+    }
+
+    it("restores persisted volume and mute into live player state", async () => {
+      const h = reg(createHarness());
+      h.deps.getPlaybackStateAction.mockResolvedValue({
+        ok: true,
+        state: makePayload({
+          queueSnapshot: {
+            version: 2,
+            entries: [
+              {
+                provider: "mock",
+                providerTrackId: "t-a",
+                title: "Track A",
+                artistId: "a1",
+                artistName: "Artist",
+              },
+            ],
+            playOrder: [0],
+            position: 0,
+            mediaPosition: 20,
+            shuffle: false,
+            repeat: "off" as const,
+            volume: 0.75,
+            muted: true,
+            savedAt: 1_700_000_000_000,
+          },
+        }),
+      });
+      h.deps.resolveTrack.mockResolvedValue(makeTrack("t-a"));
+
+      await h.controller.initialize("user-1");
+
+      const restored = h.deps.applyQueueRestore.mock.calls[0]?.[0];
+      expect(restored?.volume).toBe(0.75);
+      expect(restored?.muted).toBe(true);
+      expect(h.store.volume).toBe(0.75);
+      expect(h.store.muted).toBe(true);
+    });
+
+    it("persists a volume or mute change through the existing debounced write", async () => {
+      const h = await readyHarness();
+      fillQueue(h);
+      h.store.volume = 0.25;
+      h.controller.notifyPreferencesChanged();
+      h.controller.notifyPreferencesChanged();
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+      const written = h.deps.savePlaybackStateAction.mock.calls[0]?.[0];
+      expect(written?.queueSnapshot?.volume).toBe(0.25);
+    });
+
+    it("migrates a persisted v1 session and keeps the queue operable", async () => {
+      const h = reg(createHarness());
+      h.deps.getPlaybackStateAction.mockResolvedValue({
+        ok: true,
+        state: makePayload({
+          queueSnapshot: {
+            version: 1,
+            entries: [
+              {
+                provider: "mock",
+                providerTrackId: "t-a",
+                title: "Track A",
+                artistId: "a1",
+                artistName: "Artist",
+              },
+              {
+                provider: "mock",
+                providerTrackId: "t-b",
+                title: "Track B",
+                artistId: "a1",
+                artistName: "Artist",
+              },
+            ],
+            playOrder: [1, 0],
+            position: 1,
+            mediaPosition: 55,
+            shuffle: true,
+            repeat: "all",
+          },
+        }),
+      });
+      h.deps.resolveTrack.mockResolvedValue(makeTrack("t-b"));
+
+      await h.controller.initialize("user-1");
+
+      // Queue, order, cursor, and position all survive the upgrade.
+      const restored = h.deps.applyQueueRestore.mock.calls[0]?.[0];
+      expect(restored?.tracks.map((t: Track) => t.providerTrackId)).toEqual([
+        "t-a",
+        "t-b",
+      ]);
+      expect(restored?.playOrder).toEqual([1, 0]);
+      expect(restored?.position).toBe(1);
+      expect(restored?.mediaPosition).toBe(55);
+      expect(restored?.shuffle).toBe(true);
+      expect(restored?.repeat).toBe("all");
+      // The legacy single-track path must not also fire.
+      expect(h.deps.applyRestore).not.toHaveBeenCalled();
+    });
+
+    it("does not rewrite an unchanged session just because time passed", async () => {
+      const h = await readyHarness();
+      fillQueue(h);
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+
+      // Same session, later clock: a page-hide flush must stay a no-op.
+      await vi.advanceTimersByTimeAsync(5_000);
+      h.controller.flushQueueSnapshot();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-arms a page-hide flush that arrives while a write is in flight", async () => {
+      const h = await readyHarness();
+      fillQueue(h);
+      const gate = deferred<{ ok: boolean }>();
+      h.deps.savePlaybackStateAction.mockReturnValue(gate.promise);
+
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+
+      // The user mutates the queue, then closes the tab mid-write. The
+      // flush must not be dropped: it has to re-run once the write lands.
+      h.store.currentTime = 90;
+      h.controller.flushQueueSnapshot();
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+
+      gate.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(2);
+      const latest = h.deps.savePlaybackStateAction.mock.calls[1]?.[0];
+      expect(latest?.queueSnapshot?.mediaPosition).toBe(90);
+    });
+
+    it("re-arms a debounced queue change that lands while a write is in flight", async () => {
+      // Regression: a queue mutation whose debounced write starts while a
+      // previous write is still in flight used to be dropped outright. The
+      // debounce had already disarmed its timer, so nothing re-armed it and
+      // the user's newest queue was silently never persisted — recoverable
+      // only if the user later hid or closed the page. A server round trip
+      // outlasting the 500ms debounce is ordinary on a slow connection, and
+      // queue changes arrive continuously while a track plays.
+      const h = await readyHarness();
+      fillQueue(h);
+      const gate = deferred<{ ok: boolean }>();
+      h.deps.savePlaybackStateAction.mockReturnValue(gate.promise);
+
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+
+      // The user reorders while write #1 is still open. The debounce fires
+      // and the second write cannot start, so it must be queued, not lost.
+      h.store.currentTime = 90;
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+
+      gate.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(2);
+      // The retry must rebuild from current state, not replay write #1.
+      const latest = h.deps.savePlaybackStateAction.mock.calls[1]?.[0];
+      expect(latest?.queueSnapshot?.mediaPosition).toBe(90);
+    });
+
+    it("persists the resumed position of a track the user navigated to", async () => {
+      const h = await readyHarness();
+      fillQueue(h);
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+
+      // next() moved the cursor to Track B at 00:00.
+      h.store.position = 1;
+      h.store.currentTrack = h.store.queue[1];
+      h.store.currentTime = 0;
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+
+      const latest = h.deps.savePlaybackStateAction.mock.calls.at(-1)?.[0];
+      expect(latest?.queueSnapshot?.position).toBe(1);
+      expect(latest?.queueSnapshot?.mediaPosition).toBe(0);
+      expect(latest?.providerTrackId).toBe("b");
+    });
+  });
+
+  /**
+   * J14 — restored position, verified deterministically from the
+   * persisted snapshot rather than from a playing media element.
+   *
+   * The round trip is the real production path end to end: live store →
+   * `serializeQueueSnapshot` → the JSON actually written to the JSONB
+   * column → `validateQueueSnapshot` on read → `initialize()` restore.
+   * Nothing here depends on audio progression, so the restored position
+   * is a pure function of what was persisted.
+   */
+  describe("J14 restored position (snapshot round trip)", () => {
+    /**
+     * Acceptance tolerance for a restored position. The contract is
+     * "resume at the persisted position", not "resume at an identical
+     * millisecond": restore normalizes the value (floor, non-negative
+     * clamp, clamp to a known duration) and a real media element may
+     * advance before the user hears anything. The assertion is therefore
+     * a bounded neighbourhood — persisted 90s accepts 87s–93s — so it
+     * proves meaningful proximity instead of pinning a rounding
+     * artifact. Live progression of a real stream stays the
+     * responsibility of the opt-in live playback suite.
+     */
+    const RESTORE_POSITION_TOLERANCE_S = 3;
+
+    /** Where the user stopped, and the position restore must honour. */
+    const PERSISTED_POSITION_S = 90;
+
+    it("restores the persisted position, cursor occurrence, and queue order", async () => {
+      // --- Persist: a shuffled session with a repeated track occurrence.
+      const writer = reg(createHarness());
+      await writer.controller.initialize("user-1");
+      vi.clearAllMocks();
+
+      // Track "a" is queued twice on purpose: the snapshot must keep both
+      // slots, and the cursor must land on the occurrence the user was
+      // actually listening to rather than collapsing onto the first one.
+      writer.store.queue = [makeTrack("a"), makeTrack("b"), makeTrack("a")];
+      writer.store.playOrder = [1, 2, 0];
+      writer.store.position = 1;
+      writer.store.currentTrack = writer.store.queue[2] as Track;
+      writer.store.currentTime = PERSISTED_POSITION_S;
+      writer.store.shuffle = true;
+      writer.store.repeat = "all";
+      writer.store.volume = 0.5;
+      writer.store.muted = true;
+
+      writer.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(writer.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+      const written = writer.deps.savePlaybackStateAction.mock.calls[0]?.[0];
+      const persisted = written?.queueSnapshot;
+      expect(persisted?.mediaPosition).toBe(PERSISTED_POSITION_S);
+
+      // No temporary playback URL ever reaches the column: the live
+      // tracks carried a streamUrl, and the persisted JSON must not.
+      const persistedRaw = JSON.stringify(persisted);
+      for (const forbidden of [
+        "streamUrl",
+        "previewUrl",
+        "mimeType",
+        "expiresAt",
+        "bitrate",
+        "googlevideo",
+        "https://example.com/a.mp3",
+      ]) {
+        expect(persistedRaw).not.toContain(forbidden);
+      }
+
+      // --- Restore: read the row back exactly as the server returns it
+      // (JSONB round trip) into a fresh controller, so nothing can be
+      // satisfied by an in-memory carry-over.
+      const reader = reg(createHarness());
+      reader.deps.getPlaybackStateAction.mockResolvedValue({
+        ok: true,
+        state: makePayload({
+          provider: "mock",
+          providerTrackId: "a",
+          position: PERSISTED_POSITION_S,
+          revision: 1,
+          queueSnapshot: JSON.parse(persistedRaw) as unknown,
+        }),
+      });
+      reader.deps.resolveTrack.mockImplementation(
+        async (provider: string, providerTrackId: string) =>
+          provider === "mock" && providerTrackId === "a"
+            ? makeTrack("a", { title: "Track a (provider fresh)" })
+            : null,
+      );
+
+      await reader.controller.initialize("user-1");
+
+      // The restore path really ran: the versioned snapshot was applied,
+      // and neither the legacy single-track path nor the discard path
+      // was taken as a fallback.
+      expect(reader.deps.applyQueueRestore).toHaveBeenCalledTimes(1);
+      expect(reader.deps.applyRestore).not.toHaveBeenCalled();
+      expect(reader.deps.clearPlaybackStateAction).not.toHaveBeenCalled();
+      expect(reader.deps.setInitState).toHaveBeenCalledWith("ready");
+
+      // Only the cursor entry is re-resolved; queued entries stay
+      // identity-only until played.
+      expect(reader.deps.resolveTrack).toHaveBeenCalledTimes(1);
+      expect(reader.deps.resolveTrack).toHaveBeenCalledWith("mock", "a");
+
+      const restored = reader.deps.applyQueueRestore.mock.calls[0]?.[0];
+      expect(restored).toBeDefined();
+
+      // Queue contents and logical order survive intact, both
+      // occurrences included (no dedup on the way in or out).
+      expect(restored?.tracks.map((t: Track) => t.providerTrackId)).toEqual([
+        "a",
+        "b",
+        "a",
+      ]);
+      expect(restored?.playOrder).toEqual([1, 2, 0]);
+      expect(restored?.position).toBe(1);
+
+      // The cursor points at occurrence slot 2, not the first "a" at
+      // slot 0 — this is what makes the restore positional rather than
+      // merely "the right track name".
+      expect(restored?.playOrder[restored?.position as number]).toBe(2);
+
+      // The current track is provider-fresh, while the queued copy of
+      // the same track still carries the persisted display metadata.
+      expect(restored?.currentTrack?.title).toBe("Track a (provider fresh)");
+      expect(
+        restored?.tracks[2]?.title,
+        "queued occurrences stay identity-only",
+      ).toBe("Track a");
+
+      // The restored position lands meaningfully near the persisted
+      // value — within tolerance, not millisecond-exact.
+      const persistedPosition = (
+        JSON.parse(persistedRaw) as { mediaPosition: number }
+      ).mediaPosition;
+      expect(
+        Math.abs((restored?.mediaPosition as number) - persistedPosition),
+      ).toBeLessThanOrEqual(RESTORE_POSITION_TOLERANCE_S);
+      // And the tolerance is not wide enough to hide a restore to zero.
+      expect(restored?.mediaPosition).toBeGreaterThan(
+        persistedPosition - RESTORE_POSITION_TOLERANCE_S - 1,
+      );
+      expect(reader.store.currentTime).toBe(restored?.mediaPosition);
     });
   });
 });

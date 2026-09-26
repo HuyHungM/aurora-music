@@ -4,10 +4,17 @@ import { fetchArtistDetail, fetchArtistTracks } from "@/lib/providers/server";
 import { isFollowing } from "@/lib/dal/follow";
 import { getSessionUserId } from "@/lib/dal/session";
 import { TrackList } from "@/components/tracks/track-list";
+import { RecommendationSection } from "@/components/recommendations/recommendation-section";
+import { getRequestLocale } from "@/lib/i18n/server";
+import { getT } from "@/lib/i18n/translate";
 import { ArtistPlayButton } from "@/components/artist/artist-play-button";
 import { FollowButton } from "@/components/artist/follow-button";
+import { StartArtistRadioButton } from "@/components/radio/radio-controls";
+import { EntityHeader } from "@/components/ui/entity-header";
+import { SectionHeader } from "@/components/home/section-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { MusicNoteIcon, AlertCircleIcon } from "@/components/ui/icons";
+import { ButtonLink } from "@/components/ui/button";
 
 export const metadata: Metadata = { title: "Artist" };
 
@@ -17,6 +24,8 @@ export default async function ArtistDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const locale = await getRequestLocale();
+  const t = getT(locale);
   const decodedId = decodeURIComponent(id);
 
   const artistResult = await fetchArtistDetail(decodedId);
@@ -28,92 +37,89 @@ export default async function ArtistDetailPage({
   if (artistResult.kind === "success") {
     const { data: artist } = artistResult;
     const tracksResult = await fetchArtistTracks(decodedId);
+    const artistName = artist.name;
 
     let following = false;
-    if (artist.providerArtistId) {
-      const userId = await getSessionUserId();
-      if (userId) {
-        following = await isFollowing(userId, {
-          provider: artist.provider,
-          providerArtistId: artist.providerArtistId,
-        });
-      }
+    const userId = await getSessionUserId();
+    if (artist.providerArtistId && userId) {
+      following = await isFollowing(userId, {
+        provider: artist.provider,
+        providerArtistId: artist.providerArtistId,
+      });
     }
 
     return (
       <div className="flex flex-col gap-8">
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-center">
-          {artist.image ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={artist.image}
-              alt={artist.name}
-              className="h-48 w-full shrink-0 rounded-xl object-cover sm:w-48"
-            />
-          ) : (
-            <div className="grid h-48 w-full shrink-0 place-items-center rounded-xl bg-gradient-aurora/25 text-text-secondary sm:h-48 sm:w-48">
-              <MusicNoteIcon size={64} />
-            </div>
-          )}
-          <div className="flex flex-1 min-w-0 flex-col gap-3">
-            <span className="text-xs font-semibold uppercase tracking-wider text-accent">
-              Artist
-            </span>
-            <h1 className="truncate text-3xl font-bold tracking-tight text-text-primary sm:text-4xl">
-              {artist.name}
-            </h1>
-            {artist.genres && artist.genres.length > 0 ? (
-              <p className="flex flex-wrap gap-1 text-sm text-text-muted">
-                {artist.genres.slice(0, 5).map((genre, i) => (
-                  <span key={genre}>
-                    {i > 0 && " \u00B7 "}
-                    <span className="truncate">{genre}</span>
-                  </span>
-                ))}
-                {artist.genres.length > 5 && (
-                  <span className="text-text-muted">+{artist.genres.length - 5} more</span>
-                )}
-              </p>
-            ) : null}
-            {artist.bio ? (
-              <p className="max-w-lg text-sm leading-relaxed text-text-muted">
-                {artist.bio}
-              </p>
-            ) : null}
-            <div className="flex flex-wrap items-center gap-3 mt-2">
+        <EntityHeader
+          eyebrow={t("artist.eyebrow")}
+          title={artist.name}
+          artwork={artist.image}
+          artworkAlt={artist.name}
+          meta={
+            artist.genres && artist.genres.length > 0
+              ? artist.genres.slice(0, 3).join(" · ")
+              : undefined
+          }
+          description={artist.bio}
+          actions={
+            <>
               {tracksResult.kind === "success" && tracksResult.data.length > 0 ? (
                 <ArtistPlayButton tracks={tracksResult.data} />
               ) : null}
-              <FollowButton artist={artist} initialFollowing={following} />
-            </div>
-          </div>
-        </div>
+              <FollowButton
+                artist={artist}
+                initialFollowing={following}
+                isAuthenticated={userId !== null}
+              />
+              <StartArtistRadioButton artist={artist} />
+            </>
+          }
+        />
 
         {tracksResult.kind === "success" && tracksResult.data.length > 0 ? (
-          <section aria-label="Artist tracks">
-            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-text-muted">
-              Tracks
-            </h2>
-            <TrackList tracks={tracksResult.data} showMenu={true} />
+          <section aria-label={t("artist.topTracks")}>
+            <SectionHeader title={t("artist.topTracks")} aside={t("artist.topTracksAside", { name: artist.name })} />
+            <TrackList tracks={tracksResult.data.slice(0, 10)} showMenu={true} numbered />
           </section>
         ) : null}
 
         {tracksResult.kind === "success" && tracksResult.data.length === 0 ? (
           <EmptyState
-            icon={<MusicNoteIcon size={28} />}
-            title="No tracks available"
-            description="No tracks could be loaded for this artist."
+            icon={<MusicNoteIcon size={24} />}
+            title={t("artist.noTracksTitle")}
+            description={t("artist.noTracksDescription")}
+            action={<ButtonLink href="/search" variant="secondary" size="sm">{t("library.findArtists")}</ButtonLink>}
           />
         ) : null}
 
         {tracksResult.kind === "failed" ? (
-          <div className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface-2/60 px-4 py-3 text-sm text-text-muted">
+          <div className="flex items-center gap-2 rounded-xl border border-border-subtle bg-surface-1 px-4 py-3 text-sm text-text-muted">
             <AlertCircleIcon size={16} className="shrink-0" />
-            <span>Tracks unavailable for this artist.</span>
+            <span>{t("artist.tracksUnavailable")}</span>
           </div>
         ) : null}
 
         {tracksResult.kind === "unsupported" ? null : null}
+
+        {/* Phase 47: seeded from this artist's own top track, so the section
+            is "more like what this artist sounds like" rather than a
+            generic list. Tracks already on the page are excluded, and an
+            empty result renders nothing. */}
+        {tracksResult.kind === "success" && tracksResult.data.length > 0 ? (
+          <RecommendationSection
+            locale={locale}
+            titleKey="artist.moreLikeThis"
+            seed={{
+              provider: tracksResult.data[0]!.provider,
+              providerTrackId: tracksResult.data[0]!.providerTrackId ?? "",
+              artistName,
+            }}
+            excludeKeys={tracksResult.data.map(
+              (item) => `${item.provider}:${item.providerTrackId ?? item.id}`,
+            )}
+            limit={8}
+          />
+        ) : null}
       </div>
     );
   }

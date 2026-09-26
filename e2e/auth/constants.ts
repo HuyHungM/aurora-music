@@ -9,6 +9,24 @@
 /** Explicit test-only flag enabling the fixture library route. */
 export const E2E_AUTH_FLAG = "AURORA_E2E_AUTH";
 
+/**
+ * Account language preference seeded for the synthetic E2E users.
+ *
+ * The application default is Vietnamese, but the authenticated specs
+ * assert real user-visible accessible names that are authored in English
+ * ("Play …", "Actions for …", "Player bar"). Locale precedence is
+ * account preference → cookie → Vietnamese, so an explicit account
+ * preference is the one deterministic way to pin the rendered language
+ * without a cookie in the generated storage state.
+ *
+ * This is also the mechanism Phase 42 actually ships, so seeding it
+ * exercises the authenticated-preference path rather than a test-only
+ * backdoor. The vi/en locale logic itself is covered by unit tests on
+ * `resolveLocale` / `isLocale` and key parity; nothing here changes
+ * product behavior.
+ */
+export const E2E_LOCALE = "en";
+
 /** Directory (repo-root-relative) for generated browser auth state. */
 export const AUTH_STATE_DIR = "e2e/.auth";
 
@@ -45,6 +63,39 @@ export const FIXTURE_TRACKS: FixtureTrack[] = [
     provider: "youtube",
     providerTrackId: "e2e-track-2",
     title: "Aurora E2E Track Two",
+  },
+];
+
+/**
+ * Two provider renderings of ONE recording, for canonical-duplicate journeys.
+ *
+ * Same title, same artist, no duration on either: that is a plain cross-provider
+ * pair and lands in the matcher's `strong` band, which is the band a
+ * deduplicating caller is allowed to act on unattended. Deliberately NOT added
+ * to `FIXTURE_TRACKS`, for two reasons:
+ *
+ * 1. Their `providerTrackId`s sort after `e2e-track-*`, so the fixture library
+ *    page (`orderBy providerTrackId`) appends them and no existing spec's
+ *    positional row selector shifts.
+ * 2. They share a visible title on purpose. A spec asserting "one track" must
+ *    therefore scope by row rather than by text, and the ambiguity is the
+ *    point: two rows the user can see must read as one song everywhere the
+ *    product holds user collections.
+ *
+ * Neither is playable: playback needs a live provider, and these ids are
+ * synthetic. That is fine — every journey here is a queue/membership/read
+ * journey, and none of them requires audio.
+ */
+export const FIXTURE_CROSS_PROVIDER_TRACKS: FixtureTrack[] = [
+  {
+    provider: "spotify",
+    providerTrackId: "e2e-xprov-spotify",
+    title: "Aurora E2E Cross Provider",
+  },
+  {
+    provider: "deezer",
+    providerTrackId: "e2e-xprov-deezer",
+    title: "Aurora E2E Cross Provider",
   },
 ];
 

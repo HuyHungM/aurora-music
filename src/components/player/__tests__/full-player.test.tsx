@@ -69,7 +69,7 @@ describe("FullPlayer", () => {
 
   it("does not render when no track is loaded", () => {
     render(<FullPlayer />);
-    expect(screen.queryByRole("dialog", { name: "Now playing" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Đang phát" })).toBeNull();
   });
 
   it("does not render when isFullPlayerOpen is false", () => {
@@ -78,7 +78,7 @@ describe("FullPlayer", () => {
       isFullPlayerOpen: false,
     });
     render(<FullPlayer />);
-    expect(screen.queryByRole("dialog", { name: "Now playing" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Đang phát" })).toBeNull();
   });
 
   it("renders when open with a track", () => {
@@ -87,7 +87,7 @@ describe("FullPlayer", () => {
       isFullPlayerOpen: true,
     });
     render(<FullPlayer />);
-    expect(screen.getByRole("dialog", { name: "Now playing" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Đang phát" })).toBeTruthy();
     expect(screen.getByText("Test Track")).toBeTruthy();
     expect(screen.getByText("Test Artist")).toBeTruthy();
   });
@@ -98,7 +98,7 @@ describe("FullPlayer", () => {
       isFullPlayerOpen: true,
     });
     render(<FullPlayer />);
-    fireEvent.click(screen.getByRole("button", { name: "Close player" }));
+    fireEvent.click(screen.getByRole("button", { name: "Đóng trình phát" }));
     await waitFor(() => expect(usePlayerStore.getState().isFullPlayerOpen).toBe(false));
   });
 
@@ -108,9 +108,9 @@ describe("FullPlayer", () => {
       isFullPlayerOpen: true,
     });
     render(<FullPlayer />);
-    const playBtn = screen.getByRole("button", { name: "Play" });
+    const playBtn = screen.getByRole("button", { name: "Phát" });
     fireEvent.click(playBtn);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Tạm dừng" })).toBeTruthy());
   });
 
   it("renders seek, volume, shuffle, repeat, and queue controls", () => {
@@ -119,11 +119,11 @@ describe("FullPlayer", () => {
       isFullPlayerOpen: true,
     });
     render(<FullPlayer />);
-    expect(screen.getByRole("slider", { name: "Seek" })).toBeTruthy();
-    expect(screen.getByRole("slider", { name: "Volume" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /shuffle/i })).toBeTruthy();
+    expect(screen.getByRole("slider", { name: "Tua" })).toBeTruthy();
+    expect(screen.getByRole("slider", { name: "Âm lượng" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /phát ngẫu nhiên/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /repeat/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Up next" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Tiếp theo" })).toBeTruthy();
   });
 
   it("renders prev/next buttons", () => {
@@ -132,8 +132,8 @@ describe("FullPlayer", () => {
       isFullPlayerOpen: true,
     });
     render(<FullPlayer />);
-    expect(screen.getByRole("button", { name: "Previous track" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Next track" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Bài trước" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Bài tiếp theo" })).toBeTruthy();
   });
 
   it("moves focus into the dialog on open", () => {
@@ -142,7 +142,7 @@ describe("FullPlayer", () => {
       isFullPlayerOpen: true,
     });
     render(<FullPlayer />);
-    const dialog = screen.getByRole("dialog", { name: "Now playing" });
+    const dialog = screen.getByRole("dialog", { name: "Đang phát" });
     expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
@@ -157,13 +157,13 @@ describe("FullPlayer", () => {
         <FullPlayer />
       </>,
     );
-    expect(screen.getByRole("dialog", { name: "Now playing" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Đang phát" })).toBeTruthy();
     fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Now playing" })).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Đang phát" })).toBeNull(),
     );
     expect(document.activeElement?.getAttribute("aria-label")).toBe(
-      "Expand player",
+      "Mở rộng trình phát",
     );
   });
 });

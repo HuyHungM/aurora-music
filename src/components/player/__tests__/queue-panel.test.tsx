@@ -58,8 +58,8 @@ function resetStore() {
   });
 }
 
-const bar = () => within(screen.getByRole("region", { name: "Player bar" }));
-const queueDialog = () => screen.getByRole("dialog", { name: "Queue" });
+const bar = () => within(screen.getByRole("region", { name: "Thanh phát nhạc" }));
+const queueDialog = () => screen.getByRole("dialog", { name: "Hàng chờ" });
 const rows = () => within(queueDialog()).getAllByRole("listitem");
 
 describe("QueuePanel", () => {
@@ -86,16 +86,16 @@ describe("QueuePanel", () => {
       yt("c", { title: "Track C", artistName: "Three" }),
     ]);
 
-    fireEvent.click(bar().getByRole("button", { name: "Up next" }));
-    const dialog = await screen.findByRole("dialog", { name: "Queue" });
-    expect(within(dialog).getByText("3 tracks")).toBeTruthy();
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    const dialog = await screen.findByRole("dialog", { name: "Hàng chờ" });
+    expect(within(dialog).getByText("3 bài hát")).toBeTruthy();
     expect(within(dialog).getByText("Track A")).toBeTruthy();
     expect(within(dialog).getByText("Track B")).toBeTruthy();
     expect(within(dialog).getByText("Track C")).toBeTruthy();
-    expect(within(dialog).getByText("Now playing")).toBeTruthy();
+    expect(within(dialog).getAllByText("Đang phát")).toHaveLength(2);
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close queue" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Queue" })).toBeNull());
+    fireEvent.click(within(dialog).getByRole("button", { name: "Đóng hàng chờ" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Hàng chờ" })).toBeNull());
     expect(usePlayerStore.getState().isQueueOpen).toBe(false);
   });
 
@@ -110,11 +110,11 @@ describe("QueuePanel", () => {
       yt("c", { title: "Track C", artistName: "Three" }),
     ]);
 
-    fireEvent.click(bar().getByRole("button", { name: "Up next" }));
-    await screen.findByRole("dialog", { name: "Queue" });
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
 
     expect(usePlayerStore.getState().currentTrack?.id).toBe("a");
-    fireEvent.click(within(queueDialog()).getByRole("button", { name: "Play Track C" }));
+    fireEvent.click(within(queueDialog()).getByRole("button", { name: "Phát Track C" }));
     await waitFor(() => expect(usePlayerStore.getState().currentTrack?.id).toBe("c"));
     expect(usePlayerStore.getState().position).toBe(2);
     expect(rows()).toHaveLength(3);
@@ -125,9 +125,9 @@ describe("QueuePanel", () => {
     await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
 
     usePlayerStore.getState().playTrack(yt("m", { title: "Track M", artistName: "Me" }));
-    const mini = within(await screen.findByRole("region", { name: "Mini player" }));
-    fireEvent.click(mini.getByRole("button", { name: "Up next" }));
-    await screen.findByRole("dialog", { name: "Queue" });
+    const mini = within(await screen.findByRole("region", { name: "Trình phát thu gọn" }));
+    fireEvent.click(mini.getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
     expect(within(queueDialog()).getByText("Track M")).toBeTruthy();
   });
 
@@ -139,16 +139,16 @@ describe("QueuePanel", () => {
       yt("a", { title: "Track A", artistName: "One" }),
     ]);
 
-    const trigger = bar().getByRole("button", { name: "Up next" });
+    const trigger = bar().getByRole("button", { name: "Tiếp theo" });
     fireEvent.click(trigger);
-    const dialog = await screen.findByRole("dialog", { name: "Queue" });
+    const dialog = await screen.findByRole("dialog", { name: "Hàng chờ" });
     expect(dialog.contains(document.activeElement)).toBe(true);
 
     fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Queue" })).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Hàng chờ" })).toBeNull(),
     );
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("Up next");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Tiếp theo");
   });
 
   it("returns focus to the row trigger when its menu closes", async () => {
@@ -160,24 +160,24 @@ describe("QueuePanel", () => {
       yt("b", { title: "Track B", artistName: "Two" }),
     ]);
 
-    fireEvent.click(bar().getByRole("button", { name: "Up next" }));
-    await screen.findByRole("dialog", { name: "Queue" });
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
 
     const trigger = within(queueDialog()).getByRole("button", {
-      name: "Actions for Track B",
+      name: "Thao tác với Track B",
     });
     fireEvent.click(trigger);
-    expect(document.activeElement?.textContent).toContain("Remove from queue");
+    expect(document.activeElement?.textContent).toContain("Thêm vào playlist");
     fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() =>
       expect(
         within(queueDialog()).queryByRole("button", {
-          name: "Remove from queue",
+          name: "Xóa khỏi hàng chờ",
         }),
       ).toBeNull(),
     );
     expect(document.activeElement?.getAttribute("aria-label")).toBe(
-      "Actions for Track B",
+      "Thao tác với Track B",
     );
   });
 });

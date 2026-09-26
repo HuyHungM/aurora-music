@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   let migrateError: unknown = null;
   for (let attempt = 1; attempt <= 3 && !migrated; attempt += 1) {
     try {
-      execSync("npx prisma migrate deploy", { stdio: "pipe" });
+      execSync("bunx prisma migrate deploy", { stdio: "pipe" });
       migrated = true;
     } catch (error) {
       migrateError = error;

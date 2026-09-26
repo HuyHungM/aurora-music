@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 import type { SearchHistory } from "@/lib/domain";
 import { ClockIcon, XIcon } from "@/components/ui/icons";
+import { useLocale } from "@/components/i18n/locale-provider";
 import { clearSearchHistoryAction } from "@/app/actions/search";
 
 export function SearchHistorySection({
@@ -12,6 +13,7 @@ export function SearchHistorySection({
   history: SearchHistory[];
 }) {
   const router = useRouter();
+  const { t } = useLocale();
   const [isPending, startTransition] = useTransition();
 
   function runSearch(query: string) {
@@ -30,21 +32,21 @@ export function SearchHistorySection({
   }
 
   return (
-    <section aria-label="Recent searches" className="flex flex-col gap-3">
+    <section aria-label={t("searchHistory.title")} className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-text-muted">
           <ClockIcon size={14} />
-          Recent searches
+          {t("searchHistory.title")}
         </h2>
         <button
           type="button"
           onClick={clearHistory}
           disabled={isPending}
-          aria-label="Clear search history"
+          aria-label={t("searchHistory.clear")}
           className="flex items-center gap-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:opacity-50"
         >
           <XIcon size={12} />
-          Clear
+          {t("searchHistory.clear")}
         </button>
       </div>
       <div className="flex flex-wrap gap-2">

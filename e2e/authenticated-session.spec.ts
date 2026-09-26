@@ -64,11 +64,18 @@ authTest.describe("authenticated session journeys", () => {
     await expect(
       pageA.getByRole("button", {
         name: `Like ${TRACK_ONE}`,
+        exact: true,
       }),
     ).toBeVisible({ timeout: 15_000 });
-    await pageA.getByRole("button", { name: `Like ${TRACK_ONE}` }).click();
+    await pageA.getByRole("button", {
+        name: `Like ${TRACK_ONE}`,
+        exact: true,
+      }).click();
     await expect(
-      pageA.getByRole("button", { name: `Like ${TRACK_ONE}` }),
+      pageA.getByRole("button", {
+        name: `Like ${TRACK_ONE}`,
+        exact: true,
+      }),
     ).toBeVisible({ timeout: 15_000 });
     await expect(
       pageA.getByRole("main").getByRole("alert"),
@@ -100,11 +107,20 @@ authTest.describe("authenticated session journeys", () => {
 
     await expiredPage.goto("/e2e-library");
     await expect(
-      expiredPage.getByRole("button", { name: `Like ${TRACK_ONE}` }),
+      expiredPage.getByRole("button", {
+        name: `Like ${TRACK_ONE}`,
+        exact: true,
+      }),
     ).toBeVisible({ timeout: 15_000 });
-    await expiredPage.getByRole("button", { name: `Like ${TRACK_ONE}` }).click();
+    await expiredPage.getByRole("button", {
+        name: `Like ${TRACK_ONE}`,
+        exact: true,
+      }).click();
     await expect(
-      expiredPage.getByRole("button", { name: `Like ${TRACK_ONE}` }),
+      expiredPage.getByRole("button", {
+        name: `Like ${TRACK_ONE}`,
+        exact: true,
+      }),
     ).toBeVisible({ timeout: 15_000 });
   });
 
@@ -126,11 +142,20 @@ authTest.describe("authenticated session journeys", () => {
 
     await tamperedPage.goto("/e2e-library");
     await expect(
-      tamperedPage.getByRole("button", { name: `Like ${TRACK_ONE}` }),
+      tamperedPage.getByRole("button", {
+        name: `Like ${TRACK_ONE}`,
+        exact: true,
+      }),
     ).toBeVisible({ timeout: 15_000 });
-    await tamperedPage.getByRole("button", { name: `Like ${TRACK_ONE}` }).click();
+    await tamperedPage.getByRole("button", {
+        name: `Like ${TRACK_ONE}`,
+        exact: true,
+      }).click();
     await expect(
-      tamperedPage.getByRole("button", { name: `Like ${TRACK_ONE}` }),
+      tamperedPage.getByRole("button", {
+        name: `Like ${TRACK_ONE}`,
+        exact: true,
+      }),
     ).toBeVisible({ timeout: 15_000 });
   });
 

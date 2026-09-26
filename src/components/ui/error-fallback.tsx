@@ -1,5 +1,6 @@
 "use client";
 
+import { useLocale } from "@/components/i18n/locale-provider";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -7,6 +8,8 @@ import { Button } from "@/components/ui/button";
  * Presentational only: retry invokes the passed reset, which re-renders
  * the failed segment. It never touches MusicEngine, the queue, or any
  * playback state — a UI retry is not a playback reset.
+ * Chrome is fully translated (Phase 42); the message/code props arrive
+ * already localized from the caller's toUserFacingError(locale) mapping.
  */
 export function ErrorFallback({
   message,
@@ -27,37 +30,41 @@ export function ErrorFallback({
   onRetry: () => void;
   onHome: () => void;
 }) {
+  const { t } = useLocale();
   return (
     <div
       role="alert"
       className="flex flex-col items-center justify-center gap-4 px-6 py-24 text-center"
     >
       <h1 className="text-2xl font-bold tracking-tight text-text-primary">
-        Something went wrong
+        {t("errors.title")}
       </h1>
       <p className="max-w-sm text-sm leading-relaxed text-text-muted">
-        An unexpected error occurred while loading this page. You can try
-        again, or head back to the home page.
+        {t("errors.description")}
       </p>
       <p aria-live="polite" className="max-w-sm text-sm text-text-secondary">
         {message}
       </p>
       {offline ? (
         <p className="max-w-sm text-sm text-text-secondary">
-          You&apos;re offline. Check your connection — music needs internet.
+          {t("errors.offlineHint")}
         </p>
       ) : null}
       {digest ? (
-        <p className="text-xs text-text-muted/60">Reference: {digest}</p>
+        <p className="text-xs text-text-muted/60">
+          {t("errors.reference", { id: digest })}
+        </p>
       ) : (
-        <p className="text-xs text-text-muted/60">Error code: {code}</p>
+        <p className="text-xs text-text-muted/60">
+          {t("errors.errorCode", { code })}
+        </p>
       )}
       <div className="flex gap-3">
         <Button type="button" onClick={onRetry}>
-          Try again
+          {t("errors.tryAgain")}
         </Button>
         <Button type="button" variant="secondary" onClick={onHome}>
-          Back to home
+          {t("errors.backHome")}
         </Button>
       </div>
     </div>

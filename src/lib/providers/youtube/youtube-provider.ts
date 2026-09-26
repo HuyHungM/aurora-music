@@ -40,6 +40,13 @@ import {
 
 const PROVIDER_NAME = "YouTube";
 
+/**
+ * `playlistItems.list` returns at most 50 per call, and `videos.list` accepts
+ * at most 50 ids. One constant for both, so the two batch sizes cannot drift
+ * apart — they are the same upstream limit.
+ */
+const PAGE_SIZE = 50;
+
 const BASE_CAPABILITIES: readonly ProviderCapability[] = [
   "search.tracks",
   "tracks.get",
@@ -327,10 +334,22 @@ export function createYouTubeProvider(
       const orderedVideoIds: string[] = [];
       let pageToken: string | undefined;
       let total: number | undefined;
-      // Bounded page walk: enough to satisfy offset+limit, max 10 pages.
-      for (let page = 0; page < 10; page += 1) {
+      // Bounded page walk (§23, §28).
+      //
+      // The window is `offset + limit` items and each page holds 50, so the
+      // number of pages actually required is `ceil((offset+limit)/50)`. The
+      // previous fixed 10-page cap was correct for the default window but
+      // over-fetched for small ones — a 20-item request walked pages until
+      // `orderedVideoIds.length >= 20`, which stops after one page, so the
+      // cap was harmless there; the real waste was `limit: 50` hardcoded per
+      // page regardless of how few items were asked for. The page size is
+      // now the smaller of the full page and what is still needed, so a 20-item
+      // request never asks YouTube for 50.
+      const needed = Math.max(1, Math.ceil((offset + limit) / PAGE_SIZE));
+      for (let page = 0; page < needed; page += 1) {
+        const remaining = offset + limit - orderedVideoIds.length;
         const response = await transport.getPlaylistItems(id, {
-          limit: 50,
+          limit: Math.min(PAGE_SIZE, Math.max(remaining, 1)),
           pageToken,
         });
         if (total === undefined) {
@@ -360,8 +379,8 @@ export function createYouTubeProvider(
 
       const windowed = orderedVideoIds.slice(offset, offset + limit);
       const byId = new Map<string, Track>();
-      for (let index = 0; index < windowed.length; index += 50) {
-        const batch = windowed.slice(index, index + 50);
+      for (let index = 0; index < windowed.length; index += PAGE_SIZE) {
+        const batch = windowed.slice(index, index + PAGE_SIZE);
         if (batch.length === 0) {
           break;
         }

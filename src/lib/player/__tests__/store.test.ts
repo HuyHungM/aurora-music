@@ -1211,7 +1211,7 @@ describe("queue invariants", () => {
     expect(sorted).toEqual([0, 1, 2]);
   });
 
-  it("duplicate tracks are valid queue entries", () => {
+  it("collapses duplicate tracks in a replaced queue", () => {
     mountEngine();
     usePlayerStore.getState().replaceQueue([
       makePlayableTrack("a"),
@@ -1219,9 +1219,119 @@ describe("queue invariants", () => {
       makePlayableTrack("b"),
     ]);
     const state = usePlayerStore.getState();
-    expect(state.queue.length).toBe(3);
-    const sorted = [...state.playOrder].sort((a, b) => a - b);
-    expect(sorted).toEqual([0, 1, 2]);
+    // One entry per canonical track. The queue ARRAY SLOT is the stable
+    // entry identity, so the repeat is dropped before a slot exists and the
+    // survivors keep their original indices.
+    expect(state.queue.map((t) => t.id)).toEqual(["a", "b"]);
+    expect(state.playOrder).toEqual([0, 1]);
+    expect(state.position).toBe(0);
+    expect(state.currentTrack?.id).toBe("a");
+  });
+
+  it("re-points a start index that named a dropped duplicate", () => {
+    mountEngine();
+    // The caller asks to start on the SECOND occurrence of "a", which the
+    // canonical collapse removes. Playback must still begin on that song,
+    // on the surviving entry.
+    usePlayerStore.getState().replaceQueue(
+      [makePlayableTrack("a"), makePlayableTrack("b"), makePlayableTrack("a")],
+      { startIndex: 2 },
+    );
+    const state = usePlayerStore.getState();
+    expect(state.queue.map((t) => t.id)).toEqual(["a", "b"]);
+    expect(state.position).toBe(0);
+    expect(state.currentTrack?.id).toBe("a");
+  });
+
+  it("addToQueue is a no-op for a track already queued", () => {
+    mountEngine();
+    usePlayerStore.getState().addToQueue(makePlayableTrack("a"));
+    const before = usePlayerStore.getState().userActionGeneration;
+    usePlayerStore.getState().addToQueue(makePlayableTrack("a"));
+    const state = usePlayerStore.getState();
+    expect(state.queue.map((t) => t.id)).toEqual(["a"]);
+    expect(state.playOrder).toEqual([0]);
+    // Nothing changed, so no user intent is recorded and no snapshot is
+    // written: an in-flight restore is not invalidated by a no-op click.
+    expect(state.userActionGeneration).toBe(before);
+  });
+
+  it("playNext repositions an existing entry instead of duplicating it", () => {
+    mountEngine();
+    const store = usePlayerStore.getState();
+    store.replaceQueue([
+      makePlayableTrack("a"),
+      makePlayableTrack("b"),
+      makePlayableTrack("c"),
+    ]);
+    // "c" is already queued. Play next must MOVE the single occurrence to
+    // the slot after the cursor, not append a second "c".
+    store.playNext(makePlayableTrack("c"));
+    const state = usePlayerStore.getState();
+    expect(state.queue.map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(state.playOrder).toEqual([0, 2, 1]);
+    expect(state.position).toBe(0);
+    expect(state.currentTrack?.id).toBe("a");
+    // The queue array is untouched, so stable entry ids did not churn.
+    expect(state.playOrder.map((i) => state.queue[i]?.id)).toEqual(["a", "c", "b"]);
+  });
+
+  it("playNext is a no-op for the track that is already playing", () => {
+    mountEngine();
+    const store = usePlayerStore.getState();
+    store.replaceQueue([makePlayableTrack("a"), makePlayableTrack("b")]);
+    const before = usePlayerStore.getState();
+    store.playNext(makePlayableTrack("a"));
+    const state = usePlayerStore.getState();
+    expect(state.playOrder).toEqual([0, 1]);
+    expect(state.position).toBe(before.position);
+    expect(state.currentTrack?.id).toBe("a");
+  });
+
+  it("rejects a cross-provider rendering of a queued track", () => {
+    mountEngine();
+    // Both rows canonicalize (real source type + stable provider id), differ
+    // in source, and carry agreeing title/artist/duration - an exact|strong
+    // matcher verdict, so they are one logical track.
+    usePlayerStore.getState().addToQueue(
+      makePlayableTrack("yt-a", {
+        provider: "youtube",
+        providerTrackId: "yt-a",
+        title: "Song A",
+        duration: 200,
+      }),
+    );
+    usePlayerStore.getState().addToQueue(
+      makePlayableTrack("dz-9", {
+        provider: "deezer",
+        providerTrackId: "dz-9",
+        title: "Song A",
+        duration: 200,
+      }),
+    );
+    const state = usePlayerStore.getState();
+    expect(state.queue).toHaveLength(1);
+    expect(state.playOrder).toEqual([0]);
+    // First occurrence survives: the queue array slot, and therefore every
+    // stable entry identity, is left alone.
+    expect(state.queue[0]?.id).toBe("yt-a");
+  });
+
+  it("never drops a track it cannot canonicalize", () => {
+    mountEngine();
+    // No stable provider id, so no identity can be built. Two rows with the
+    // SAME title and artist: had canonicalization succeeded, the matcher
+    // would reject the second. Fail OPEN instead - an entry the product
+    // cannot identify is never evidence that it duplicates anything.
+    usePlayerStore
+      .getState()
+      .addToQueue(makePlayableTrack("x", { provider: "youtube", title: "Same Song" }));
+    usePlayerStore
+      .getState()
+      .addToQueue(makePlayableTrack("y", { provider: "youtube", title: "Same Song" }));
+    const state = usePlayerStore.getState();
+    expect(state.queue).toHaveLength(2);
+    expect(state.playOrder).toEqual([0, 1]);
   });
 });
 
@@ -1406,6 +1516,192 @@ describe("persistence generation and restore", () => {
     usePlayerStore.getState().replaceQueue([makePlayableTrack("n")]);
     expect(usePlayerStore.getState().pendingRestorePosition).toBeNull();
     expect(usePlayerStore.getState().currentTrack?.id).toBe("n");
+  });
+
+  it("restoreQueueSnapshot installs exact queue state without autoplay or intent", () => {
+    mountEngine();
+    const before = usePlayerStore.getState().userActionGeneration;
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: [makePlayableTrack("a"), makePlayableTrack("b"), makePlayableTrack("c")],
+      playOrder: [2, 0, 1],
+      position: 1,
+      shuffle: true,
+      repeat: "all",
+      mediaPosition: 34,
+      currentTrack: makePlayableTrack("a", { title: "Fresh A" }),
+    });
+    const state = usePlayerStore.getState();
+    expect(state.queue.map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(state.playOrder).toEqual([2, 0, 1]);
+    expect(state.position).toBe(1);
+    expect(state.shuffle).toBe(true);
+    expect(state.repeat).toBe("all");
+    expect(state.currentTrack?.title).toBe("Fresh A");
+    expect(state.pendingRestorePosition).toBe(34);
+    expect(state.isPlaying).toBe(false);
+    expect(state.userActionGeneration).toBe(before);
+  });
+
+  it("restores a snapshot whose tracks and play order held repeats", () => {
+    mountEngine();
+    // The shape measured on the development database before this invariant
+    // existed: a persisted queue of 8 entries holding 2 distinct tracks. A
+    // legacy row is valid input, so the repair has to be coherent rather than
+    // a blind splice of the arrays.
+    const repeated = [
+      makePlayableTrack("p", { provider: "youtube", providerTrackId: "p" }),
+      makePlayableTrack("q", { provider: "youtube", providerTrackId: "q" }),
+      makePlayableTrack("p", { provider: "youtube", providerTrackId: "p" }),
+      makePlayableTrack("q", { provider: "youtube", providerTrackId: "q" }),
+      makePlayableTrack("p", { provider: "youtube", providerTrackId: "p" }),
+      makePlayableTrack("q", { provider: "youtube", providerTrackId: "q" }),
+      makePlayableTrack("p", { provider: "youtube", providerTrackId: "p" }),
+      makePlayableTrack("q", { provider: "youtube", providerTrackId: "q" }),
+    ];
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: repeated,
+      playOrder: [0, 1, 2, 3, 4, 5, 6, 7],
+      position: 0,
+      shuffle: true,
+      repeat: "all",
+      mediaPosition: 12,
+      currentTrack: repeated[0],
+    });
+    const state = usePlayerStore.getState();
+    // One entry per canonical track; the play order is a permutation of it.
+    expect(state.queue.map((t) => t.id)).toEqual(["p", "q"]);
+    expect([...state.playOrder].sort((a, b) => a - b)).toEqual([0, 1]);
+    // The cursor followed the TRACK it pointed at, not its array slot, so it
+    // still describes the same song at the same media position.
+    expect(state.position).toBe(0);
+    expect(state.currentTrack?.id).toBe("p");
+    expect(state.pendingRestorePosition).toBe(12);
+    expect(state.shuffle).toBe(true);
+    expect(state.repeat).toBe("all");
+  });
+
+  it("points a cursor at the surviving entry when its own entry was a repeat", () => {
+    mountEngine();
+    const p = makePlayableTrack("p", { provider: "youtube", providerTrackId: "p" });
+    const q = makePlayableTrack("q", { provider: "youtube", providerTrackId: "q" });
+    usePlayerStore.getState().restoreQueueSnapshot({
+      // Cursor is on the second "p", which the canonical collapse removes.
+      tracks: [p, q, p],
+      playOrder: [0, 1, 2],
+      position: 2,
+      shuffle: false,
+      repeat: "off",
+      mediaPosition: 0,
+    });
+    const state = usePlayerStore.getState();
+    expect(state.queue.map((t) => t.id)).toEqual(["p", "q"]);
+    expect(state.position).toBe(0);
+    // The cursor resolved to the surviving entry for the same song.
+    expect(state.queue[state.playOrder[state.position]]?.id).toBe("p");
+  });
+
+  it("restores a clean snapshot without changing anything", () => {
+    mountEngine();
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: [makePlayableTrack("a"), makePlayableTrack("b"), makePlayableTrack("c")],
+      playOrder: [2, 0, 1],
+      position: 1,
+      shuffle: true,
+      repeat: "all",
+      mediaPosition: 34,
+      currentTrack: makePlayableTrack("a", { title: "Fresh A" }),
+    });
+    const state = usePlayerStore.getState();
+    expect(state.queue.map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(state.playOrder).toEqual([2, 0, 1]);
+    expect(state.position).toBe(1);
+    expect(state.currentTrack?.title).toBe("Fresh A");
+  });
+
+  it("restoreQueueSnapshot falls back to the snapshot cursor entry", () => {
+    mountEngine();
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: [makePlayableTrack("a"), makePlayableTrack("b")],
+      playOrder: [1, 0],
+      position: 0,
+      shuffle: false,
+      repeat: "off",
+      mediaPosition: 0,
+    });
+    const state = usePlayerStore.getState();
+    expect(state.currentTrack?.id).toBe("b");
+    expect(state.pendingRestorePosition).toBeNull();
+  });
+
+  it("restoreQueueSnapshot of an empty queue clears current state", () => {
+    mountEngine();
+    usePlayerStore.getState().replaceQueue([makePlayableTrack("a")]);
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: [],
+      playOrder: [],
+      position: -1,
+      shuffle: false,
+      repeat: "off",
+      mediaPosition: 0,
+    });
+    const state = usePlayerStore.getState();
+    expect(state.queue).toEqual([]);
+    expect(state.currentTrack).toBeNull();
+    expect(state.position).toBe(-1);
+    expect(state.isPlaying).toBe(false);
+  });
+
+  it("restoreQueueSnapshot reapplies persisted volume and mute", () => {
+    const surface = mountEngine();
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: [makePlayableTrack("a")],
+      playOrder: [0],
+      position: 0,
+      shuffle: false,
+      repeat: "off",
+      mediaPosition: 12,
+      currentTrack: makePlayableTrack("a"),
+      volume: 0.75,
+      muted: true,
+    });
+    const state = usePlayerStore.getState();
+    expect(state.volume).toBe(0.75);
+    expect(state.muted).toBe(true);
+    // The live engine agrees with store state (idempotent: exactly one flip).
+    expect(surface.volume).toBe(0.75);
+    expect(surface.muted).toBe(true);
+  });
+
+  it("restoreQueueSnapshot leaves volume and mute alone when not persisted", () => {
+    const surface = mountEngine();
+    surface.volume = 0.5;
+    surface.muted = true;
+    usePlayerStore.setState({ volume: 0.5, muted: true });
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: [makePlayableTrack("a")],
+      playOrder: [0],
+      position: 0,
+      shuffle: false,
+      repeat: "off",
+      mediaPosition: 0,
+    });
+    expect(usePlayerStore.getState().volume).toBe(0.5);
+    expect(usePlayerStore.getState().muted).toBe(true);
+  });
+
+  it("setMuted is idempotent against the live engine", () => {
+    const surface = mountEngine();
+    surface.muted = false;
+    usePlayerStore.getState().setMuted(true);
+    expect(surface.muted).toBe(true);
+    expect(usePlayerStore.getState().muted).toBe(true);
+    // Re-applying the same value must not flip the element back.
+    usePlayerStore.getState().setMuted(true);
+    expect(surface.muted).toBe(true);
+    expect(usePlayerStore.getState().muted).toBe(true);
+    usePlayerStore.getState().setMuted(false);
+    expect(surface.muted).toBe(false);
+    expect(usePlayerStore.getState().muted).toBe(false);
   });
 
   it("setPersistenceInitState transitions lifecycle state", () => {

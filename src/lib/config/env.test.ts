@@ -62,6 +62,105 @@ describe("parseEnv", () => {
     expect(env.NODE_ENV).toBe("production");
     expect(env.AUTH_SECRET).toBe("super-secret");
   });
+
+  /**
+   * Phase 49 security regression. The production check compared the value to
+   * `""`, so `AUTH_SECRET=" "` (a stray space or newline from a secret
+   * manager or shell capture) passed validation and became a one-character
+   * HMAC key for every session JWT. Anyone who can guess it forges an `sub`
+   * claim and Auth.js propagates it to `session.user.id`.
+   */
+  it("rejects a whitespace-only AUTH_SECRET in production", () => {
+    for (const blank of [" ", "   ", "\n", "\t", " \n\t "]) {
+      expect(() =>
+        parseEnv({
+          DATABASE_URL: "postgres://x",
+          NODE_ENV: "production",
+          AUTH_SECRET: blank,
+        }),
+      ).toThrow(ConfigError);
+    }
+  });
+
+  it("trims surrounding whitespace from AUTH_SECRET", () => {
+    const env = parseEnv({
+      DATABASE_URL: "postgres://x",
+      NODE_ENV: "production",
+      AUTH_SECRET: "super-secret\n",
+    });
+    expect(env.AUTH_SECRET).toBe("super-secret");
+  });
+
+  /**
+   * Phase 49 hardening. Both flags are read with a strict `=== "1"`, so a
+   * stray `"true"` is already inert - but a stray `"1"` in a production
+   * deploy would make `/e2e-library` readable by anonymous visitors and
+   * switch radio to the fixture backend. Fail closed instead.
+   */
+  it("fails closed when a test-only flag is set in production", () => {
+    for (const key of ["AURORA_E2E_AUTH", "AURORA_E2E_LIVE_PLAYBACK"]) {
+      expect(() =>
+        parseEnv({
+          DATABASE_URL: "postgres://x",
+          NODE_ENV: "production",
+          AUTH_SECRET: "super-secret",
+          [key]: "1",
+        }),
+      ).toThrow(ConfigError);
+    }
+  });
+
+  /**
+   * The E2E harness serves the production build, so `NODE_ENV=production`
+   * cannot mean "real deploy" on its own. The acknowledgment is the
+   * discriminator, and it must be exactly "1" — anything else, including a
+   * stray "true" that the flags themselves would ignore, stays closed.
+   */
+  it("admits test-only flags in production only with the explicit acknowledgment", () => {
+    for (const ack of [undefined, "", "0", "true", "yes"]) {
+      expect(() =>
+        parseEnv({
+          DATABASE_URL: "postgres://x",
+          NODE_ENV: "production",
+          AUTH_SECRET: "super-secret",
+          AURORA_E2E_AUTH: "1",
+          AURORA_E2E_ALLOW_TEST_FLAGS: ack,
+        }),
+      ).toThrow(ConfigError);
+    }
+
+    expect(
+      parseEnv({
+        DATABASE_URL: "postgres://x",
+        NODE_ENV: "production",
+        AUTH_SECRET: "super-secret",
+        AURORA_E2E_AUTH: "1",
+        AURORA_E2E_LIVE_PLAYBACK: "1",
+        AURORA_E2E_ALLOW_TEST_FLAGS: "1",
+      }),
+    ).toMatchObject({ NODE_ENV: "production", AURORA_E2E_AUTH: "1" });
+  });
+
+  it("does not require the acknowledgment when no test-only flag is set", () => {
+    expect(() =>
+      parseEnv({
+        DATABASE_URL: "postgres://x",
+        NODE_ENV: "production",
+        AUTH_SECRET: "super-secret",
+      }),
+    ).not.toThrow();
+  });
+
+  it("allows the test-only flags outside production", () => {
+    const env = parseEnv({
+      DATABASE_URL: "postgres://x",
+      NODE_ENV: "test",
+      AURORA_E2E_AUTH: "1",
+      AURORA_E2E_LIVE_PLAYBACK: "1",
+    });
+    expect(env.AURORA_E2E_AUTH).toBe("1");
+    expect(env.AURORA_E2E_LIVE_PLAYBACK).toBe("1");
+  });
 });
 
 describe("envVarRequirements", () => {

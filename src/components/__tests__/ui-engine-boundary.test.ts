@@ -16,10 +16,17 @@ const migratedUi = [
   "components/tracks/track-action-menu.tsx",
   "components/home/hero-section.tsx",
   "app/(app)/track/[id]/track-player.tsx",
+  "components/ui/collection-play-button.tsx",
+  "components/library/library-play-button.tsx",
+];
+
+// Phase 36 consolidation: the four collection play buttons are thin
+// wrappers over CollectionPlayButton (single MusicEngine call site).
+// They must delegate rather than implement playback themselves.
+const delegatedWrappers = [
   "components/album/album-play-button.tsx",
   "components/artist/artist-play-button.tsx",
   "components/playlist/playlist-play-button.tsx",
-  "components/library/library-play-button.tsx",
 ];
 
 const forbiddenPatterns = [
@@ -85,6 +92,22 @@ describe("migrated UI engine boundary", () => {
         .flatMap(selectorFields)
         .filter((field) => !chromeStateFields.has(field));
       expect(illegalSelectors).toEqual([]);
+    });
+  }
+
+  for (const relative of delegatedWrappers) {
+    it(`${relative} delegates to CollectionPlayButton (no own playback logic)`, () => {
+      const content = readFileSync(resolve(srcDir, relative), "utf8");
+      expect(content).toMatch(
+        /from ["']@\/components\/ui\/collection-play-button["']/,
+      );
+      const forbidden = content
+        .split("\n")
+        .filter((line) =>
+          forbiddenPatterns.some((pattern) => pattern.test(line)),
+        );
+      expect(forbidden).toEqual([]);
+      expect(content).not.toMatch(/useMusicEngine|usePlayerStore/);
     });
   }
 });

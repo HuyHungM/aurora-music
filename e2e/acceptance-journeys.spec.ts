@@ -54,14 +54,22 @@ test.describe("search acceptance", () => {
     });
     await page.goto("/search?q=never%20gonna%20give%20you%20up");
     await expect(
-      page.getByRole("heading", { name: "Search" }),
+      page.getByRole("heading", { name: /Results for|Find your music/ }),
     ).toBeVisible();
     // Either live result groups (provider keys present) or a safe
     // empty/unavailable state (no keys, as in CI) — never a raw error
-    // or stack trace. "Track results" is a labelled region, not text.
+    // or stack trace. The result group is a labelled `region`, not text.
+    //
+    // The region's accessible name is the `search.tracksSection` heading,
+    // "Tracks" — matching the visible heading is deliberate, so a section that
+    // is labelled one thing and titled another is a defect this would catch.
+    // (It previously asked for "Track results", a string that exists in no
+    // locale file and in no component, so on a machine with provider keys
+    // configured — where the live branch renders and the empty branch does
+    // not — the assertion could only ever be satisfied by the fallback.)
     await expect(
       page
-        .getByRole("region", { name: "Track results" })
+        .getByRole("region", { name: "Tracks" })
         .or(page.getByText(/No results for|Search is unavailable/)),
     ).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);

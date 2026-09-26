@@ -23,7 +23,8 @@ import type { SourceReference } from "@/lib/domain";
 import type { TrackIdentity } from "@/lib/domain";
 import { isYouTubeVideoId } from "../normalize";
 import { rankAudioFormats } from "./format-selection";
-import { isFormatConsumable } from "./format-validation";
+import { probeFormatConsumability } from "./format-validation";
+import type { FormatProbeReason, FormatProbeVerdict } from "./format-validation";
 import type { PlaybackFormatCandidate, PlaybackMediaInfo, YouTubePlaybackClient } from "./types";
 import { logger } from "@/lib/diagnostics/logger";
 
@@ -54,39 +55,103 @@ export interface YouTubeResolver {
 }
 
 export interface YouTubeResolverOptions {
-  /** Optional format validator (tests inject synchronous/mock probes). */
+  /**
+   * Optional format validator (tests inject synchronous/mock probes). An
+   * injected validator answers yes/no and carries no reason of its own, so its
+   * verdict is recorded as `validator_injected` — the real probe is what
+   * produces a diagnosable reason in production.
+   */
   validateFormat?: (url: string) => Promise<boolean>;
+}
+
+/** One rejected candidate, as counted into the all-failed summary. */
+interface Rejection {
+  reason: FormatProbeReason;
+}
+
+/**
+ * Compact `reason=count` rendering for the summary field. `LogFieldValue` is
+ * primitive-only by design, so the counts are formatted rather than nested —
+ * and ordered by count then reason so the same failure set always renders the
+ * same way.
+ */
+function summarizeReasons(rejections: Rejection[]): string {
+  const counts = new Map<FormatProbeReason, number>();
+  for (const { reason } of rejections) {
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(",");
 }
 
 export function createYouTubeResolver(
   client: YouTubePlaybackClient,
   options: YouTubeResolverOptions = {},
 ): YouTubeResolver {
-  const validate = options.validateFormat ?? isFormatConsumable;
+  const injected = options.validateFormat;
+
+  async function verifyFormat(url: string): Promise<FormatProbeVerdict> {
+    if (!injected) {
+      return await probeFormatConsumability(url);
+    }
+    try {
+      const ok = await injected(url);
+      return ok
+        ? { consumable: true, reason: "validator_injected" }
+        : { consumable: false, reason: "validator_injected" };
+    } catch {
+      // A broken probe is not evidence about the format; the next candidate is
+      // still worth trying. Recording the reason keeps this path as visible as
+      // the real one instead of being a silent black hole.
+      return { consumable: false, reason: "validator_injected" };
+    }
+  }
 
   async function pickPlayableFormat(
     candidates: PlaybackFormatCandidate[],
   ): Promise<PlaybackFormatCandidate | null> {
     const ranked = rankAudioFormats(candidates);
+    const rejections: Rejection[] = [];
     for (const candidate of ranked) {
-      let ok = false;
-      try {
-        ok = await validate(candidate.url);
-      } catch {
-        // A broken probe is not evidence about the format; the next
-        // candidate is still worth trying.
-        ok = false;
-      }
-      if (ok) {
+      const verdict = await verifyFormat(candidate.url);
+      if (verdict.consumable) {
+        if (rejections.length > 0) {
+          logger.debug("Playback format fell through to a later candidate", {
+            event: "playback_format_fallback",
+            rejectedCount: rejections.length,
+            selectedItag: candidate.itag ?? null,
+            selectedHasVideo: candidate.hasVideo,
+          });
+        }
         return candidate;
       }
+      rejections.push({ reason: verdict.reason });
+      // Never the URL: it is a signed, expiring googlevideo link. `itag` and the
+      // probe's own observations identify the candidate precisely instead.
       logger.debug("Playback format skipped", {
         event: "playback_format_skipped",
+        itag: candidate.itag ?? null,
         mimeType: candidate.mimeType ?? null,
         bitrate: candidate.bitrate ?? null,
         hasVideo: candidate.hasVideo,
+        reason: verdict.reason,
+        status: verdict.status ?? null,
+        contentType: verdict.contentType ?? null,
+        boundedRangeOk: verdict.boundedRangeOk ?? null,
       });
     }
+    // A total failure is the case that needs the most context and had the
+    // least: one summary so the cause is a count of reasons, not four
+    // context-free skip lines.
+    logger.warn("Playback resolution found no usable audio format", {
+      event: "playback_resolution_failed",
+      candidateCount: ranked.length,
+      validCount: 0,
+      rejectedCount: rejections.length,
+      topRejectionReasons: summarizeReasons(rejections),
+    });
     return null;
   }
 

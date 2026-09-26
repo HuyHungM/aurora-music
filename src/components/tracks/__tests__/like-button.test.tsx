@@ -29,23 +29,23 @@ function makeTrack(overrides: Partial<Track> = {}): Track {
 describe("LikeButton", () => {
   it("renders like button with correct label when not liked", () => {
     render(<LikeButton track={makeTrack()} initialLiked={false} />);
-    expect(screen.getByRole("button", { name: "Like Test Track" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Thích Test Track" })).toBeTruthy();
   });
 
   it("renders unlike button with correct label when liked", () => {
     render(<LikeButton track={makeTrack()} initialLiked={true} />);
-    expect(screen.getByRole("button", { name: "Unlike Test Track" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Bỏ thích Test Track" })).toBeTruthy();
   });
 
   it("sets aria-pressed to true when liked", () => {
     render(<LikeButton track={makeTrack()} initialLiked={true} />);
-    const button = screen.getByRole("button", { name: "Unlike Test Track" });
+    const button = screen.getByRole("button", { name: "Bỏ thích Test Track" });
     expect(button.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("sets aria-pressed to false when not liked", () => {
     render(<LikeButton track={makeTrack()} initialLiked={false} />);
-    const button = screen.getByRole("button", { name: "Like Test Track" });
+    const button = screen.getByRole("button", { name: "Thích Test Track" });
     expect(button.getAttribute("aria-pressed")).toBe("false");
   });
 
@@ -53,8 +53,8 @@ describe("LikeButton", () => {
     const user = userEvent.setup();
     render(<LikeButton track={makeTrack()} initialLiked={false} />);
     
-    await user.click(screen.getByRole("button", { name: "Like Test Track" }));
+    await user.click(screen.getByRole("button", { name: "Thích Test Track" }));
     
-    expect(screen.getByRole("button", { name: "Unlike Test Track" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Bỏ thích Test Track" })).toBeTruthy();
   });
 });

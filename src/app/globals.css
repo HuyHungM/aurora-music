@@ -1,38 +1,1059 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   BREAKPOINT SYSTEM (Phase 54)
+
+   There is exactly ONE non-default breakpoint in this codebase, and it is
+   here.
+
+   Everything else uses Tailwind's defaults (`sm` 640, `md` 768, `lg` 1024,
+   `xl` 1280, `2xl` 1536), which are width steps and describe the layout
+   system. This one is not a width step: it is the orientation case that a
+   width step cannot express, because the same 812px viewport is a tall phone
+   in portrait and a short, wide window in landscape, and those two want
+   genuinely different compositions rather than the same one squeezed.
+
+   `landscape-short` = "wide enough that horizontal space is the scarce
+   resource no more, but too short to spend on a tall stack." That is
+   `height <= 560px` and `width >= height`. At 375px and 412px tall - every
+   phone in landscape, and the only place the mobile full player exists in
+   landscape at all - a portrait column spends 208px of a 375px viewport on
+   artwork alone before a single control is reachable.
+
+   Stated once, as a variant, rather than as a repeated arbitrary media query
+   at each call site: a breakpoint that has to be retyped is a breakpoint
+   that will eventually be retyped wrong in one place.
+   ========================================================================== */
+@custom-variant landscape-short (@media (max-height: 560px) and (min-aspect-ratio: 1));
+
+/* ==========================================================================
+   AURORA DESIGN TOKENS (Phase 44a)
+
+   One source of truth, built in three layers:
+
+     1. PRIMITIVES  — raw ramps and scales. No meaning attached. Every
+                      primitive is named `--p-*` and is the ONLY place a
+                      literal color, size, duration, radius, blur, or
+                      layer number appears in the entire codebase.
+     2. SEMANTIC    — role-based intent. Components consume only these.
+     3. COMPONENT   — per-component bindings for surfaces that must
+                      diverge from the general system.
+
+   Why primitives are prefixed: Tailwind derives utilities from `@theme`
+   namespaces (`--radius-*`, `--shadow-*`, `--ease-*`, `--z-index-*`, …).
+   Giving primitives a distinct `--p-` name means a theme entry always
+   references a *different* variable, so no declaration can accidentally
+   self-reference. A self-referential custom property is invalid CSS and
+   silently drops out of the cascade, which is exactly the class of bug
+   this convention makes unrepresentable.
+
+   Palette direction: deep blue-violet neutrals, a single violet accent
+   for interactive state, and an "aurora" triad (violet / indigo / cyan)
+   reserved for atmospheric blends. The triad is never used for text,
+   borders, or controls — only for ambient light.
+
+   The legacy alias block near the bottom is a MIGRATION SHIM, not a
+   second system: it is a set of pure aliases with no literal values, and
+   it is deleted in 44d. See "LEGACY ALIASES" for the removal contract.
+   ========================================================================== */
+
 :root {
-  --background: #08070d;
-  --surface-1: #100e1a;
-  --surface-2: #171426;
-  --surface-3: #201b33;
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --text-primary: #f4f2ff;
-  --text-secondary: #c6c2d8;
-  --text-muted: #8b86a0;
-  --accent: #8b5cf6;
-  --accent-hover: #a78bfa;
-  --accent-foreground: #f4f2ff;
-  --gradient-aurora: linear-gradient(135deg, #22d3ee 0%, #818cf8 45%, #c084fc 100%);
-  --radius-card: 0.75rem;
+  /* ======================================================================
+     LAYER 1 — PRIMITIVES
+     ====================================================================== */
+
+  /* --- Neutral ramp: cool, violet-tinted -------------------------------
+     Hue is held at 285° with very low chroma so surfaces read as
+     near-neutral while still belonging to the same family as the accent.
+     Chroma rises slightly through the mid-tones so text carries warmth
+     without becoming colorful.
+
+     Indices are CANONICAL: they are positions in an 11-stop tonal ramp,
+     not a dense sequence, so a stop always means the same lightness no
+     matter which stops are currently in use. Only the stops the semantic
+     layer actually consumes are instantiated — a ramp step nobody has
+     claimed yet is dead weight and is left out on purpose. A later
+     semantic token that needs a new stop should add that stop
+     deliberately rather than reaching for a raw literal. */
+  --p-neutral-0: oklch(0.145 0.012 285);
+  --p-neutral-1: oklch(0.185 0.014 285);
+  --p-neutral-2: oklch(0.225 0.016 285);
+  --p-neutral-3: oklch(0.275 0.018 285);
+  --p-neutral-4: oklch(0.335 0.018 285);
+  --p-neutral-5: oklch(0.435 0.016 285);
+  --p-neutral-7: oklch(0.655 0.012 285);
+  --p-neutral-8: oklch(0.775 0.01 285);
+  --p-neutral-10: oklch(0.972 0.004 285);
+
+  /* --- Accent ramp: the one interactive hue ----------------------------
+     Canonical 7-stop ramp; only the stops interactive states claim are
+     defined. */
+  --p-accent-4: oklch(0.7 0.17 295);
+  --p-accent-5: oklch(0.6 0.21 295);
+  --p-accent-6: oklch(0.52 0.2 295);
+
+  /* --- Aurora triad: ambient light only, never UI state --------------- */
+  --p-aurora-violet: oklch(0.66 0.2 300);
+  --p-aurora-indigo: oklch(0.63 0.16 275);
+  --p-aurora-cyan: oklch(0.78 0.12 210);
+
+  /* --- Status hues ---------------------------------------------------- */
+  --p-success: oklch(0.77 0.15 160);
+  --p-warning: oklch(0.84 0.15 82);
+  --p-danger: oklch(0.7 0.17 25);
+  --p-info: oklch(0.73 0.12 230);
+
+  /* --- Canonical aurora gradient, composed from the triad -------------- */
+  --p-gradient-aurora: linear-gradient(
+    135deg,
+    var(--p-aurora-cyan) 0%,
+    var(--p-aurora-indigo) 45%,
+    var(--p-aurora-violet) 100%
+  );
+
+  /* --- Spacing rhythm --------------------------------------------------
+     NO `--p-space-*` PRIMITIVES, DELIBERATELY.
+
+     A named space scale is only worth having once something consumes it,
+     and the obvious way to publish one — `--spacing-<name>` in a
+     `@theme` block — is unsafe here: those keys are shared with
+     Tailwind's container scale, so publishing `--spacing-md` silently
+     redefines `max-w-md` (see the note in the theme block below). The
+     shipped version of this file had exactly that bug.
+
+     So spacing stays on Tailwind's own numeric scale, which is derived
+     from the `--spacing` base and cannot collide with `--container-*`:
+     `gap-1`..`gap-96`, `p-4`, `mt-2` and so on are the working
+     vocabulary today, and no call site is left without one.
+
+     A semantic spacing scale should be introduced by the phase that
+     needs it, using names that provably cannot collide — the
+     design-token test now fails the build if a spacing key ever
+     shadows a container key. */
+
+  /* --- Radius ----------------------------------------------------------
+     Pill shapes use Tailwind's built-in `rounded-full`; this scale
+     continues past `xl` for cards, sheets and dialogs so `rounded-2xl`
+     and `rounded-3xl` are ours too and the ramp never inverts. */
+  --p-radius-xs: 0.25rem;
+  --p-radius-sm: 0.375rem;
+  --p-radius-md: 0.625rem;
+  --p-radius-lg: 0.875rem;
+  --p-radius-xl: 1.25rem;
+  --p-radius-2xl: 1.75rem;
+  --p-radius-3xl: 2.25rem;
+  --p-radius-4xl: 3rem;
+
+  /* --- Type families ---------------------------------------------------
+     Display and body are separate tokens so the typographic voice can
+     change without touching a component. Both currently resolve to
+     Geist; swapping either is a single-line edit here. */
+  --p-font-display: var(--font-geist-sans);
+  --p-font-body: var(--font-geist-sans);
+  --p-font-mono: var(--font-geist-mono);
+
+  /* --- Type scale: size / line-height / tracking, per role ------------- */
+  --p-text-display: 2.5rem;
+  --p-text-display-lh: 1.05;
+  --p-text-display-ls: -0.03em;
+
+  --p-text-hero: 2rem;
+  --p-text-hero-lh: 1.1;
+  --p-text-hero-ls: -0.025em;
+
+  --p-text-page-title: 1.5rem;
+  --p-text-page-title-lh: 1.2;
+  --p-text-page-title-ls: -0.02em;
+
+  --p-text-section-title: 1rem;
+  --p-text-section-title-lh: 1.4;
+  --p-text-section-title-ls: -0.01em;
+
+  --p-text-entity-title: 1.75rem;
+  --p-text-entity-title-lh: 1.15;
+  --p-text-entity-title-ls: -0.025em;
+
+  --p-text-card-title: 0.875rem;
+  --p-text-card-title-lh: 1.4;
+  --p-text-card-title-ls: 0em;
+
+  --p-text-track-title: 0.875rem;
+  --p-text-track-title-lh: 1.4;
+  --p-text-track-title-ls: 0em;
+
+  --p-text-body: 0.875rem;
+  --p-text-body-lh: 1.55;
+  --p-text-body-ls: -0.006em;
+
+  --p-text-metadata: 0.75rem;
+  --p-text-metadata-lh: 1.45;
+  --p-text-metadata-ls: 0em;
+
+  --p-text-caption: 0.6875rem;
+  --p-text-caption-lh: 1.4;
+  --p-text-caption-ls: 0.005em;
+
+  --p-text-label: 0.6875rem;
+  --p-text-label-lh: 1.2;
+  --p-text-label-ls: 0.08em;
+
+  --p-text-utility: 0.6875rem;
+  --p-text-utility-lh: 1.2;
+  --p-text-utility-ls: 0.02em;
+
+  /* --- Elevation -------------------------------------------------------
+     Low-opacity shadows, always paired with a border. Elevation is meant
+     to read as separation, not as a drop shadow. */
+  --p-shadow-1: 0 1px 2px oklch(0 0 0 / 0.4);
+  --p-shadow-2: 0 4px 12px oklch(0 0 0 / 0.42);
+  --p-shadow-3: 0 12px 32px oklch(0 0 0 / 0.5);
+  --p-shadow-4: 0 24px 64px oklch(0 0 0 / 0.58);
+  --p-shadow-glow: 0 0 24px oklch(0.6 0.21 295 / 0.35);
+
+  /* --- Motion ---------------------------------------------------------- */
+  --p-duration-fast: 140ms;
+  --p-duration-normal: 220ms;
+  --p-duration-slow: 340ms;
+
+  --p-ease-standard: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --p-ease-emphasized: cubic-bezier(0.2, 0.9, 0.25, 1);
+  --p-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --p-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  /* Sampled spring, expressed as a linear() easing so it needs no JS. */
+  --p-ease-spring: linear(
+    0,
+    0.0053 1.2%,
+    0.0268 2.42%,
+    0.1071 4.86%,
+    0.4622 12.4%,
+    0.5713 16.1%,
+    0.6592 19.9%,
+    0.7274 23.8%,
+    0.7791 27.9%,
+    0.8168 32.3%,
+    0.8428 37%,
+    0.8602 42.1%,
+    0.8712 47.6%,
+    0.8769 53.7%,
+    0.8783 60.4%,
+    0.8744 71.2%,
+    0.8571 91.2%,
+    0.8553 95.6%,
+    0.8551 98.7%,
+    0.8551 100%
+  );
+
+  /* --- Opacity --------------------------------------------------------- */
+  --p-opacity-subtle: 0.4;
+  --p-opacity-muted: 0.64;
+  --p-opacity-strong: 0.88;
+  --p-opacity-overlay: 0.72;
+
+  /* --- Blur ------------------------------------------------------------
+     Reserved for genuinely floating layers: never a page background, a
+     card, or a list row. */
+  --p-blur-floating: 16px;
+  --p-blur-sheet: 24px;
+  --p-blur-ambient: 64px;
+
+  /* --- Touch target (Phase 54) -------------------------------------------
+     The minimum comfortable finger target, and the ONLY size number in the
+     design system that is not a visual style choice. It is a primitive so
+     that `.aurora-touch` (below) and the `Button` scale cannot drift apart.
+
+     Why 44px and not 32px: the desktop scale is deliberately compact
+     (`h-8`/`h-10` chips) because a mouse pointer does not need 44px to be
+     accurate. A finger does. Rather than re-tune every control for touch,
+     the same tokens keep their desktop sizes and `.aurora-touch` raises the
+     floor to this value on touch-primary devices only. */
+  --p-touch-target: 44px;
+
+  /* --- Touch viewport ----------------------------------------------------
+     NOT a token, and the reason is worth recording because Phase 54 first
+     wrote one.
+
+     The media query that decides "this is a finger, not a mouse" is
+     `(hover: none) and (pointer: coarse)`, and it was tempting to declare it
+     as `--p-touch-query` so the rule gating the touch floor and the rule
+     gating decorative motion would be stated once. CSS cannot do that: a
+     custom property is a value, and an `@media` prelude is parsed before
+     custom properties are substituted, so `var()` is not allowed there. The
+     token would have been unreachable by construction, and the
+     design-tokens orphan check is right to call it out.
+
+     So the query is written out at each `@media` that needs it, and the two
+     occurrences have to be kept in step by hand. `pointer: coarse` is the
+     primary-pointer test: true for phones and tablets held normally, false
+     for a desktop browser with a mouse, and false for a touch laptop whose
+     primary pointer is still a trackpad - so a desktop-class layout is not
+     degraded by a stray finger tap. */
+
+  /* --- Scrollbar geometry -----------------------------------------------
+     Three numbers, and the reason each one is separate is the whole of the
+     design.
+
+     `--p-scrollbar-size` is the GUTTER: the space the scrollbar occupies
+     along the inline axis. It is a layout reservation, not a visual width,
+     which is why it is a primitive in its own right and why nothing is
+     allowed to change it on hover. The visible thumb is
+     `size - 2 * inset`, so the two numbers below set the visible width.
+
+     `--p-scrollbar-inset` is the thumb's transparent border. This is the
+     technique that makes a scrollbar read as a floating capsule rather than
+     a bar painted flush into the edge: `border` + `background-clip:
+     content-box` shrinks the painted area and leaves a margin on both sides
+     without any layout cost.
+
+     `--p-scrollbar-inset-hover` is the same border, thinner, so the thumb
+     SWELLS INSIDE THE SAME GUTTER on hover. That is the only way to have a
+     hover-wide thumb with zero layout shift - the alternative, widening
+     `::-webkit-scrollbar` itself, changes the gutter and reflows the page.
+     The difference is deliberately 1px per side: enough to read as a
+     response, small enough that the thumb's length still communicates the
+     scroll ratio accurately.
+
+     10px gutter / 4px visible thumb is the compact end of the target range.
+     The 4px thumb is `round`-capable at `--p-radius-xs` (4px), so no
+     scrollbar-specific radius token is needed and the app keeps one radius
+     scale. */
+  --p-scrollbar-size: 10px;
+  --p-scrollbar-inset: 3px;
+  --p-scrollbar-inset-hover: 2px;
+
+  /* --- Appearance: the tunable surface (Phase 53) -----------------------
+     These eight numbers ARE the user-adjustable visual system. Everything
+     else about Glass Mode - translucency, vibrancy, border luminance,
+     ambient glow, scrim strength - is derived from them by the semantic
+     layer below. A component never reads one of these directly; it applies
+     a `.aurora-glass*` class and the cascade does the rest.
+
+     They are primitives, and therefore the only place these literals exist,
+     which is the point: the settings UI writes these same eight names onto
+     one element at runtime, and there is nowhere else for a value to drift.
+
+     EACH ONE IS A DEFAULT, NOT THE LAW. The legal range of each control
+     lives in `src/lib/appearance/appearance.ts`, which is what the server
+     action validates against and what the sliders are built from; a value
+     outside the range is clamped there and can never reach here. The
+     defaults below are asserted equal to `DEFAULT_APPEARANCE` by
+     `src/lib/appearance/__tests__/appearance.test.ts`, which reads this
+     file - so the two copies of "what Aurora looks like by default" cannot
+     disagree without the build failing. That test also asserts each default
+     is a FIXED POINT of the model's own quantiser, i.e. already sitting on
+     its control's grid. A default between two steps is worse than a merely
+     mismatched one: it renders as a value nobody chose the first time it is
+     decoded, and nothing in a screenshot would show why.
+
+     The bounds are the reason for each choice, and they are not arbitrary:
+
+       alpha        0.05-0.85. Above ~0.85 a "glass" surface is opaque and
+                    the mode is a lie; below ~0.05 the aurora canvas behind
+                    it stops reading as a surface at all.
+       blur         0-28px. Backdrop blur cost grows with BOTH radius and
+                    area, and these surfaces are viewport-sized. Past ~28px
+                    the extra radius is invisible through a dark scrim and
+                    very visible in a frame time.
+       saturation   0.8-1.6. Below 1 is allowed on purpose - it is how a
+                    busy photograph stops competing with the text - but the
+                    floor is 0.8 rather than 0 because under that the effect
+                    stops reading as "calmed down" and starts reading as a
+                    broken image, and the cap is there because past 1.6 a
+                    photograph looks processed rather than lit.
+       bg-blur      0-24px, and OFF by default. This one blurs a
+                    full-viewport layer, which is the single most expensive
+                    thing in the stylesheet; it is the last thing to turn on,
+                    not the first. */
+  --p-appearance-alpha: 0.6;
+  --p-appearance-blur: 18px;
+  --p-appearance-saturation: 1.1;
+  --p-appearance-border: 0.15;
+  --p-appearance-aurora: 0.4;
+  --p-appearance-dim: 0.6;
+  --p-appearance-bg-saturation: 0.85;
+  --p-appearance-bg-blur: 0px;
+
+  /* How much MORE opaque than the user's own alpha each depth level is.
+     The ladder, and the reason it is a ladder: a small, dense, high-contrast
+     surface needs a firmer backdrop than a large, sparse one, so the dialog
+     and the header cannot share a value even when the user has picked one.
+     Bigger surface, more opaque - which is also the opposite of what raw
+     glassmorphism does, and the reason Aurora's chrome stays readable with
+     content scrolling behind it. */
+  --p-appearance-chrome-lift: 0.14;
+  --p-appearance-float-lift: 0.22;
+
+  /* Glass elevation. A shadow is still a shadow: a blurred border gives a
+     surface no separation from the page behind it once the page is no longer
+     a flat colour, so the hairline is not optional polish. */
+  --p-shadow-glass: 0 18px 48px oklch(0 0 0 / 0.55);
+
+  /* --- Layer stack (§42) -----------------------------------------------
+     Named so no component invents its own z-index.
+
+     The stack is TOTAL, and that includes the bottom of it. `backdrop` is
+     negative on purpose: the aurora background layer sits below everything
+     including the in-flow content, which is what lets the shell root stay
+     transparent instead of painting an opaque canvas over its own
+     decoration. The alternative - giving it `base` and raising every content
+     element above it - would mean a z-index on every page, and the first
+     static element someone forgot would render behind the wallpaper. */
+  --p-z-backdrop: -1;
+  --p-z-base: 0;
+  --p-z-raised: 10;
+  --p-z-sticky: 20;
+  --p-z-rail: 30;
+  --p-z-player: 40;
+  --p-z-floating: 50;
+  --p-z-dropdown: 60;
+  --p-z-popover: 70;
+  --p-z-sheet: 80;
+  --p-z-dialog: 90;
+  --p-z-toast: 100;
+
+  /* --- Control metrics -------------------------------------------------- */
+  --p-control-height-sm: 2rem;
+  --p-control-height-md: 2.5rem;
+  --p-control-height-lg: 3rem;
+  --p-control-height-touch: 2.75rem;
+
+  --p-icon-size-xs: 14px;
+  --p-icon-size-sm: 16px;
+  --p-icon-size-md: 20px;
+  --p-icon-size-lg: 24px;
+  --p-icon-size-xl: 32px;
+
+  /* --- Layout ----------------------------------------------------------- */
+  --p-layout-max: 72rem;
+  --p-layout-sidebar: 15rem;
+  --p-layout-player: 6rem;
+
+  --p-artwork-thumb: 40px;
+  --p-artwork-small: 48px;
+  --p-artwork-medium: 80px;
+  --p-artwork-large: 160px;
+  --p-artwork-hero: 192px;
+
+  /* ======================================================================
+     LAYER 2 — SEMANTIC TOKENS
+     ====================================================================== */
+
+  /* Canvas: the page itself, receding from the content. */
+  --canvas-base: var(--p-neutral-0);
+  --canvas-raised: var(--p-neutral-1);
+  --canvas-sunken: oklch(0.115 0.01 285);
+
+  /* Surfaces: anything holding content. Depth comes from a small
+     lightness step plus a border, never from shadow alone. */
+  --surface-base: var(--p-neutral-1);
+  --surface-raised: var(--p-neutral-2);
+  --surface-overlay: var(--p-neutral-3);
+  --surface-elevated: var(--p-neutral-2);
+  --surface-hover: var(--p-neutral-3);
+  --surface-active: var(--p-neutral-4);
+  --surface-selected: color-mix(
+    in oklab,
+    var(--p-accent-5) 16%,
+    var(--p-neutral-2)
+  );
+  --surface-sunken: var(--p-neutral-0);
+
+  /* Foreground: four steps is the whole hierarchy. */
+  --fg-primary: var(--p-neutral-10);
+  --fg-secondary: var(--p-neutral-8);
+  --fg-muted: var(--p-neutral-7);
+  --fg-disabled: var(--p-neutral-5);
+  --fg-on-accent: var(--p-neutral-10);
+
+  /* Borders. */
+  --border-subtle: oklch(1 0 0 / 0.08);
+  --border-default: oklch(1 0 0 / 0.11);
+  --border-strong: oklch(1 0 0 / 0.16);
+
+  /* Accent: interactive state only. */
+  --accent: var(--p-accent-5);
+  --accent-hover: var(--p-accent-4);
+  --accent-active: var(--p-accent-6);
+  --accent-muted: color-mix(in oklab, var(--p-accent-5) 16%, transparent);
+  --accent-subtle: color-mix(in oklab, var(--p-accent-5) 28%, transparent);
+  --accent-ring: color-mix(in oklab, var(--p-accent-5) 55%, transparent);
+
+  /* Status. */
+  --status-success: var(--p-success);
+  --status-warning: var(--p-warning);
+  --status-danger: var(--p-danger);
+  --status-info: var(--p-info);
+
+  /* Aurora ambient: the triad promoted to a usable role. These feed
+     washes and gradients, never text or borders. */
+  --aurora-violet: var(--p-aurora-violet);
+  --aurora-indigo: var(--p-aurora-indigo);
+  --aurora-cyan: var(--p-aurora-cyan);
+  --aurora-gradient: var(--p-gradient-aurora);
+
+  /* Backdrop for dialogs / sheets / drawers (§43). */
+  --overlay-background: oklch(0.1 0.01 285 / var(--p-opacity-overlay));
+  --overlay-blur: var(--p-blur-floating);
+
+  /* ======================================================================
+     LAYER 2c — SCROLLBAR
+
+     Platform chrome, and the only part of the app the browser paints. The
+     system is three tokens wide and two rules deep, and both of those
+     numbers are the point.
+
+     WHY THE THREE OPACITIES ARE NOT A GLOBAL ALPHA SCALE. Aurora already
+     has `--p-opacity-subtle/muted/strong`, and reaching for them here was
+     the obvious move. It is the wrong one: those are steps in a generic
+     scale, so a change to `--p-opacity-muted` for a button would silently
+     retune the scrollbar, and the two have no reason to move together. These
+     are role-scoped values, declared as semantic tokens precisely so that
+     Glass Mode can override the SET as a unit (see below) rather than
+     overriding a primitive - which would invert the layering.
+
+     THE COLOUR IS `--fg-muted`, NOT A SURFACE. The pre-existing rule used
+     `--surface-active`, which is the wrong role twice over: surfaces are for
+     "anything holding content" (the layer-2 note above), and a scrollbar
+     thumb holds no content. `--fg-muted` is the muted-foreground role, which
+     is what a low-contrast indicator actually is, and it is the token that
+     already has to stay legible against every surface in the app. The thumb
+     is a light neutral at low alpha, so it reads as a light bar on the dark
+     canvas, on a card, and inside a blurred glass panel alike - which is how
+     it survives being dragged across bright artwork without a second colour
+     scheme for the bright case.
+
+     IDLE 34% IS DELIBERATELY QUIET BUT NOT INVISIBLE. §7 is explicit that a
+     scrollbar nobody can find has failed, and the previous rule sat at 90% of
+     an already-dark surface, which is visible but flat - present at rest,
+     identical when grabbed, and therefore carrying no information. Three
+     steps turn it into a readout: how far down you are (position), how
+     responsive it is (hover), and that a drag is live (active). */
+  --scrollbar-size: var(--p-scrollbar-size);
+  --scrollbar-radius: var(--p-radius-xs);
+
+  /* §6: a track must never compete with content, artwork or lyrics. Fully
+     transparent, so the scrollbar contributes no value of its own and the
+     surface behind it shows through unchanged. */
+  --scrollbar-track: transparent;
+
+  --scrollbar-opacity: 34%;
+  --scrollbar-hover-opacity: 52%;
+  --scrollbar-active-opacity: 74%;
+
+  --scrollbar-thumb: color-mix(
+    in oklab,
+    var(--fg-muted) var(--scrollbar-opacity),
+    transparent
+  );
+  --scrollbar-thumb-hover: color-mix(
+    in oklab,
+    var(--fg-muted) var(--scrollbar-hover-opacity),
+    transparent
+  );
+  --scrollbar-thumb-active: color-mix(
+    in oklab,
+    var(--fg-muted) var(--scrollbar-active-opacity),
+    transparent
+  );
+
+  /* Reuses the existing motion scale rather than adding a duration primitive:
+     a thumb fading between two alphas is a 140ms job, and a fourth entry in
+     `--p-duration-*` for a single caller would be a scale with one user. */
+  --scrollbar-duration: var(--p-duration-fast);
+  --scrollbar-easing: var(--p-ease-standard);
+
+  /* LAYER 2b — AURORA GLASS (Phase 53)
+
+     The surface hierarchy Glass Mode resolves to. There are exactly THREE
+     fill levels and THREE border levels, and they are named by DEPTH rather
+     than by component, because a component that needed a fourth name is a
+     component that has stopped being a surface and started being a card.
+
+       chrome   header, sidebar, bottom navigation, player. Translucent
+                already, and the largest area, so the most opaque of the
+                three: this is the surface content scrolls behind.
+       float    dialogs, sheets, popovers, menus, the queue. Smallest area,
+                densest text, so the firmest backdrop.
+       nested   controls INSIDE an already-blurred surface - the header
+                search field above all. The most transparent, and it carries
+                no backdrop-filter of its own; see the note in the
+                `.aurora-glass-nested` rule for why that is the correct
+                glass behaviour and not a compromise.
+
+     The three alphas are one user control plus a per-level lift, clamped so
+     a slider at its maximum cannot produce an invalid `color-mix`.
+     ====================================================================== */
+
+  --glass-chrome-alpha: min(
+    96%,
+    calc((var(--p-appearance-alpha) + var(--p-appearance-chrome-lift)) * 100%)
+  );
+  --glass-float-alpha: min(
+    96%,
+    calc((var(--p-appearance-alpha) + var(--p-appearance-float-lift)) * 100%)
+  );
+  --glass-nested-alpha: calc(var(--p-appearance-alpha) * 100%);
+
+  --glass-chrome: color-mix(
+    in oklab,
+    var(--p-neutral-1) var(--glass-chrome-alpha),
+    transparent
+  );
+  --glass-float: color-mix(
+    in oklab,
+    var(--p-neutral-2) var(--glass-float-alpha),
+    transparent
+  );
+  --glass-nested: color-mix(
+    in oklab,
+    var(--p-neutral-1) var(--glass-nested-alpha),
+    transparent
+  );
+
+  /* Borders. Alpha-based and LOW, which is the whole of §25: in Glass Mode a
+     separator should be a luminous hairline you notice when you look for it,
+     not a line that competes with the text. The floors are not zero so an
+     edge is still perceptible at intensity 0 - a border set to fully
+     transparent removes a structural cue that the layout depends on, and
+     "no border" is expressed by omitting the edge class, not by asking for
+     zero alpha. */
+  --glass-border-subtle: oklch(
+    1 0 0 / calc(0.02 + var(--p-appearance-border) * 0.14)
+  );
+  --glass-border: oklch(1 0 0 / calc(0.03 + var(--p-appearance-border) * 0.2));
+  --glass-border-strong: oklch(
+    1 0 0 / calc(0.06 + var(--p-appearance-border) * 0.32)
+  );
+  /* There is deliberately no `--glass-border-active`. An alias of
+     `--accent-ring` was tried here and removed: focus is expressed through the
+     accent ring, which is stronger than any border could be and is already the
+     established focus token, and a second name for one value is a second thing
+     to keep in step. "Active" as a *state* is carried by the switch's own
+     `aria-checked`, its On/Off word and its check glyph - never by a border
+     colour. */
+  /* Separators use `--glass-border-subtle`, the same role as the other edges.
+     A `--glass-divider` role existed here at 0.02 + 0.16 and was removed: it
+     differed from `--glass-border-subtle` by two hundredths of an alpha, had no
+     call site, and a divider that is a *different* colour from the panel edge it
+     sits inside is a decision nobody would be able to see the reasoning for
+     later. Divider and edge are the same job. */
+
+  /* The lit-from-above cue. One 1px inset highlight on the top edge is what
+     separates "a translucent panel" from "a rectangle with a colour", and it
+     costs one composited shadow rather than a second gradient layer. */
+  --glass-highlight: oklch(
+    1 0 0 / calc(0.02 + var(--p-appearance-border) * 0.12)
+  );
+  --glass-shadow: var(--p-shadow-glass);
+
+  /* The backdrop filter each level applies, as a whole value so the
+     `backdrop-filter` declaration itself appears once per level. */
+  --glass-filter: blur(var(--p-appearance-blur))
+    saturate(var(--p-appearance-saturation));
+  --glass-filter-float: blur(min(36px, calc(var(--p-appearance-blur) * 1.6)))
+    saturate(var(--p-appearance-saturation));
+
+  /* ======================================================================
+     LAYER 3 — COMPONENT TOKENS
+     Bindings for surfaces that must diverge from the general system.
+     ====================================================================== */
+
+  --player-background: oklch(0.16 0.014 285 / 0.92);
+  --player-border: var(--border-subtle);
+  --player-progress: var(--accent);
+  --player-progress-track: var(--p-neutral-4);
+
+  --dialog-background: var(--surface-overlay);
+  --dialog-border: var(--border-default);
+
+  --track-row-hover: var(--surface-hover);
+  --track-row-active: var(--surface-selected);
+  --track-row-active-indicator: var(--accent);
+
+  --control-height-sm: var(--p-control-height-sm);
+  --control-height-md: var(--p-control-height-md);
+  --control-height-lg: var(--p-control-height-lg);
+  --control-height-touch: var(--p-control-height-touch);
+
+  --icon-size-xs: var(--p-icon-size-xs);
+  --icon-size-sm: var(--p-icon-size-sm);
+  --icon-size-md: var(--p-icon-size-md);
+  --icon-size-lg: var(--p-icon-size-lg);
+  --icon-size-xl: var(--p-icon-size-xl);
+
+  --layout-max: var(--p-layout-max);
+  --layout-sidebar: var(--p-layout-sidebar);
+  --layout-player: var(--p-layout-player);
+
+  --artwork-thumb: var(--p-artwork-thumb);
+  --artwork-small: var(--p-artwork-small);
+  --artwork-medium: var(--p-artwork-medium);
+  --artwork-large: var(--p-artwork-large);
+  --artwork-hero: var(--p-artwork-hero);
+
+  /* ======================================================================
+     LAYER 3b — THE AURORA BACKDROP (Phase 53)
+
+     The background is not painted on `body`. It is a fixed, non-interactive
+     layer inside the application shell, and this is its whole vocabulary.
+
+     WHY NOT `body`. The raw image is never what the user sees (§14): it is
+     composited under a scrim and an aurora wash, and the amount of both is
+     adjustable at runtime. A `body` background would have to be recomputed
+     as a single flattened colour, which is exactly the flattening that makes
+     a background look like a texture pasted behind a page.
+
+     WHY NOT A COMPONENT'S OWN BACKGROUND. It has to sit below every surface
+     and survive every route, so it belongs to the shell, not to any of the
+     eleven surfaces that sit on top of it.
+
+     `--aurora-background-image` is `none` by default and is set to a
+     `url()` by the appearance layer, because WHICH image is in use is a user
+     preference and not a design decision. The three gradients below are the
+     treatment that image always gets, so a raw photograph is never visible
+     edge-to-edge: scrim first for contrast, aurora wash second for identity
+     (§14's order, and the order matters - a tint under a scrim is invisible).
+     ====================================================================== */
+
+  /* The image itself. Set at runtime; `cover` in the rule that uses it. */
+  --aurora-background-image: none;
+
+  /* Contrast protection floor (§49, §63). The scrim is allowed to go as low
+     as the user drags it, but never to zero: a bright photograph under
+     `fg-primary` text is unreadable, and requiring every user to discover
+     that and find a usable dimming themselves is not a readability
+     strategy, it is a support ticket. */
+  --p-appearance-scrim-floor: 0.2;
+
+  --aurora-scrim-top: min(
+    100%,
+    calc(
+      (var(--p-appearance-dim) * 0.9 + var(--p-appearance-scrim-floor) * 0.5) *
+        100%
+    )
+  );
+  --aurora-scrim-bottom: min(
+    100%,
+    calc(
+      (var(--p-appearance-dim) + var(--p-appearance-scrim-floor) * 0.5) * 100%
+    )
+  );
+  --aurora-scrim: linear-gradient(
+    to bottom,
+    color-mix(
+      in oklab,
+      var(--p-neutral-0) var(--aurora-scrim-top),
+      transparent
+    ),
+    color-mix(
+      in oklab,
+      var(--p-neutral-0) var(--aurora-scrim-bottom),
+      transparent
+    )
+  );
+
+  /* The aurora wash. Two very large, very low-frequency, very dim radial
+     gradients anchored to opposite corners, so the room has a direction
+     rather than an even fog. At the default intensity this peaks around
+     alpha 0.10 - visible as atmosphere, never as a colour. */
+  --aurora-ambient-layer:
+    radial-gradient(
+      120% 80% at 10% -10%,
+      color-mix(
+          in oklab,
+          var(--aurora-violet) calc(var(--p-appearance-aurora) * 26%),
+          transparent
+        )
+        0%,
+      transparent 62%
+    ),
+    radial-gradient(
+      100% 70% at 92% 104%,
+      color-mix(
+          in oklab,
+          var(--aurora-cyan) calc(var(--p-appearance-aurora) * 18%),
+          transparent
+        )
+        0%,
+      transparent 58%
+    );
+
+  /* The artwork-reactive layer (§40). `--aurora-artwork-strength` is 0 or 1,
+     written by the palette alongside the colours, so the intensity stays
+     coupled to the user's own control instead of being a second dial. When
+     the user has not opted in, or nothing is playing, the whole declaration
+     is replaced with `none` rather than left as four fully transparent
+     gradients the compositor still has to consider.
+
+     The four colours default to the static aurora triad, so the layer
+     resolves to something sensible in the server-rendered markup, before any
+     palette has been derived, and on the track that has no artwork. They are
+     written imperatively by `src/lib/appearance/artwork-palette.ts`, which is
+     the only thing that ever changes them; the gradients themselves stay
+     here, because gradient syntax in a string built in JavaScript is a
+     second place for the visual system to live. */
+  --aurora-artwork-primary: var(--aurora-indigo);
+  --aurora-artwork-secondary: var(--aurora-cyan);
+  --aurora-artwork-glow: var(--aurora-violet);
+  --aurora-artwork-tint: var(--p-neutral-2);
+  --aurora-artwork-strength: 0;
+  --aurora-artwork-layer:
+    radial-gradient(
+      68% 52% at 50% 36%,
+      color-mix(
+          in oklab,
+          var(--aurora-artwork-glow)
+            calc(
+              var(--p-appearance-aurora) * 22% * var(--aurora-artwork-strength)
+            ),
+          transparent
+        )
+        0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      130% 95% at 50% 42%,
+      color-mix(
+          in oklab,
+          var(--aurora-artwork-primary)
+            calc(
+              var(--p-appearance-aurora) * 15% * var(--aurora-artwork-strength)
+            ),
+          transparent
+        )
+        0%,
+      transparent 72%
+    ),
+    radial-gradient(
+      90% 70% at 92% 96%,
+      color-mix(
+          in oklab,
+          var(--aurora-artwork-secondary)
+            calc(
+              var(--p-appearance-aurora) * 11% * var(--aurora-artwork-strength)
+            ),
+          transparent
+        )
+        0%,
+      transparent 64%
+    ),
+    radial-gradient(
+      140% 110% at 50% 50%,
+      color-mix(
+          in oklab,
+          var(--aurora-artwork-tint)
+            calc(
+              var(--p-appearance-aurora) * 9% * var(--aurora-artwork-strength)
+            ),
+          transparent
+        )
+        0%,
+      transparent 76%
+    );
+
+  /* The slow drift (§41). Transform-only, and declared inside the
+     `prefers-reduced-motion: no-preference` block further down, so it is
+     never even parsed into the cascade for someone who asked for less
+     motion. 60s over 3% of travel: below the threshold where anyone
+     describes it as movement, and slow enough that no frame of it is ever
+     the reason a transition stutters. */
+  --aurora-drift-duration: 60s;
+  --aurora-drift-distance: 3%;
+
+  /* ======================================================================
+     LEGACY ALIASES — TEMPORARY MIGRATION SHIM (delete in 44d)
+
+     Pure aliases so the existing call sites keep resolving while the
+     semantic layer is adopted. No literal value is redefined here, so
+     there is exactly one source of truth even mid-migration.
+
+     Removal contract, enforced by src/app/__tests__/design-tokens.test.ts:
+       - 44d deletes this block.
+       - The same test fails while any name below is still referenced by
+         a component, so the shim cannot outlive its usefulness.
+     ====================================================================== */
+
+  --background: var(--canvas-base);
+  --background-subtle: var(--canvas-raised);
+  --surface: var(--surface-base);
+  --surface-1: var(--surface-base);
+  --surface-2: var(--surface-raised);
+  --surface-3: var(--surface-overlay);
+  --text-primary: var(--fg-primary);
+  --foreground: var(--fg-primary);
+  --text-secondary: var(--fg-secondary);
+  --foreground-secondary: var(--fg-secondary);
+  --text-muted: var(--fg-muted);
+  --foreground-muted: var(--fg-muted);
+  --text-disabled: var(--fg-disabled);
+  --foreground-disabled: var(--fg-disabled);
+  --border: var(--border-subtle);
+  --accent-foreground: var(--fg-on-accent);
+  --success: var(--status-success);
+  --warning: var(--status-warning);
+  --danger: var(--status-danger);
+  --radius-card: var(--p-radius-lg);
+  --motion-fast: var(--p-duration-fast);
+  --motion-base: var(--p-duration-normal);
+  --motion-slow: var(--p-duration-slow);
+  --motion-ease: var(--p-ease-standard);
 }
 
+/* --------------------------------------------------------------------------
+   Theme mapping — colors, fonts, gradients.
+
+   `inline` substitutes each value textually into the utilities that use it,
+   which keeps `color-mix()` opacity modifiers working and avoids emitting a
+   second copy of every color variable.
+   -------------------------------------------------------------------------- */
 @theme inline {
-  --color-background: var(--background);
-  --color-surface-1: var(--surface-1);
-  --color-surface-2: var(--surface-2);
-  --color-surface-3: var(--surface-3);
+  /* Canvas + surfaces. */
+  --color-canvas: var(--canvas-base);
+  --color-canvas-raised: var(--canvas-raised);
+  --color-canvas-sunken: var(--canvas-sunken);
+  --color-surface: var(--surface-base);
+  --color-surface-base: var(--surface-base);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-active: var(--surface-active);
+  --color-surface-selected: var(--surface-selected);
+  --color-surface-sunken: var(--surface-sunken);
+
+  /* Legacy surface/background names, still emitted so 44d can migrate
+     call sites one at a time. */
+  --color-surface-1: var(--surface-base);
+  --color-surface-2: var(--surface-raised);
+  --color-surface-3: var(--surface-overlay);
+  --color-background: var(--canvas-base);
+  --color-background-subtle: var(--canvas-raised);
+
+  /* Foreground. */
+  --color-fg: var(--fg-primary);
+  --color-fg-primary: var(--fg-primary);
+  --color-fg-secondary: var(--fg-secondary);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-disabled: var(--fg-disabled);
+
+  /* Legacy foreground names. */
+  --color-foreground: var(--fg-primary);
+  --color-foreground-secondary: var(--fg-secondary);
+  --color-foreground-muted: var(--fg-muted);
+  --color-foreground-disabled: var(--fg-disabled);
+  --color-text-primary: var(--fg-primary);
+  --color-text-secondary: var(--fg-secondary);
+  --color-text-muted: var(--fg-muted);
+  --color-text-disabled: var(--fg-disabled);
+
+  /* Borders. */
+  --color-border: var(--border-subtle);
   --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
   --color-border-strong: var(--border-strong);
-  --color-text-primary: var(--text-primary);
-  --color-text-secondary: var(--text-secondary);
-  --color-text-muted: var(--text-muted);
+
+  /* Accent. */
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
-  --color-accent-foreground: var(--accent-foreground);
-  --gradient-aurora: var(--gradient-aurora);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-accent-active: var(--accent-active);
+  --color-accent-muted: var(--accent-muted);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-ring: var(--accent-ring);
+  --color-accent-foreground: var(--fg-on-accent);
+
+  /* Status. */
+  --color-success: var(--status-success);
+  --color-warning: var(--status-warning);
+  --color-danger: var(--status-danger);
+  --color-info: var(--status-info);
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+  --color-status-danger: var(--status-danger);
+  --color-status-info: var(--status-info);
+
+  /* Aurora ambient triad. */
+  --color-aurora-violet: var(--aurora-violet);
+  --color-aurora-indigo: var(--aurora-indigo);
+  --color-aurora-cyan: var(--aurora-cyan);
+
+  /* Component tokens exposed as utilities. */
+  --color-player: var(--player-background);
+  --color-player-progress: var(--player-progress);
+  --color-player-progress-track: var(--player-progress-track);
+  --color-track-row-active-indicator: var(--track-row-active-indicator);
+
+  /* Type families. */
+  --font-sans: var(--p-font-body);
+  --font-display: var(--p-font-display);
+  --font-mono: var(--p-font-mono);
+}
+
+/* --------------------------------------------------------------------------
+   Theme mapping — scales that generate utilities.
+
+   These namespaces are what make `rounded-md`, `shadow-2`, `blur-sheet`,
+   `ease-enter`, and `z-dialog` real utilities rather than hand-written
+   CSS or arbitrary values.
+
+   HAZARD: these namespaces are NOT empty. Tailwind ships default keys
+   for `--radius-*`, `--container-*`, `--font-*`, `--text-*`, etc., and
+   a key declared here with the same namespace+name REPLACES that
+   default. Partial overrides are the dangerous case — see the radius
+   and spacing notes below. `design-tokens.test.ts` parses Tailwind's
+   own `theme.css` and fails the build on any unintended shadowing.
+   -------------------------------------------------------------------------- */
+@theme {
+  /* The radius scale is declared in FULL, on purpose. Tailwind ships
+     default `--radius-*` values, so a partial override leaves the tail
+     of the scale on Tailwind's numbers and inverts it: with only
+     xs..xl remapped, `rounded-xl` became 1.25rem while `rounded-2xl`
+     stayed 1rem. Owning all eight keeps the scale monotonic and keeps
+     `--p-radius-*` the single authority behind every `rounded-*`. */
+  --radius-xs: var(--p-radius-xs);
+  --radius-sm: var(--p-radius-sm);
+  --radius-md: var(--p-radius-md);
+  --radius-lg: var(--p-radius-lg);
+  --radius-xl: var(--p-radius-xl);
+  --radius-2xl: var(--p-radius-2xl);
+  --radius-3xl: var(--p-radius-3xl);
+  --radius-4xl: var(--p-radius-4xl);
+
+  --shadow-1: var(--p-shadow-1);
+  --shadow-2: var(--p-shadow-2);
+  --shadow-3: var(--p-shadow-3);
+  --shadow-4: var(--p-shadow-4);
+  --shadow-glow: var(--p-shadow-glow);
+
+  --blur-floating: var(--p-blur-floating);
+  --blur-sheet: var(--p-blur-sheet);
+  --blur-ambient: var(--p-blur-ambient);
+
+  --ease-standard: var(--p-ease-standard);
+  --ease-emphasized: var(--p-ease-emphasized);
+  --ease-enter: var(--p-ease-enter);
+  --ease-exit: var(--p-ease-exit);
+  --ease-spring: var(--p-ease-spring);
+
+  --opacity-subtle: var(--p-opacity-subtle);
+  --opacity-muted: var(--p-opacity-muted);
+  --opacity-strong: var(--p-opacity-strong);
+  --opacity-overlay: var(--p-opacity-overlay);
+
+  --z-index-backdrop: var(--p-z-backdrop);
+  --z-index-base: var(--p-z-base);
+  --z-index-raised: var(--p-z-raised);
+  --z-index-sticky: var(--p-z-sticky);
+  --z-index-rail: var(--p-z-rail);
+  --z-index-player: var(--p-z-player);
+  --z-index-floating: var(--p-z-floating);
+  --z-index-dropdown: var(--p-z-dropdown);
+  --z-index-popover: var(--p-z-popover);
+  --z-index-sheet: var(--p-z-sheet);
+  --z-index-dialog: var(--p-z-dialog);
+  --z-index-toast: var(--p-z-toast);
+
+  /* NO `--spacing-*` ENTRIES, DELIBERATELY. See the spacing note in
+     `:root` and the regression test named "keeps the spacing scale
+     out of the container namespace". */
 }
 
 html {
@@ -40,24 +1061,898 @@ html {
 }
 
 body {
-  background: var(--background);
-  color: var(--text-primary);
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  background: var(--canvas-base);
+  color: var(--fg-primary);
+  font-family: var(--p-font-body), ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--p-text-body);
+  line-height: var(--p-text-body-lh);
+  letter-spacing: var(--p-text-body-ls);
+  text-rendering: optimizeLegibility;
 }
 
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--p-radius-xs);
 }
 
 ::selection {
   background: color-mix(in oklab, var(--accent) 40%, transparent);
 }
 
-/* Respect users who request reduced motion: spinners, skeleton pulses,
- * and slide transitions become effectively instant while staying visible,
- * so loading state is still communicated without animation. */
+/* ==========================================================================
+   SCROLLBAR SYSTEM (§4, §5, §6, §7, §8, §13, §14, §17, §28)
+
+   The whole system is these rules. There is no component, no JavaScript and
+   no `ScrollArea` primitive, and §15 and §16 are the reason: the platform
+   already draws a scrollbar, responds to hover, drags, responds to the
+   keyboard, and gets touch right. Anything built on top of that would be a
+   worse version of it.
+
+   ONE MEDIA QUERY GATES ALL OF IT, AND IT IS `any-hover`, NOT `hover`.
+
+   §14 and §28 both say the same thing - respect the platform, and fall back
+   to native where custom styling does not apply - and on a touch device they
+   mean something specific. Styling `::-webkit-scrollbar` at all switches
+   Chromium and WebKit out of their native OVERLAY scrollbar and into a
+   CLASSIC one: a permanent gutter plus a bar that never auto-hides. On a
+   phone that is strictly worse than what the OS shipped, and it is worse in
+   the way that matters on a small screen: 10px of a 360px viewport gone, and
+   a permanently visible bar the user cannot make go away.
+
+   Critically this cannot be undone. There is no declaration that restores
+   overlay behaviour once `::-webkit-scrollbar` has been styled, so "style it
+   and then turn it off on touch" is not an available plan. The only way to
+   leave the platform alone is never to have styled it on that device - which
+   means the query has to gate the DECLARATION, not try to countermand it.
+
+   `any-hover: hover` is true exactly when a hover-capable pointer exists, so
+   it is the honest test: a mouse or trackpad gets the Aurora scrollbar, a
+   finger gets the one the phone's manufacturer tuned for the phone. It also
+   gets touch-capable laptops right - a Surface with both a trackpad and a
+   finger answers `hover`, so it keeps a real scrollbar, and it should.
+
+   `scrollbar-gutter` is inside the same gate on purpose. It reserves layout
+   space, and on a platform whose scrollbars overlay that reservation would
+   be a 10px phantom strip down the side of every page. The reservation is
+   part of the scrollbar system, so it switches with it. */
+@media (any-hover: hover) {
+  /* Firefox. `scrollbar-width: thin` is the platform's own compact size; the
+     width is not ours to set, so the 6-8px target is expressed through the
+     thumb's contrast instead. Firefox exposes no hover or active state for
+     `scrollbar-color`, so on Firefox the thumb sits at its idle opacity -
+     documented, not worked around, because a JS hover detector for a
+     cosmetic property would be a far worse trade than the missing step. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+
+  /* §12. A permanent gutter is the fix for the one layout instability this
+     app actually had: `dialog.tsx` locks the page with
+     `body { overflow: hidden }`, which removes the page scrollbar, which
+     widened every element on screen by the full gutter width. Measured in a
+     real browser: `<main>` went 990px -> 1000px on open and back on close,
+     so opening a dialog reflowed the page behind it.
+
+     `stable` rather than `both` on purpose. `both` would also reserve the
+     gutter on a page that cannot scroll at all, and §12 is explicit that the
+     reservation has to be verified rather than sprinkled; every route in this
+     app scrolls, so `stable` - reserve when a scrollbar can appear, do not
+     reserve when the content fits - is both sufficient and the smaller
+     promise. */
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  /* The GUTTER. Both axes, and never varied on hover: this value is a layout
+     reservation, and the entire reason the thumb can swell on hover without
+     moving the page is that this number does not change. */
+  *::-webkit-scrollbar {
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
+  }
+
+  /* §4. The corner is the square where a horizontal and a vertical track
+     meet. Left alone it paints as a filled notch, which on a transparent
+     track reads as a stray block of colour in the corner of a panel. */
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* §4, and the one declaration in the whole system that looks like nothing.
+     Styling a WebKit scrollbar opts into a CLASSIC scrollbar, and a classic
+     scrollbar draws stepper buttons at both ends of each axis unless they
+     are suppressed. Aurora declared `::-webkit-scrollbar` with no such rule,
+     so the browser's default arrow buttons were part of the scrollbar this
+     design was trying to make invisible. `display: none` is the whole fix. */
+  *::-webkit-scrollbar-button {
+    display: none;
+  }
+
+  /* IDLE. The transparent border plus `background-clip: content-box` is what
+     makes this a floating capsule with a margin rather than a bar painted
+     flush to the edge, and it costs no layout: the thumb box is still the
+     full gutter, only the painted area inside it is smaller. */
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border: var(--p-scrollbar-inset) solid transparent;
+    background-clip: content-box;
+    border-radius: var(--scrollbar-radius);
+  }
+
+  /* HOVER - the pointer is ON THE THUMB. The thumb swells by 1px per side
+     INSIDE the unchanged gutter: 4px -> 6px visible, no reflow. The colour
+     step is the substantive half; the width step is what makes the control
+     feel grabbable rather than merely tinted.
+
+     The selector is `::-webkit-scrollbar-thumb:hover` and NOT the
+     `::-webkit-scrollbar:hover::-webkit-scrollbar-thumb` descendant chain that
+     appears in older snippets. Two reasons, and the first is a hard one: the
+     chained form is rejected by the CSS validator in this build
+     (`src/app/globals.css` fails to compile on it), so it is not available at
+     any price here. The second is that it would have meant styling the thumb
+     from its ancestor, which is not a relationship the pseudo-element model
+     actually has. The cost of using the valid form is that hovering the
+     transparent track - 3px either side of the thumb - does not light the
+     thumb up, only hovering the thumb itself does. On a 4px-wide thumb that is
+     a target the user has to be accurate about, and the platform's own
+     scrollbars behave the same way, so this is not a regression against the
+     thing users already know. */
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+    border-width: var(--p-scrollbar-inset-hover);
+  }
+
+  /* ACTIVE - the pointer button is down on the thumb, which for the duration
+     of a drag is exactly the state. This is §2's "clear grab feedback" and
+     §7's strongest contrast, and it is the reason a flat 90%-opacity thumb was
+     a loss even though it was more visible than this one at rest: it never
+     told the user anything had changed. */
+  *::-webkit-scrollbar-thumb:active {
+    background-color: var(--scrollbar-thumb-active);
+  }
+}
+
+/* ==========================================================================
+   SCROLLBAR MOTION (§17)
+
+   Inside `no-preference`, so the declaration is never parsed at all for a
+   user who asked for reduced motion - the same two-layer defence the rest of
+   the file uses for decorative motion.
+
+   It cannot lean on the global `prefers-reduced-motion` safety net at the end
+   of this file, because that net is `*, ::before, ::after` and none of those
+   match a scrollbar pseudo-element. A `transition` declared on
+   `::-webkit-scrollbar-thumb` has to be switched off here or not at all.
+
+   ONLY `background-color` IS TRANSITIONED. The 1px border change on hover is
+   deliberately instant: `border-width` is a layout property, and animating it
+   would run a layout pass on every hover frame of every scrollbar in the app
+   to produce a two-pixel cosmetic difference (§16, §33). Colour alone gives
+   the whole perceptual effect - the thumb brightening as the pointer arrives
+   - with a compositor-only animation and nothing to reflow. */
+@media (any-hover: hover) and (prefers-reduced-motion: no-preference) {
+  *::-webkit-scrollbar-thumb {
+    transition: background-color var(--scrollbar-duration)
+      var(--scrollbar-easing);
+  }
+}
+
+/* ==========================================================================
+   AURORA BACKDROP + AURORA GLASS (Phase 53)
+
+   ONE ATTRIBUTE TURNS THE MODE ON. `data-aurora-glass="on"` is set on the
+   application shell root, and every glass rule in the application is scoped
+   to it. That is not a stylistic choice, it is the guarantee: with the
+   attribute absent, not one glass declaration is parsed into the cascade, so
+   "Glass Mode off" means *exactly* the pre-Phase-53 rendering rather than a
+   set of values chosen to resemble it. The alternative - defining every glass
+   role with an off-state value - makes the off state a second thing that has
+   to be kept correct, and it would drift the first time someone adjusted an
+   off-state value for a reason that only made sense off-state.
+
+   FOUR CLASSES, FOUR JOBS, AND NO FIFTH.
+
+     .aurora-glass         chrome: header, sidebar, bottom nav, player.
+     .aurora-glass-float   dialogs, sheets, popovers, menus, the queue.
+     .aurora-glass-nested  controls inside an already-blurred surface.
+     .aurora-glass-edge    border only: cards, rows, list sections.
+
+   `edge` exists because the most tempting mistake in a glass system is to
+   make everything a panel. A track row that is a translucent card turns a
+   dense library into a page of confetti (§33); a card with a luminous
+   hairline keeps the artwork dominant (§32). Separators get a lighter,
+   lower-opacity edge, which is the whole of §28.
+
+   `nested` is the subtle one. A control inside a surface that is ALREADY
+   blurring its backdrop must not add a second `backdrop-filter`: that is the
+   documented cost pattern in §44, and it is also, visually, redundant - the
+   blurred pixels are already behind it, so what a nested control needs is a
+   translucent fill and a hairline, not more blur. It is the correct glass
+   behaviour, not a cheaper version of it.
+
+   THE BLUR BUDGET, IN FULL. There are at most three `backdrop-filter` layers
+   anywhere in the application and they are never nested inside each other:
+   the chrome, the floating panels, and the dialog's own scrim. The
+   background layer uses `filter`, not `backdrop-filter`, and only when a
+   background image has actually been chosen.
+   ========================================================================== */
+
+/* The layer. Fixed, full-viewport, and inert: `pointer-events: none` is what
+   guarantees §67 - no control, text, drag, scroll or transport button can be
+   intercepted by a decorative layer, and nothing has to be re-checked when a
+   new one is added. */
+.aurora-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--p-z-backdrop);
+  pointer-events: none;
+  /* `layout paint`, never `strict`: size containment would collapse a
+     `position: fixed; inset: 0` element to nothing. */
+  contain: layout paint;
+  overflow: hidden;
+  background-color: var(--canvas-base);
+}
+
+.aurora-backdrop > * {
+  position: absolute;
+  inset: 0;
+}
+
+/* --- The image, if there is one --------------------------------------
+   `cover` + `center` + `no-repeat` is the whole of §13: the image is never
+   stretched, never letterboxed, and never repeated, at any of the ten
+   supported widths - because `cover` is a ratio operation, not a layout.
+   A 16:9 preset on a 360px portrait phone crops its sides; the same preset
+   on a 2560px ultrawide crops its top and bottom; neither is distorted.
+
+   `scale(1.04)` is unconditional and deliberate. A blurred layer samples
+   transparent black past its own edge, so the frame fades out over roughly
+   the blur radius; overscaling pushes that fade outside the viewport. At the
+   default blur of 0 it costs a 4% crop, which `cover` has usually already
+   taken, and in exchange the layer is correct at every blur value without a
+   conditional rule. */
+.aurora-backdrop-image {
+  background-image: var(--aurora-background-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: saturate(var(--p-appearance-bg-saturation))
+    blur(var(--p-appearance-bg-blur));
+  transform: scale(1.04);
+}
+
+/* --- The scrim --------------------------------------------------------
+   One element, two stacked `background-image` entries, so the compositor
+   paints the tint and the artwork reaction in a single pass. Order is
+   bottom-up in CSS: the artwork reaction is nearest the user, the aurora
+   wash sits on the scrim, the scrim sits on the image. */
+.aurora-backdrop-ambient {
+  background-image: var(--aurora-artwork-layer), var(--aurora-ambient-layer);
+}
+
+.aurora-backdrop-scrim {
+  background-image: var(--aurora-scrim);
+}
+
+/* No image means no scrim and no image layer at all. Two `display: none`
+   rules save a full-viewport composited layer and two gradient paints on
+   every page for every user who never chose a background. */
+[data-aurora-background="none"] .aurora-backdrop-image,
+[data-aurora-background="none"] .aurora-backdrop-scrim {
+  display: none;
+}
+
+/* Artwork reaction is opt-in, so an opted-out user paints no artwork
+   gradients at all - `none` instead of two fully transparent ones. */
+[data-aurora-artwork="off"] {
+  --aurora-artwork-layer: none;
+}
+
+/* The one combination in which the whole backdrop is a no-op: no image and
+   Glass Mode off. What is left is a flat `--canvas-base` fill, which is what
+   `body` already painted, so this configuration is pixel-equivalent to the
+   pre-Phase-53 application rather than merely close to it. */
+[data-aurora-background="none"][data-aurora-glass="off"]
+  .aurora-backdrop-ambient {
+  display: none;
+}
+
+/* ==========================================================================
+   AURORA GLASS — THE FOUR SURFACE CLASSES
+   ========================================================================== */
+
+[data-aurora-glass="on"] .aurora-glass {
+  background-color: var(--glass-chrome);
+  border-color: var(--glass-border);
+  backdrop-filter: var(--glass-filter);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+[data-aurora-glass="on"] .aurora-glass-float {
+  background-color: var(--glass-float);
+  border-color: var(--glass-border-strong);
+  backdrop-filter: var(--glass-filter-float);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--glass-shadow);
+}
+
+/* Fill and edge only. See the note at the head of this section: a control
+   already sitting on a blurred surface does not need - and should not have -
+   a second `backdrop-filter`. */
+[data-aurora-glass="on"] .aurora-glass-nested {
+  background-color: var(--glass-nested);
+  border-color: var(--glass-border);
+}
+
+/* Separators and panel edges. No fill, no blur, no shadow: the lightest
+   possible intervention, and the only one a dense list is allowed. */
+[data-aurora-glass="on"] .aurora-glass-edge {
+  border-color: var(--glass-border-subtle);
+}
+
+/* `data-aurora-blur="off"` is set when the user's blur control is at zero,
+   which the "Minimal" preset does. The declarations are then *removed*
+   rather than set to `blur(0px)`: a zero-radius `backdrop-filter` still
+   promotes the element to its own composited layer and still costs a
+   backdrop copy on every frame, so the honest way to express "no blur" is
+   to have no filter at all. This is the mechanism behind the claim that the
+   Minimal preset removes every backdrop-filter in the application. */
+[data-aurora-glass="on"][data-aurora-blur="off"] .aurora-glass,
+[data-aurora-glass="on"][data-aurora-blur="off"] .aurora-glass-float {
+  backdrop-filter: none;
+}
+
+/* FALLBACK, NOT A COSMETIC EXCEPTION (§73, §74).
+
+   Without `backdrop-filter` the fill is still translucent, which is not the
+   documented fallback: a semi-transparent panel with no blur behind it loses
+   the legibility that the blur was partly providing, and text sitting on a
+   photograph is the exact case §49 exists for. So where the effect is
+   genuinely unavailable the surfaces become an OPAQUE tint with a normal
+   border - not translucent-without-blur, and not a disabled feature. The
+   feature-detection query is checked twice because Safari needed the
+   prefixed property for longer than the unprefixed one existed. */
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  [data-aurora-glass="on"] .aurora-glass {
+    background-color: var(--surface-raised);
+  }
+  [data-aurora-glass="on"] .aurora-glass-float {
+    background-color: var(--surface-overlay);
+  }
+  [data-aurora-glass="on"] .aurora-glass-nested {
+    background-color: var(--surface-base);
+  }
+  /* The image layer keeps its `filter`, which is a much older property, so a
+     background image still dims correctly. The scrim's contrast floor is
+     unchanged and now does the readability work on its own, which is why the
+     floor exists independently of the blur. */
+  [data-aurora-glass="on"] .aurora-glass,
+  [data-aurora-glass="on"] .aurora-glass-float,
+  [data-aurora-glass="on"] .aurora-glass-nested {
+    backdrop-filter: none;
+  }
+}
+
+/* ==========================================================================
+   SCROLLBAR IN GLASS MODE (§8, §22)
+
+   A glass panel is translucent and sits on the aurora wash, so the backdrop
+   behind a scrollbar inside one is lighter and in motion, while the page
+   scrollbar sits on the flat canvas. The three base alphas were chosen
+   against the canvas.
+
+   The lift is 8-10 points. It is a safety margin, not a different design:
+   same colour, same radius, same three states. §7's floor is the constraint -
+   a thumb that cannot be located has failed - and glass is the surface where
+   that floor is closest to being missed.
+
+   WHY THE THREE `color-mix` LINES ARE REPEATED RATHER THAN JUST THE ALPHAS.
+   A custom property's `var()` references are substituted where the property
+   is DECLARED, not where it is used. `--scrollbar-thumb` on `:root` is
+   therefore already a finished `color-mix(...)` computed with 34%; flipping
+   `--scrollbar-opacity` on a descendant cannot retroactively re-substitute
+   the value that descendant inherited. So the three thumb tokens have to be
+   re-declared here for the alphas to reach them. It is three lines, it is
+   the same formula, and the alternative - a second colour system for glass -
+   is the thing this file exists to prevent.
+
+   SCOPE. The attribute sits on the application shell root, which is a
+   DESCENDANT of `html`. So this reaches every inner scroller - sidebar, queue,
+   dialog, menu, the full player - and deliberately not the page scroller,
+   whose backdrop is the canvas and whose base values are correct. */
+[data-aurora-glass="on"] {
+  --scrollbar-opacity: 42%;
+  --scrollbar-hover-opacity: 62%;
+  --scrollbar-active-opacity: 84%;
+
+  --scrollbar-thumb: color-mix(
+    in oklab,
+    var(--fg-muted) var(--scrollbar-opacity),
+    transparent
+  );
+  --scrollbar-thumb-hover: color-mix(
+    in oklab,
+    var(--fg-muted) var(--scrollbar-hover-opacity),
+    transparent
+  );
+  --scrollbar-thumb-active: color-mix(
+    in oklab,
+    var(--fg-muted) var(--scrollbar-active-opacity),
+    transparent
+  );
+}
+
+/* ==========================================================================
+   TYPOGRAPHY UTILITIES
+
+   One role per class, each backed by a size / line-height / tracking
+   token triple. `t-utility` is deliberately size-and-tracking only: it is
+   the replacement for the hardcoded `text-[11px]` that had crept into
+   six components, and those call sites sometimes override the color.
+   ========================================================================== */
+
+.t-display {
+  font-size: var(--p-text-display);
+  line-height: var(--p-text-display-lh);
+  letter-spacing: var(--p-text-display-ls);
+  font-weight: 700;
+}
+
+/* Phase 54: the display size gets a phone step, in ONE place.
+
+   `--p-text-display` is 2.5rem (40px) and was applied at every width. On the
+   album, artist, playlist, shared-playlist and track pages that is the `h1`,
+   and on home it is the hero title: at 360px the content box is 288px, so a
+   40px bold face fits roughly 12 characters per line and any ordinary album
+   or artist name ran to three lines and grew the header by 42px a line. It is
+   also the largest type in a layout that is otherwise 11-14px, so at 40px it
+   read as a mistake rather than as emphasis.
+
+   The step is declared here rather than at each call site so a heading cannot
+   pick a phone size independently of the token, and rather than as a Tailwind
+   `text-*` override so the token stays the single authority for the value.
+   1.75rem (28px) is the step: still the largest type in the product, still
+   unmistakably a display size, and about 17 characters per line at 360px.
+
+   This is a size step, not a squeeze: nothing is reduced below a readable
+   size to preserve a line count, and the line clamp below is a separate
+   decision applied per heading. */
+@media (width < 640px) {
+  .t-display {
+    font-size: 1.75rem;
+  }
+}
+.t-hero {
+  font-size: var(--p-text-hero);
+  line-height: var(--p-text-hero-lh);
+  letter-spacing: var(--p-text-hero-ls);
+  font-weight: 700;
+}
+.t-page-title {
+  font-size: var(--p-text-page-title);
+  line-height: var(--p-text-page-title-lh);
+  letter-spacing: var(--p-text-page-title-ls);
+  font-weight: 700;
+}
+.t-section-title {
+  font-size: var(--p-text-section-title);
+  line-height: var(--p-text-section-title-lh);
+  letter-spacing: var(--p-text-section-title-ls);
+  font-weight: 600;
+}
+.t-entity-title {
+  font-size: var(--p-text-entity-title);
+  line-height: var(--p-text-entity-title-lh);
+  letter-spacing: var(--p-text-entity-title-ls);
+  font-weight: 700;
+}
+.t-card-title {
+  font-size: var(--p-text-card-title);
+  line-height: var(--p-text-card-title-lh);
+  letter-spacing: var(--p-text-card-title-ls);
+  font-weight: 600;
+}
+.t-track-title {
+  font-size: var(--p-text-track-title);
+  line-height: var(--p-text-track-title-lh);
+  letter-spacing: var(--p-text-track-title-ls);
+  font-weight: 500;
+}
+.t-body {
+  font-size: var(--p-text-body);
+  line-height: var(--p-text-body-lh);
+  letter-spacing: var(--p-text-body-ls);
+}
+.t-metadata {
+  font-size: var(--p-text-metadata);
+  line-height: var(--p-text-metadata-lh);
+  letter-spacing: var(--p-text-metadata-ls);
+  color: var(--fg-muted);
+}
+.t-caption {
+  font-size: var(--p-text-caption);
+  line-height: var(--p-text-caption-lh);
+  letter-spacing: var(--p-text-caption-ls);
+  color: var(--fg-muted);
+}
+.t-label {
+  font-size: var(--p-text-label);
+  line-height: var(--p-text-label-lh);
+  letter-spacing: var(--p-text-label-ls);
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.t-eyebrow {
+  font-size: var(--p-text-label);
+  line-height: var(--p-text-label-lh);
+  letter-spacing: var(--p-text-label-ls);
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+/* Size + tracking only; the caller owns color. */
+.t-utility {
+  font-size: var(--p-text-utility);
+  line-height: var(--p-text-utility-lh);
+  letter-spacing: var(--p-text-utility-ls);
+}
+
+/* ==========================================================================
+   MOTION UTILITIES
+
+   Transitions are restricted to compositor-friendly properties (transform,
+   opacity, color, border-color) so nothing here can cost frames during
+   playback.
+   ========================================================================== */
+
+/* ==========================================================================
+   AURORA AMBIENT FILL
+
+   The canonical aurora blend, applied as a class rather than as a Tailwind
+   utility. Tailwind 4.3.3 has no code path that turns a named gradient
+   theme key into a `bg-gradient-*` utility — it only rewrites the
+   `bg-gradient-to-*` direction prefix — so the previous
+   `--gradient-aurora` theme entry generated nothing at all and the two
+   call sites rendered with no gradient. Verified against the real build
+   pipeline, not inferred.
+
+   One class, one value, one place.
+   ========================================================================== */
+
+.aurora-fill {
+  background-image: var(--aurora-gradient);
+}
+
+/* Now-playing equalizer: tiny GPU-friendly bars, paused under reduced motion. */
+.eq-bar {
+  height: 40%;
+  animation: aurora-eq 0.9s var(--p-ease-standard) infinite alternate;
+}
+.eq-bar-2 {
+  animation-delay: 0.25s;
+}
+.eq-bar-3 {
+  animation-delay: 0.5s;
+}
+@keyframes aurora-eq {
+  from {
+    height: 25%;
+  }
+  to {
+    height: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .eq-bar {
+    animation: none;
+    height: 60%;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Press feedback: a small compression, released on the next frame.
+     Inside this block, which is the §46 invariant: decorative motion is
+     gated at the declaration, so it is never parsed into the cascade when
+     motion is not wanted. Phase 54 briefly moved these two rules out, on
+     the reasoning that a reduced-motion user should still see press STATE.
+     The reasoning is right about the goal and wrong about the mechanism -
+     and the mechanism is what the invariant protects.
+
+     The state is still shown, because it never needed the scale. The
+     background/colour/border transitions are the state signal, and the
+     blanket net at the end of this file shortens them to 0.01ms: the change
+     lands instantly, with no animation. A reduced-motion user gives up the
+     2% compression - the motion they asked not to see - and keeps the
+     visible confirmation that the press registered. Declaring the rule
+     unconditionally to obtain that would put a `transform` in the cascade
+     for every user and switch it off again, which is the shape of bug the
+     invariant exists to make impossible. */
+  .aurora-press {
+    transition:
+      transform var(--p-duration-fast) var(--p-ease-standard),
+      background-color var(--p-duration-fast) var(--p-ease-standard),
+      color var(--p-duration-fast) var(--p-ease-standard),
+      border-color var(--p-duration-fast) var(--p-ease-standard);
+  }
+  .aurora-press:active {
+    transform: scale(0.98);
+  }
+
+  /* Hover lift for cards and entity headers. */
+  .aurora-rise {
+    transition:
+      transform var(--p-duration-normal) var(--p-ease-standard),
+      border-color var(--p-duration-normal) var(--p-ease-standard),
+      background-color var(--p-duration-normal) var(--p-ease-standard);
+  }
+  .aurora-rise:hover {
+    transform: translateY(-1px);
+  }
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: var(--p-duration-normal);
+  }
+
+  /* Ambient backdrop drift (Phase 53, §41, §42).
+     The ONLY looping animation in the application, and the only one that is
+     not attached to a state change. It is transform-only, alternates rather
+     than loops back, and travels `--aurora-drift-distance` (3%) over
+     `--aurora-drift-duration` (60s) - a rate at which no single frame is
+     attributable and nothing it moves can cost a frame of playback.
+
+     It is declared HERE, inside the no-preference block, for the same reason
+     `.aurora-press` is: a user who has asked for reduced motion must not
+     merely see it shortened, it must never be parsed into the cascade at
+     all. The blanket `reduce` net at the end of this file cannot do that,
+     because it can only override a declaration that already exists. */
+  @keyframes aurora-drift {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      transform: translate3d(0, var(--aurora-drift-distance), 0);
+    }
+  }
+  [data-aurora-background]:not([data-aurora-background="none"])
+    .aurora-backdrop-ambient {
+    animation: aurora-drift var(--aurora-drift-duration) var(--p-ease-standard)
+      infinite alternate;
+  }
+}
+
+/* ==========================================================================
+   PRESENCE — POP IN / POP OUT (§24-§27, §30)
+
+   One animation vocabulary for every surface that appears and disappears.
+   Before this there was no exit animation anywhere in the app: every menu,
+   popover, sheet and dialog was rendered as `{open ? <div/> : null}`, so
+   the element was destroyed on the frame the state flipped and the closing
+   animation could not exist. The only way to have one is to keep the node
+   mounted until the animation is over, which is what the `Presence` hook in
+   `src/components/ui/presence.tsx` does. This block supplies the pixels; the
+   hook owns the lifecycle.
+
+   Design rules, all deliberate:
+
+     * ENTER and EXIT are keyframes rather than transitions. A transition
+       needs the "from" value painted first; keyframes do not, so a node
+       that mounts already animates from its initial state instead of
+       flashing its final state for one frame.
+     * Closing is FASTER than opening (`--p-duration-fast` vs
+       `--p-duration-normal`). A dismissal the listener has to wait out
+       feels like latency, not polish.
+     * Only `opacity` and `transform` animate. Both are compositor-only, so
+       nothing here can cost frames during audio playback.
+     * The distances are small — 0.98 and 4px. A sheet that scales from 0.9
+       reads as a zoom effect, which is not what a queue panel is.
+     * Nothing loops. There is no infinite presence animation anywhere.
+
+   Under `prefers-reduced-motion: reduce` the blanket rule at the end of this
+   file collapses every duration to 0.01ms, so these still run, still
+   complete, and still fire their end — the element simply appears and
+   disappears without travelling. The lifecycle is identical either way; only
+   the motion is withheld. That is why the unmount is driven by a timer in
+   the hook rather than by `animationend`: the lifecycle must not depend on
+   whether the browser chose to paint the motion.
+   ========================================================================== */
+
+/* --- Backdrop: opacity only. A backdrop that slides looks like a bug. --- */
+@keyframes presence-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes presence-backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* --- Dialog / popover: fade with a whisper of scale. --- */
+@keyframes presence-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes presence-pop-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+/* --- Bottom sheet: rises from its own bottom edge. The transform is
+       translation, not scale, so the panel keeps its size — a queue that
+       grows while it opens reads as a different panel. --- */
+@keyframes presence-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes presence-sheet-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+/* --- Context menu: fades and drifts away from its trigger, so the motion
+       points at the thing that opened it. --- */
+@keyframes presence-menu-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes presence-menu-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes presence-menu-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.presence-backdrop[data-presence="entering"],
+.presence-backdrop[data-presence="entered"] {
+  animation: presence-backdrop-in var(--p-duration-normal) var(--p-ease-enter)
+    both;
+}
+.presence-backdrop[data-presence="exiting"] {
+  animation: presence-backdrop-out var(--p-duration-fast) var(--p-ease-exit)
+    both;
+}
+
+.presence-pop[data-presence="entering"],
+.presence-pop[data-presence="entered"] {
+  animation: presence-pop-in var(--p-duration-normal) var(--p-ease-enter) both;
+}
+.presence-pop[data-presence="exiting"] {
+  animation: presence-pop-out var(--p-duration-fast) var(--p-ease-exit) both;
+}
+
+.presence-sheet[data-presence="entering"],
+.presence-sheet[data-presence="entered"] {
+  animation: presence-sheet-in var(--p-duration-normal) var(--p-ease-enter) both;
+}
+.presence-sheet[data-presence="exiting"] {
+  animation: presence-sheet-out var(--p-duration-fast) var(--p-ease-exit) both;
+}
+
+.presence-menu[data-presence="entering"],
+.presence-menu[data-presence="entered"] {
+  animation: presence-menu-in-down var(--p-duration-fast) var(--p-ease-enter)
+    both;
+}
+.presence-menu[data-presence="exiting"] {
+  animation: presence-menu-out var(--p-duration-fast) var(--p-ease-exit) both;
+}
+.presence-menu-up[data-presence="entering"],
+.presence-menu-up[data-presence="entered"] {
+  animation: presence-menu-in-up var(--p-duration-fast) var(--p-ease-enter) both;
+}
+
+/* While an element is animating out it must not eat clicks. The node is
+   still in the layout — it has to be, that is the whole point — so without
+   this it would sit invisibly over the page swallowing every pointer event
+   for the length of the exit. `inert` covers the focus case for free. */
+[data-presence="exiting"] {
+  pointer-events: none;
+}
+/* ==========================================================================
+   TOUCH TARGET FLOOR (Phase 54)
+
+   THE RULE: on a touch-primary device, an interactive control is never
+   smaller than `--p-touch-target` (44px) in either axis. On a pointer
+   device none of this applies, so the compact desktop scale is untouched.
+
+   Why a class and not a blanket selector: a bare
+   `button { min-height: 44px }` inside a media query would silently resize
+   every control in the app, including the ones whose height is load-bearing
+   (a `h-8` chip inside a fixed-height toolbar, an avatar button that is
+   visually a pill inside a pill). Opting in per control makes each 44px a
+   decision rather than an accident, and it leaves the desktop cascade clean.
+
+   The class is a FLOOR, never a size. `min-height`/`min-width` on a control
+   that is already larger is a no-op, so the same class is correct on a 32px
+   desktop chip and a 160px desktop button alike.
+   ========================================================================== */
+@media (hover: none) and (pointer: coarse) {
+  .aurora-touch {
+    min-block-size: var(--p-touch-target);
+    min-inline-size: var(--p-touch-target);
+  }
+
+  /* A native range input paints its own track and reports a 16px box in
+     Chromium, which makes the single most-used control in the player a
+     16px-tall target. The input box IS the hit area, so raising the box
+     raises the target; `accent-accent` keeps the painted track centred, so
+     the control's appearance does not change. */
+  input[type="range"].aurora-touch {
+    min-block-size: var(--p-touch-target);
+    min-inline-size: 0;
+  }
+}
+
+/* ==========================================================================
+   REDUCED MOTION (§46)
+
+   Two layers of defense:
+
+     1. The decorative motion above is declared inside a
+        `prefers-reduced-motion: no-preference` block, so it is never
+        even parsed into the cascade when a user asks for reduced motion.
+     2. This blanket rule is the safety net for any transition declared
+        elsewhere in the app or by a dependency.
+
+   The net shortens motion; it never hides state. Focus rings, selection,
+   and every control's visual state survive untouched.
+   ========================================================================== */
 @media (prefers-reduced-motion: reduce) {
   *,
   ::before,
@@ -65,5 +1960,245 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   TEXT SELECTION (Phase 51 addendum)
+
+   THE RULE, and it is short enough to hold in your head:
+
+     Content the user came to read stays selectable. Chrome the user might
+     accidentally drag past stays unselectable.
+
+   "Content" means anything whose text IS the product: track titles, artist and
+   album names, playlist names and descriptions, error messages, share URLs,
+   ids, and any technical string a user may need to quote. Users select those to
+   search them, paste them into a message, or send them in a bug report.
+   Unselectable content is not a styling decision; it is the removal of an
+   ability, and a user who cannot select an error message cannot report it.
+
+   "Chrome" means the controls a user aims at with a pointer: transport
+   buttons, seek and volume sliders, drag handles, nav links, and icons. A
+   pointer drag that starts on a slider or a drag handle should move the
+   control, not paint a selection across half the page.
+
+   WHY THERE IS NO GLOBAL RULE. `* { user-select: none }` is the shortcut
+   everyone reaches for, and it is wrong here: it makes every piece of content
+   above uncopyable, and the damage is invisible in a screenshot because you
+   cannot see a selection that will never happen. There is deliberately no
+   `*`, no `body`, and no `:root` `user-select` declaration in this file.
+   `quality-gates.test.ts` fails the build if one appears.
+
+   WHERE `select-none` LIVES. Not as a blanket rule - on the interaction
+   surface itself. The smallest element that behaves like a control gets it, so
+   a button inside a card makes only the button unselectable and leaves the
+   card's text alone. It is written as a Tailwind class on the element, and
+   where an entire CATEGORY of hand-rolled control needed the same answer, as
+   the element-scoped `button` default just above rather than as a hundred
+   copies of the same class.
+
+   ========================================================================== */
+
+/* The default is already `auto`, which selects text. This rule exists to state
+   the invariant where the cascade can be read, and to defend against a future
+   ancestor rule leaking down into a field.
+
+   It is a DEFAULT, not a cage: specificity 0,0,1 loses to Tailwind's
+   `select-none` (0,1,0), so a component can still make a specific control
+   unselectable. The real guarantee that no text-entry field is ever made
+   unselectable is a test, not this rule - see
+   `src/components/__tests__/text-selection.test.tsx`.
+
+   No vendor prefix, deliberately. Unprefixed `user-select` is what the
+   property is called, and the browsers this app targets (see the
+   BroadcastChannel floor in ARCHITECTURE.md) all implement it unprefixed. A
+   prefixed duplicate would be a second, silently divergent answer.
+
+   ==========================================================================
+   WHY EVERY RULE IN THIS BLOCK IS INSIDE `@layer components`
+
+   Everything from here to the end of the pointer-cursor block is wrapped, and
+   that wrapper is load-bearing rather than stylistic.
+
+   Tailwind's `@import "tailwindcss"` declares the layer order
+   `properties, theme, base, components, utilities`. An UNLAYERED author rule
+   outranks every one of them - not by specificity, but categorically: layer
+   order is consulted before specificity is, and unlayered wins outright. So a
+   hand-written rule at the bottom of this file, outside any layer, silently
+   beats `disabled:cursor-default`, `select-text` and every other utility in the
+   app, no matter how the selectors compare.
+
+   That is not hypothetical. With `button:disabled { cursor: not-allowed }`
+   unlayered, the already-added row in `add-to-playlist-menu.tsx` - which
+   deliberately asks for a NEUTRAL cursor because a completed action is not a
+   failure - rendered a refusal cursor instead. The utility was in the file, the
+   comment above this block promised the local override would win, and the
+   override lost. Nothing in a screenshot shows a cursor.
+
+   Inside `components` the specificity argument above becomes true: the rules sit
+   above `base`, so they beat Tailwind's preflight and the browser defaults, and
+   below `utilities`, so a class at the call site decides. `components` is
+   therefore the only layer where a stylesheet default and a utility class can
+   coexist, which is the entire relationship this block is trying to express.
+
+   A NEW RULE ADDED BELOW MUST GO IN HERE TOO. Writing it outside the wrapper
+   works in isolation and then quietly overrides the app.
+   ========================================================================== */
+@layer components {
+  input,
+  textarea,
+  [contenteditable="true"] {
+    user-select: text;
+  }
+
+  /* Range inputs are controls, not text. A pointer drag across a seek bar or a
+   volume slider should move the value, not select the timeline behind it.
+   `player-controls.tsx` also sets this on the element itself, because a range
+   input is not a `Button` and does not inherit that component's classes. */
+  input[type="range"] {
+    user-select: none;
+  }
+
+  /* Images, and the SVG icons built by `ui/icons.tsx`, are decoration. They set
+   this on the element as well (see `base()` there); this is the stylesheet
+   backstop for any image or glyph that is not an icon - including the three
+   hand-written `<svg>` elements in `queue-panel.tsx`,
+   `track-action-menu.tsx` and `locale-switcher.tsx`, which are drawn with
+   `fill` rather than through `base()` and so never pass through it.
+
+   `pointer-events: none` is the second half, and it is here for the same reason
+   `base()` sets it: a decorative glyph must never intercept a click that was
+   aimed at the control containing it. Without it, the target of a click on a
+   button whose glyph is the widest child is the glyph, and the control's own
+   hit area becomes the exception rather than the rule. Nothing in the app
+   attaches a handler to an `<img>` or an `<svg>`, which is what makes this safe
+   to state globally - and that is not an accident to be re-checked per glyph but
+   the condition the rule depends on, so it is asserted in
+   `src/components/__tests__/text-selection.test.tsx`. */
+  img,
+  svg {
+    user-select: none;
+    pointer-events: none;
+  }
+
+  /* The other half of the rule above, and the reason it needed saying at all.
+
+   `Button` in `ui/button.tsx` has carried `select-none` since the selection
+   block was written, and every control built from that primitive behaved
+   accordingly. The roughly one hundred buttons that do NOT use it - the EQ
+   preset and toggle switches, the appearance radios, the header's locale
+   trigger, the queue's reorder items - were left selectable by accident rather
+   than by decision, so the same pill-shaped control was unselectable in one
+   surface and selectable in the next.
+
+   This is a `button` rule, not a `*` rule, and that distinction is the whole
+   argument. A button's label is part of the control: it is a command, and the
+   user aims at the whole shape rather than reading the word. A paragraph is
+   content, and this declaration does not reach it. The rule above already
+   refuses to reach content, and this one is scoped the same way.
+
+   Specificity is 0,0,1 and Tailwind's `select-text` is 0,1,0, so any control
+   that genuinely needs selectable text opts back in with a class and the
+   stylesheet yields. `input`, `textarea` and `select` are named as exclusions
+   rather than left to specificity: an editable control is never chrome, and
+   "never" should not depend on a cascade contest. */
+  button {
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  select,
+  [contenteditable="true"] {
+    user-select: text;
+  }
+
+  /* ==========================================================================
+   POINTER CURSOR (Phase 55)
+
+   The same shape of problem as the selection block above, and the same
+   answer: state the semantic default ONCE, here, and let Tailwind classes
+   handle only the exceptions.
+
+   WHY THE APP HAD NO CURSOR SYSTEM AT ALL. Browsers do not give
+   `<button>` a pointer cursor. Neither does Tailwind's preflight - it
+   resets `button { cursor: default }` and stops there. So before this
+   block, every button, menu item, tab, and dropdown trigger in Aurora
+   rendered the default arrow, and the only seven `cursor-pointer`
+   classes in the codebase were on sliders and a checkbox label. A user
+   aiming at a Play button got no confirmation that it was a target, and
+   the app's single strongest interaction affordance was missing from
+   all of it.
+
+   WHY THIS IS NOT THE FORBIDDEN `* { cursor: pointer }`. That rule makes
+   every element look clickable, including a paragraph, a timestamp, and
+   a heading - so the cursor stops carrying information and every
+   surface looks live. This block inverts the rule. It matches on the
+   elements that are interactive BY SEMANTIC, where a pointer is a fact
+   about the element rather than a decoration: a button, a link with an
+   href, a disclosure summary, a label bound to a control, a range input.
+   Every selector below answers "does this element already do something
+   when you click it?" and the answer for all of them is yes. A `div` is
+   not in the list, and neither is any element whose interactivity the
+   app has yet to give it.
+
+   Checkbox and radio are here for the same reason a button is, and they are
+   worth naming because they were the one case this block could have missed:
+   the EQ preset list and the appearance toggles render a NATIVE, visible
+   `accent`-coloured box inside a `<label>`, so the user aims at that box as
+   often as at the label, and the browser gives it the default arrow. Pointing
+   at the label is not enough when the label is most of the row.
+
+   The corollary is the second rule. `not-allowed` is what makes a
+   disabled control honest: a `disabled` button that still shows a
+   pointer is claiming an interaction it will refuse, and there is no
+   way to tell "broken" from "works" by looking at it.
+
+   WHY LOW SPECIFICITY, ON PURPOSE. Every rule here is a DEFAULT. A
+   `cursor-*` utility is specificity 0,2,0 and a Tailwind state variant
+   like `disabled:cursor-default` is the same, so both beat these
+   declarations - which is the intent. `add-to-playlist-menu.tsx`
+   deliberately gives an already-added row `disabled:cursor-default`
+   instead of `not-allowed`, because that row is not a failure, it is a
+   completed action, and a refusal cursor on it would read as an error.
+   That choice survives this block. Cursor styling is the place where a
+   local override must keep working, so the base must not be a cage.
+
+   WHAT IS DELIBERATELY ABSENT. No `cursor: wait` or `progress`, and no
+   `cursor: grab`. The first: a pending control keeps its pointer and says
+   "busy" with `aria-busy`, a spinner and `disabled` - the cursor is already
+   the honest answer, and swapping it mid-click reads as a hang. The second:
+   Aurora has no drag-and-drop. Queue and playlist reordering are Move up /
+   Move down buttons, so a `grab` cursor anywhere would be a lie about an
+   interaction that does not exist. `col-resize`, `zoom-in` and friends are
+   absent for the same reason - they were audited and none of them have a
+   corresponding interaction to describe.
+   ========================================================================== */
+
+  button:not(:disabled),
+  a[href],
+  summary,
+  label[for],
+  input[type="range"],
+  input[type="checkbox"],
+  input[type="radio"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  a[aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  /* Text entry, stated here so the `button` rule above cannot be misread as
+   applying to it. The browser already defaults these to `cursor: text`; the
+   rule is here so the intent survives a future `cursor-*` utility landing on a
+   field wrapper, and so the reason is readable next to the declaration. */
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  [contenteditable="true"] {
+    cursor: text;
   }
 }

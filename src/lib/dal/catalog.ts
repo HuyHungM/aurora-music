@@ -1,4 +1,4 @@
-import type { PrismaClient, Prisma } from "@/generated/prisma/client";
+import type { PrismaClient } from "@/generated/prisma/client";
 import type { Album, Artist, Track } from "@/lib/domain";
 
 export async function upsertArtist(
@@ -61,6 +61,26 @@ export async function upsertAlbum(
   return row.id;
 }
 
+/**
+ * Shared, unowned catalog rows. There is no owner column, so there is
+ * nothing to authorize a write against - which makes the WRITE PATH the
+ * only trust boundary that exists here.
+ *
+ * `streamUrl`, `previewUrl` and `metadata` are deliberately NOT accepted.
+ * Every production caller of this function is fed a `Track` that arrived
+ * from a client payload (`likeTrackAction`, `recordPlayedAction`,
+ * `addTrackToPlaylistAction` - see `dal/like.ts`, `dal/recently-played.ts`,
+ * `dal/playlist.ts`). Accepting them let any authenticated user overwrite a
+ * catalog row that every other user, and every anonymous visitor of a
+ * shared playlist, then reads back.
+ *
+ * A media URL is not needed here either: playback resolves a fresh
+ * `AudioSource` per load through `PlaybackController` and the controller
+ * never reads `streamUrl`/`previewUrl` as playback input
+ * (`playback/controller.ts`: "not even as a fallback"). Temporary playback
+ * URLs are memory-only by design (`docs/security.md`), and this is the one
+ * path that was still able to persist them.
+ */
 export async function upsertTrack(
   db: PrismaClient,
   track: Pick<
@@ -73,14 +93,11 @@ export async function upsertTrack(
     | "albumId"
     | "albumName"
     | "artworkUrl"
-    | "streamUrl"
-    | "previewUrl"
     | "duration"
     | "genres"
     | "releaseDate"
     | "providerUrl"
     | "explicit"
-    | "metadata"
   >,
 ): Promise<string> {
   const artistId = await upsertArtist(db, {
@@ -107,6 +124,10 @@ export async function upsertTrack(
         providerTrackId: track.id,
       },
     },
+    // `streamUrl`, `previewUrl` and `metadata` are intentionally absent in
+    // both branches: see the doc comment above. On create they stay NULL;
+    // on update an existing row keeps whatever it already had, so a client
+    // payload can no longer overwrite them.
     create: {
       provider: track.provider,
       providerTrackId: track.id,
@@ -115,13 +136,10 @@ export async function upsertTrack(
       albumId,
       duration: track.duration,
       artworkUrl: track.artworkUrl,
-      streamUrl: track.streamUrl,
-      previewUrl: track.previewUrl,
       genres: track.genres,
       releaseDate: track.releaseDate,
       providerUrl: track.providerUrl,
       explicit: track.explicit,
-      metadata: toJsonValue(track.metadata),
     },
     update: {
       title: track.title,
@@ -129,25 +147,13 @@ export async function upsertTrack(
       albumId,
       duration: track.duration,
       artworkUrl: track.artworkUrl,
-      streamUrl: track.streamUrl,
-      previewUrl: track.previewUrl,
       genres: track.genres,
       releaseDate: track.releaseDate,
       providerUrl: track.providerUrl,
       explicit: track.explicit,
-      metadata: toJsonValue(track.metadata),
     },
   });
   return row.id;
-}
-
-export function toJsonValue(
-  value: unknown,
-): Prisma.InputJsonValue | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return value as Prisma.InputJsonValue;
 }
 
 export async function findTrackInternalId(

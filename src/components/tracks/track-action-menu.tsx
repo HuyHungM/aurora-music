@@ -3,7 +3,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { Track } from "@/lib/domain";
 import { useMusicEngine } from "@/lib/music/use-music-engine";
-import { CheckIcon, PlusIcon, SkipForwardIcon, ListMusicIcon } from "@/components/ui/icons";
+import { CheckIcon, PlusIcon, SkipForwardIcon, ListMusicIcon, RadioIcon } from "@/components/ui/icons";
+import { getRadioSession } from "@/lib/radio/instance";
+import { useLocale } from "@/components/i18n/locale-provider";
+import { usePresence } from "@/components/ui/presence";
 import { AddToPlaylistMenu } from "./add-to-playlist-menu";
 
 function TrackActionMenuContent({
@@ -13,6 +16,8 @@ function TrackActionMenuContent({
   isLiked,
   showAddToPlaylist,
   onAddToPlaylist,
+  openUp,
+  presenceProps,
 }: {
   track: Track;
   onClose: () => void;
@@ -20,8 +25,11 @@ function TrackActionMenuContent({
   isLiked?: boolean;
   showAddToPlaylist?: boolean;
   onAddToPlaylist?: () => void;
+  openUp: boolean;
+  presenceProps: { "data-presence": "entering" | "entered" | "exiting"; inert: boolean };
 }) {
   const engine = useMusicEngine();
+  const { t } = useLocale();
   const playNext = (track: Track) => engine?.queue.playNext(track);
   const addToQueue = (track: Track) => engine?.queue.add(track);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -74,14 +82,28 @@ function TrackActionMenuContent({
     onClose();
   };
 
+  const handleStartRadio = () => {
+    const session = getRadioSession();
+    if (engine && session) {
+      void session.startTrackRadio(engine, track, {
+        key: "radio.labelFromTrack",
+        params: { title: track.title },
+      });
+    }
+    onClose();
+  };
+
   let itemIdx = 0;
 
   return (
     <div
       ref={menuRef}
       role="menu"
-      aria-label="Track actions"
-      className="absolute right-0 top-full z-50 mt-1 w-48 overflow-hidden rounded-lg border border-border-subtle bg-surface-1 shadow-lg"
+      aria-label={t("menus.trackActions")}
+      {...presenceProps}
+      className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float absolute right-0 z-dropdown w-48 overflow-hidden rounded-lg border border-border-subtle ${
+        openUp ? "bottom-full mb-1" : "top-full mt-1"
+      }`}
     >
       <button
         ref={(el) => { if (el) itemsRef.current[itemIdx] = el; itemIdx++; }}
@@ -91,7 +113,7 @@ function TrackActionMenuContent({
         className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
       >
         <SkipForwardIcon size={16} className="text-text-muted" />
-        <span>Play next</span>
+        <span>{t("menus.playNext")}</span>
       </button>
       <button
         ref={(el) => { if (el) itemsRef.current[itemIdx] = el; itemIdx++; }}
@@ -101,7 +123,18 @@ function TrackActionMenuContent({
         className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
       >
         <PlusIcon size={16} className="text-text-muted" />
-        <span>Add to queue</span>
+        <span>{t("menus.addToQueue")}</span>
+      </button>
+      <button
+        ref={(el) => { if (el) itemsRef.current[itemIdx] = el; itemIdx++; }}
+        type="button"
+        role="menuitem"
+        aria-label={t("menus.startRadioFor", { title: track.title })}
+        onClick={handleStartRadio}
+        className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+      >
+        <RadioIcon size={16} className="text-text-muted" />
+        <span>{t("menus.startRadio")}</span>
       </button>
       {onLikeToggle ? (
         <button
@@ -116,7 +149,7 @@ function TrackActionMenuContent({
           ) : (
             <span className="h-4 w-4" />
           )}
-          <span>{isLiked ? "Unlike" : "Like"}</span>
+          <span>{isLiked ? t("menus.unlike") : t("menus.like")}</span>
         </button>
       ) : null}
       {showAddToPlaylist && onAddToPlaylist ? (
@@ -128,7 +161,7 @@ function TrackActionMenuContent({
           className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
         >
           <ListMusicIcon size={16} className="text-text-muted" />
-          <span>Add to playlist</span>
+          <span>{t("menus.addToPlaylist")}</span>
         </button>
       ) : null}
     </div>
@@ -152,9 +185,29 @@ export function TrackActionMenu({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [showPlaylistMenu, setShowPlaylistMenu] = useState(false);
+  // Open upward when the trigger sits close to the viewport bottom so
+  // menus/submenus are never trapped behind the fixed player bar.
+  const [openUp, setOpenUp] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
+  // One lifecycle for the whole open region (Phase 48). It is owned here
+  // rather than inside each child because the region has two mutually
+  // exclusive children: the menu and the playlist picker swap in the same
+  // slot, and a per-child lifecycle would mean two independent exit timers
+  // racing to decide which one unmounts. Keying on `isOpen` means the swap is
+  // instant (a navigation inside an open surface, not a dismissal) and every
+  // actual close animates exactly once.
+  const { mounted, presenceProps } = usePresence(isOpen);
+
+  const { t } = useLocale();
+  const handleToggle = () => {
+    if (!isOpen && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setOpenUp(window.innerHeight - rect.bottom < 300);
+    }
+    setIsOpen(!isOpen);
+  };
 
   const handleClose = useCallback(() => {
     setIsOpen(false);
@@ -174,6 +227,13 @@ export function TrackActionMenu({
     if (!isOpen) return;
 
     const handleClickOutside = (e: MouseEvent) => {
+      // Dialogs (e.g. the portaled create-playlist dialog) live outside
+      // the menu container by design; interacting with one must never
+      // collapse the menu underneath it.
+      const target = e.target as Element | null;
+      if (target?.closest?.('[role="dialog"]')) {
+        return;
+      }
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         handleClose();
       }
@@ -192,14 +252,14 @@ export function TrackActionMenu({
   };
 
   return (
-    <div ref={containerRef} className={`relative ${className ?? ""}`}>
+    <div ref={containerRef} className={`relative shrink-0 ${className ?? ""}`}>
       <button
         ref={triggerRef}
         type="button"
-        aria-label={`Actions for ${track.title}`}
+        aria-label={t("menus.actionsFor", { title: track.title })}
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={handleToggle}
         className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-2 hover:text-text-primary"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -208,7 +268,7 @@ export function TrackActionMenu({
           <circle cx="12" cy="19" r="1.5" />
         </svg>
       </button>
-      {isOpen && !showPlaylistMenu ? (
+      {mounted && !showPlaylistMenu ? (
         <TrackActionMenuContent
           track={track}
           onClose={handleClose}
@@ -216,10 +276,17 @@ export function TrackActionMenu({
           isLiked={isLiked}
           showAddToPlaylist={showAddToPlaylist}
           onAddToPlaylist={showAddToPlaylist ? handleAddToPlaylist : undefined}
+          openUp={openUp}
+          presenceProps={presenceProps}
         />
       ) : null}
-      {isOpen && showPlaylistMenu ? (
-        <AddToPlaylistMenu track={track} onClose={handlePlaylistMenuClose} />
+      {mounted && showPlaylistMenu ? (
+        <AddToPlaylistMenu
+          track={track}
+          onClose={handlePlaylistMenuClose}
+          openUp={openUp}
+          presenceProps={presenceProps}
+        />
       ) : null}
     </div>
   );

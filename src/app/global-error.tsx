@@ -1,6 +1,8 @@
 "use client";
 
 import { toUserFacingError } from "@/lib/errors/user-error";
+import { LOCALE_COOKIE, resolveLocale } from "@/lib/i18n/locale";
+import { getT } from "@/lib/i18n/translate";
 
 /**
  * Fatal root failure UI (Phase 21). Rendered by Next.js when the root
@@ -8,7 +10,23 @@ import { toUserFacingError } from "@/lib/errors/user-error";
  * html/body, inline critical styles (no globals.css), no router, no
  * providers. Offers reload (fresh boot) and in-place reset; shows no
  * technical details.
+ *
+ * Phase 42: still translated. With no provider tree alive, the locale
+ * comes straight from the anonymous-preference cookie (Vietnamese when
+ * absent) and every string resolves through the shared dictionaries.
  */
+function readCookieLocale(): ReturnType<typeof resolveLocale> {
+  try {
+    const match = document.cookie
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${LOCALE_COOKIE}=`));
+    return resolveLocale(match?.slice(LOCALE_COOKIE.length + 1));
+  } catch {
+    return resolveLocale(undefined);
+  }
+}
+
 export default function GlobalError({
   error,
   reset,
@@ -16,9 +34,11 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const mapped = toUserFacingError(error);
+  const locale = readCookieLocale();
+  const t = getT(locale);
+  const mapped = toUserFacingError(error, undefined, locale);
   return (
-    <html lang="en">
+    <html lang={locale}>
       <body style={{ margin: 0, background: "#08070d", color: "#f4f2ff" }}>
         <style>{`body{font-family:system-ui,sans-serif}button{cursor:pointer}`}</style>
         <div
@@ -36,11 +56,10 @@ export default function GlobalError({
         >
           <h1 style={{ fontSize: "1.5rem", margin: 0 }}>Aurora Music</h1>
           <p style={{ color: "#8b86a0", maxWidth: "24rem" }}>
-            The app ran into a problem it couldn&apos;t recover from.{" "}
-            {mapped.message}
+            {t("errors.description")} {mapped.message}
           </p>
           <p style={{ color: "#5c5a70", fontSize: "0.75rem" }}>
-            Error code: {mapped.code}
+            {t("errors.errorCode", { code: mapped.code })}
           </p>
           <div style={{ display: "flex", gap: "0.75rem" }}>
             <button
@@ -56,7 +75,7 @@ export default function GlobalError({
                 fontWeight: 600,
               }}
             >
-              Try again
+              {t("errors.tryAgain")}
             </button>
             <button
               type="button"
@@ -71,7 +90,7 @@ export default function GlobalError({
                 fontWeight: 600,
               }}
             >
-              Reload app
+              {t("errors.reloadApp")}
             </button>
           </div>
         </div>

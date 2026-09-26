@@ -12,6 +12,14 @@
 export interface PlaybackFormatCandidate {
   /** Deciphered, directly usable media URL. Always present. */
   url: string;
+  /**
+   * Provider format id (YouTube `itag`) when reported. Diagnostics only —
+   * selection never reads it, because it is provider vocabulary rather than a
+   * quality signal. Carried so a rejected candidate can be identified exactly
+   * in a log instead of only by bitrate, which YouTube derives from
+   * content-length and so repeats across renditions.
+   */
+  itag?: number;
   /** Full MIME type as reported (may include codecs parameter). */
   mimeType?: string;
   /** Bits per second as reported. */

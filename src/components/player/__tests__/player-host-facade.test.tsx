@@ -97,12 +97,12 @@ describe("PlayerHost facade under StrictMode", () => {
     ]);
 
     const bar = within(
-      await screen.findByRole("region", { name: "Player bar" }),
+      await screen.findByRole("region", { name: "Thanh phát nhạc" }),
     );
     expect(bar.getByText("Strict Song A")).toBeTruthy();
 
-    fireEvent.click(bar.getByRole("button", { name: "Up next" }));
-    const dialog = await screen.findByRole("dialog", { name: "Queue" });
+    fireEvent.click(bar.getByRole("button", { name: "Tiếp theo" }));
+    const dialog = await screen.findByRole("dialog", { name: "Hàng chờ" });
     expect(within(dialog).getByText("Strict Song A")).toBeTruthy();
     expect(within(dialog).getByText("Strict Song B")).toBeTruthy();
 

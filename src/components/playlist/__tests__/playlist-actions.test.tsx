@@ -22,6 +22,7 @@ const mockPlaylist: Playlist = {
   ownerId: "user-1",
   title: "My Playlist",
   description: "A great mix",
+  visibility: "private" as const,
   items: [],
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -45,28 +46,28 @@ describe("PlaylistActions", () => {
   it("renders rename and delete buttons", () => {
     render(<PlaylistActions playlist={mockPlaylist} />);
 
-    expect(screen.getByRole("button", { name: "Rename playlist" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Delete playlist" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Đổi tên playlist" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Xóa playlist" })).toBeTruthy();
   });
 
   it("opens rename dialog when rename is clicked", async () => {
     render(<PlaylistActions playlist={mockPlaylist} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename playlist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Đổi tên playlist" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Rename playlist")).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Đổi tên playlist" })).toBeTruthy();
     });
   });
 
   it("opens delete dialog when delete is clicked", async () => {
     render(<PlaylistActions playlist={mockPlaylist} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete playlist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa playlist" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Delete playlist")).toBeTruthy();
-      expect(screen.getByText(/Are you sure you want to delete/)).toBeTruthy();
+      expect(screen.getByText("Xóa playlist")).toBeTruthy();
+      expect(screen.getByText(/Bạn có chắc muốn xóa/)).toBeTruthy();
     });
   });
 
@@ -75,13 +76,13 @@ describe("PlaylistActions", () => {
 
     render(<PlaylistActions playlist={mockPlaylist} onPlaylistUpdated={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename playlist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Đổi tên playlist" }));
     await waitFor(() => {
-      expect(screen.getByText("Rename playlist")).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Đổi tên playlist" })).toBeTruthy();
     });
 
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Updated Playlist" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "Updated Playlist" } });
+    fireEvent.click(screen.getByRole("button", { name: "Lưu" }));
 
     await waitFor(() => {
       expect(updatePlaylistAction).toHaveBeenCalledWith("pl1", {
@@ -98,12 +99,12 @@ describe("PlaylistActions", () => {
 
     render(<PlaylistActions playlist={mockPlaylist} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete playlist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa playlist" }));
     await waitFor(() => {
-      expect(screen.getByText("Delete playlist")).toBeTruthy();
+      expect(screen.getByText("Xóa playlist")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa" }));
 
     await waitFor(() => {
       expect(deletePlaylistAction).toHaveBeenCalledWith("pl1");
@@ -114,30 +115,30 @@ describe("PlaylistActions", () => {
   it("closes rename dialog on cancel", async () => {
     render(<PlaylistActions playlist={mockPlaylist} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename playlist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Đổi tên playlist" }));
     await waitFor(() => {
-      expect(screen.getByText("Rename playlist")).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Đổi tên playlist" })).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Hủy" }));
 
     await waitFor(() => {
-      expect(screen.queryByText("Rename playlist")).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Đổi tên playlist" })).toBeNull();
     });
   });
 
   it("closes delete dialog on cancel", async () => {
     render(<PlaylistActions playlist={mockPlaylist} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete playlist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa playlist" }));
     await waitFor(() => {
-      expect(screen.getByText("Delete playlist")).toBeTruthy();
+      expect(screen.getByText("Xóa playlist")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Hủy" }));
 
     await waitFor(() => {
-      expect(screen.queryByText("Delete playlist")).toBeNull();
+      expect(screen.queryByText("Xóa playlist")).toBeNull();
     });
   });
 
@@ -146,16 +147,16 @@ describe("PlaylistActions", () => {
 
     render(<PlaylistActions playlist={mockPlaylist} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename playlist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Đổi tên playlist" }));
     await waitFor(() => {
-      expect(screen.getByText("Rename playlist")).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Đổi tên playlist" })).toBeTruthy();
     });
 
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Updated" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "Updated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Lưu" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Failed to update")).toBeTruthy();
+      expect(screen.getByText("Không cập nhật được playlist")).toBeTruthy();
     });
   });
 
@@ -164,15 +165,15 @@ describe("PlaylistActions", () => {
 
     render(<PlaylistActions playlist={mockPlaylist} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete playlist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa playlist" }));
     await waitFor(() => {
-      expect(screen.getByText("Delete playlist")).toBeTruthy();
+      expect(screen.getByText("Xóa playlist")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Failed to delete")).toBeTruthy();
+      expect(screen.getByText("Không xóa được playlist")).toBeTruthy();
     });
   });
 });
@@ -189,29 +190,29 @@ describe("PlaylistTrackActions", () => {
   it("renders move up and move down buttons", () => {
     render(<PlaylistTrackActions playlistId="pl1" tracks={mockTracks} trackIndex={1} />);
 
-    expect(screen.getByRole("button", { name: "Move track up" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Move track down" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chuyển bài lên" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chuyển bài xuống" })).toBeTruthy();
   });
 
   it("disables move up for first track", () => {
     render(<PlaylistTrackActions playlistId="pl1" tracks={mockTracks} trackIndex={0} />);
 
-    expect(screen.getByRole("button", { name: "Move track up" })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: "Move track down" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Chuyển bài lên" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Chuyển bài xuống" })).toHaveProperty("disabled", false);
   });
 
   it("disables move down for last track", () => {
     render(<PlaylistTrackActions playlistId="pl1" tracks={mockTracks} trackIndex={2} />);
 
-    expect(screen.getByRole("button", { name: "Move track up" })).toHaveProperty("disabled", false);
-    expect(screen.getByRole("button", { name: "Move track down" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Chuyển bài lên" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Chuyển bài xuống" })).toHaveProperty("disabled", true);
   });
 
   it("enables both buttons for middle track", () => {
     render(<PlaylistTrackActions playlistId="pl1" tracks={mockTracks} trackIndex={1} />);
 
-    expect(screen.getByRole("button", { name: "Move track up" })).toHaveProperty("disabled", false);
-    expect(screen.getByRole("button", { name: "Move track down" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Chuyển bài lên" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Chuyển bài xuống" })).toHaveProperty("disabled", false);
   });
 
   it("calls reorder action on move up", async () => {
@@ -219,7 +220,7 @@ describe("PlaylistTrackActions", () => {
 
     render(<PlaylistTrackActions playlistId="pl1" tracks={mockTracks} trackIndex={1} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Move track up" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chuyển bài lên" }));
 
     await waitFor(() => {
       expect(reorderPlaylistAction).toHaveBeenCalled();
@@ -231,7 +232,7 @@ describe("PlaylistTrackActions", () => {
 
     render(<PlaylistTrackActions playlistId="pl1" tracks={mockTracks} trackIndex={1} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Move track down" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chuyển bài xuống" }));
 
     await waitFor(() => {
       expect(reorderPlaylistAction).toHaveBeenCalled();
@@ -241,7 +242,7 @@ describe("PlaylistTrackActions", () => {
   it("does not call reorder action when move up is disabled", async () => {
     render(<PlaylistTrackActions playlistId="pl1" tracks={mockTracks} trackIndex={0} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Move track up" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chuyển bài lên" }));
 
     expect(reorderPlaylistAction).not.toHaveBeenCalled();
   });
@@ -249,7 +250,7 @@ describe("PlaylistTrackActions", () => {
   it("does not call reorder action when move down is disabled", async () => {
     render(<PlaylistTrackActions playlistId="pl1" tracks={mockTracks} trackIndex={2} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Move track down" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chuyển bài xuống" }));
 
     expect(reorderPlaylistAction).not.toHaveBeenCalled();
   });

@@ -27,6 +27,7 @@ const mockPlaylist: Playlist = {
   ownerId: "user-1",
   title: "My Playlist",
   description: "A great mix",
+  visibility: "private" as const,
   items: [],
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -65,7 +66,7 @@ describe("PlaylistDetailClient", () => {
       <PlaylistDetailClient playlist={mockPlaylist} tracks={mockTracks} isOwner={true} />,
     );
 
-    expect(screen.getByText(/3 tracks/)).toBeTruthy();
+    expect(screen.getByText(/3 bài hát/)).toBeTruthy();
   });
 
   it("renders tracks when playlist has tracks", () => {
@@ -83,8 +84,8 @@ describe("PlaylistDetailClient", () => {
       <PlaylistDetailClient playlist={mockPlaylist} tracks={[]} isOwner={true} />,
     );
 
-    expect(screen.getByText("This playlist is empty")).toBeTruthy();
-    expect(screen.getByText("Search for music and add tracks to get started.")).toBeTruthy();
+    expect(screen.getByText("Playlist này đang trống")).toBeTruthy();
+    expect(screen.getByText("Tìm nhạc và thêm bài hát để bắt đầu.")).toBeTruthy();
   });
 
   it("shows owner controls when isOwner is true", () => {
@@ -92,8 +93,8 @@ describe("PlaylistDetailClient", () => {
       <PlaylistDetailClient playlist={mockPlaylist} tracks={mockTracks} isOwner={true} />,
     );
 
-    expect(screen.getByRole("button", { name: "Rename playlist" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Delete playlist" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Đổi tên playlist" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Xóa playlist" })).toBeTruthy();
   });
 
   it("hides owner controls when isOwner is false", () => {
@@ -101,8 +102,8 @@ describe("PlaylistDetailClient", () => {
       <PlaylistDetailClient playlist={mockPlaylist} tracks={mockTracks} isOwner={false} />,
     );
 
-    expect(screen.queryByRole("button", { name: "Rename playlist" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Delete playlist" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Đổi tên playlist" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Xóa playlist" })).toBeNull();
   });
 
   it("shows track numbers for non-owners", () => {
@@ -120,8 +121,8 @@ describe("PlaylistDetailClient", () => {
       <PlaylistDetailClient playlist={mockPlaylist} tracks={mockTracks} isOwner={true} />,
     );
 
-    expect(screen.getAllByRole("button", { name: "Move track up" })).toHaveLength(3);
-    expect(screen.getAllByRole("button", { name: "Move track down" })).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "Chuyển bài lên" })).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "Chuyển bài xuống" })).toHaveLength(3);
   });
 
   it("removes track from playlist on remove action", async () => {

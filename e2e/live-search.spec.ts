@@ -16,7 +16,12 @@ test.describe("live search-to-play (Scenario B)", () => {
   }) => {
     test.setTimeout(150_000);
     await page.goto("/search?q=Never%20Gonna%20Give%20You%20Up");
-    const results = page.locator('section[aria-label="Track results"]');
+    // The results section is labelled with `search.tracksSection`, whose
+    // English value is "Tracks" — the same string as its visible heading. The
+    // selector is matched on the role and accessible name rather than on
+    // `section[aria-label=...]` so it is anchored to what a user of assistive
+    // technology would be told, which is the thing that must not drift.
+    const results = page.getByRole("region", { name: "Tracks" });
     await expect(results).toBeVisible({ timeout: 60_000 });
     await results.getByRole("button", { name: /^Play / }).first().click();
     await expect(

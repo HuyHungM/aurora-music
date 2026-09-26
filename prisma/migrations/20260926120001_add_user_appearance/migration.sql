@@ -1,0 +1,11 @@
+-- AlterTable: Aurora Glass appearance preference (Phase 53).
+-- Nullable JSONB column only, deliberately shaped like `locale`: null means
+-- "no explicit preference" and falls back to the anonymous cookie, then to
+-- DEFAULT_APPEARANCE. No backfill, no default, no NOT NULL.
+--
+-- The value is the compact versioned document produced by
+-- `src/lib/appearance/appearance.ts`, which omits every field equal to the
+-- shipped default - so a user who accepts the default stores an empty object,
+-- and a JSONB column (rather than a table of numeric columns) is what makes
+-- that omission representable at all.
+ALTER TABLE "User" ADD COLUMN "appearance" JSONB;

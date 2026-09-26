@@ -49,3 +49,16 @@ export function findSourceReference(
 ): SourceReference | undefined {
   return identity.sources.find((candidate) => candidate.source === source);
 }
+
+/**
+ * Every canonical key an identity can be addressed by, not just its primary
+ * source. Live in the domain layer because de-duplication and
+ * already-played memory must agree on what "the same track" means no matter
+ * which subsystem is asking — radio and Phase 47 queue continuation share
+ * this so neither can drift from the other.
+ */
+export function identityKeys(
+  identity: Pick<TrackIdentity, "sources">,
+): Set<string> {
+  return new Set(identity.sources.map((source) => `${source.source}:${source.id}`));
+}

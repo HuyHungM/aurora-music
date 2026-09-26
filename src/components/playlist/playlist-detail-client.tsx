@@ -6,10 +6,17 @@ import type { Playlist, Track } from "@/lib/domain";
 import { removeTrackFromPlaylistAction } from "@/app/actions/playlist";
 import { PlaylistPlayButton } from "@/components/playlist/playlist-play-button";
 import { PlaylistActions, PlaylistTrackActions } from "@/components/playlist/playlist-actions";
+import { PlaylistArtworkEditor } from "@/components/playlist/playlist-artwork-editor";
+import { PlaylistShareControl } from "@/components/playlist/playlist-share-control";
 import { TrackRow } from "@/components/tracks/track-row";
+import { catalogTrackKey } from "@/components/tracks/track-list";
+import { EntityHeader } from "@/components/ui/entity-header";
 import { EmptyState } from "@/components/ui/empty-state";
+import { useLocale } from "@/components/i18n/locale-provider";
+import { formatDate, plural } from "@/lib/i18n/translate";
 import { MusicNoteIcon } from "@/components/ui/icons";
 import type { TrackRef } from "@/lib/domain";
+import { ButtonLink } from "@/components/ui/button";
 
 export function PlaylistDetailClient({
   playlist,
@@ -21,6 +28,7 @@ export function PlaylistDetailClient({
   isOwner: boolean;
 }) {
   const router = useRouter();
+  const { t, locale } = useLocale();
   // Server props are the source of truth: router.refresh() re-renders
   // with fresh props (no remount), so reorder/rename results flow
   // straight through. Removals stay optimistic via a local id set —
@@ -66,74 +74,96 @@ export function PlaylistDetailClient({
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-2">
-        <p className="text-xs uppercase tracking-wide text-text-muted">Playlist</p>
-        <h1 className="truncate text-2xl font-bold tracking-tight text-text-primary sm:text-3xl">
-          {currentPlaylist.title}
-        </h1>
-        {currentPlaylist.description ? (
-          <p className="max-w-2xl text-sm leading-relaxed text-text-muted line-clamp-3">
-            {currentPlaylist.description}
-          </p>
-        ) : null}
-        <p className="text-xs text-text-muted">
-          Created{" "}
-          {currentPlaylist.createdAt
-            ? new Date(currentPlaylist.createdAt).toLocaleDateString()
-            : "recently"}{" "}
-          · {currentTracks.length} track{currentTracks.length === 1 ? "" : "s"}
-        </p>
-        <div className="mt-2 flex items-center gap-3">
-          {currentTracks.length > 0 ? (
-            <PlaylistPlayButton tracks={currentTracks} />
-          ) : null}
-          {isOwner ? (
-            <PlaylistActions
-              playlist={currentPlaylist}
-              onPlaylistUpdated={handlePlaylistUpdated}
-            />
-          ) : null}
-        </div>
-      </div>
+      <EntityHeader
+        eyebrow={t("playlist.eyebrow")}
+        title={currentPlaylist.title}
+        artwork={currentPlaylist.artwork}
+        artworkAlt={currentPlaylist.title}
+        meta={
+          <>
+            {currentPlaylist.createdAt
+              ? t("playlistDetail.createdOn", { date: formatDate(locale, currentPlaylist.createdAt) })
+              : t("playlistDetail.createdRecently")}{" "}
+            · {plural(locale, currentTracks.length, {
+              one: t("playlistDetail.tracksCountOne", { count: currentTracks.length }),
+              other: t("playlistDetail.tracksCount", { count: currentTracks.length }),
+            })}
+          </>
+        }
+        description={currentPlaylist.description}
+        actions={
+          <>
+            {currentTracks.length > 0 ? (
+              <PlaylistPlayButton tracks={currentTracks} />
+            ) : null}
+            {isOwner ? (
+              <>
+                <PlaylistArtworkEditor
+                  playlist={currentPlaylist}
+                  tracks={currentTracks}
+                  onArtworkUpdated={handlePlaylistUpdated}
+                />
+                <PlaylistShareControl
+                  playlist={currentPlaylist}
+                  onVisibilityChanged={handlePlaylistUpdated}
+                />
+              </>
+            ) : null}
+            {isOwner ? (
+              <PlaylistActions
+                playlist={currentPlaylist}
+                onPlaylistUpdated={handlePlaylistUpdated}
+              />
+            ) : null}
+          </>
+        }
+      />
 
       {currentTracks.length > 0 ? (
-        <div className="flex flex-col gap-1">
-          {currentTracks.map((track, index) => (
-            <div key={track.id} className="flex items-center gap-1">
-              {isOwner ? (
-                <PlaylistTrackActions
-                  playlistId={playlist.id}
-                  tracks={currentTracks}
-                  trackIndex={index}
-                  onReorder={handleReorder}
-                />
-              ) : (
-                <span className="w-8 shrink-0 text-center text-xs text-text-muted">
-                  {index + 1}
-                </span>
-              )}
-              <div className="flex-1">
-                <TrackRow
-                  track={track}
-                  collectionTracks={currentTracks}
-                  collectionIndex={index}
-                  showMenu={true}
-                  showAddToPlaylist={false}
-                  onRemoveFromPlaylist={
-                    isOwner
-                      ? () => handleRemoveTrack(track)
-                      : undefined
-                  }
-                />
+        <section aria-label={t("playlist.tracksSection")}>
+          <div className="flex flex-col gap-0.5">
+            {currentTracks.map((track, index) => (
+              // Occurrence identity: playlist membership rows are keyed by
+              // playlist-item id, so the same track could appear in
+              // multiple positions without colliding.
+              <div
+                key={
+                  currentPlaylist.items[index]?.id ??
+                  `${catalogTrackKey(track)}#${index + 1}`
+                }
+                className="flex items-center gap-1"
+              >
+                {isOwner ? (
+                  <PlaylistTrackActions
+                    playlistId={playlist.id}
+                    tracks={currentTracks}
+                    trackIndex={index}
+                    onReorder={handleReorder}
+                  />
+                ) : null}
+                <div className="min-w-0 flex-1">
+                  <TrackRow
+                    track={track}
+                    collectionTracks={currentTracks}
+                    collectionIndex={index}
+                    showMenu={true}
+                    showAddToPlaylist={true}
+                    position={index + 1}
+                    onRemoveFromPlaylist={
+                      isOwner ? () => handleRemoveTrack(track) : undefined
+                    }
+                  />
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </section>
       ) : (
         <EmptyState
           icon={<MusicNoteIcon size={28} />}
-          title="This playlist is empty"
-          description="Search for music and add tracks to get started."
+          title={t("playlist.emptyTitle")}
+          description={t("playlist.emptyDescription")}
+          action={<ButtonLink href="/search" variant="secondary" size="sm">{t("library.discoverMusic")}</ButtonLink>}
         />
       )}
     </div>

@@ -1,27 +1,10 @@
 "use client";
 
 import type { Track } from "@/lib/domain";
-import { useMusicEngine } from "@/lib/music/use-music-engine";
-import { Button } from "@/components/ui/button";
-import { PlayIcon } from "@/components/ui/icons";
+import { useLocale } from "@/components/i18n/locale-provider";
+import { CollectionPlayButton } from "@/components/ui/collection-play-button";
 
 export function PlaylistPlayButton({ tracks }: { tracks: Track[] }) {
-  const engine = useMusicEngine();
-
-  const handleClick = () => {
-    engine?.playCollection(tracks, 0);
-  };
-
-  return (
-    <Button
-      variant="primary"
-      size="sm"
-      onClick={handleClick}
-      aria-label="Play playlist"
-      className="gap-1.5"
-    >
-      <PlayIcon size={16} />
-      <span>Play</span>
-    </Button>
-  );
+  const { t } = useLocale();
+  return <CollectionPlayButton tracks={tracks} label={t("playlist.playPlaylist")} />;
 }

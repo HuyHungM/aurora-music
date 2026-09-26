@@ -26,24 +26,24 @@ describe("CreatePlaylistDialog", () => {
   it("renders dialog with title and form fields", () => {
     render(<CreatePlaylistDialog open={true} onClose={vi.fn()} />);
 
-    expect(screen.getByText("Create playlist")).toBeTruthy();
-    expect(screen.getByLabelText("Name")).toBeTruthy();
-    expect(screen.getByLabelText(/Description/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(screen.getByText("Tạo playlist")).toBeTruthy();
+    expect(screen.getByLabelText("Tên")).toBeTruthy();
+    expect(screen.getByLabelText(/Mô tả/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Tạo" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hủy" })).toBeTruthy();
   });
 
   it("does not render when closed", () => {
     render(<CreatePlaylistDialog open={false} onClose={vi.fn()} />);
 
-    expect(screen.queryByText("Create playlist")).toBeNull();
+    expect(screen.queryByText("Tạo playlist")).toBeNull();
   });
 
   it("calls onClose when cancel is clicked", () => {
     const onClose = vi.fn();
     render(<CreatePlaylistDialog open={true} onClose={onClose} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Hủy" }));
 
     expect(onClose).toHaveBeenCalledOnce();
   });
@@ -51,12 +51,12 @@ describe("CreatePlaylistDialog", () => {
   it("shows error for empty title on submit", async () => {
     render(<CreatePlaylistDialog open={true} onClose={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "  " } });
-    fireEvent.submit(screen.getByRole("button", { name: "Create" }).closest("form")!);
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "  " } });
+    fireEvent.submit(screen.getByRole("button", { name: "Tạo" }).closest("form")!);
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeTruthy();
-      expect(screen.getByText("Playlist name is required")).toBeTruthy();
+      expect(screen.getByText("Cần nhập tên playlist")).toBeTruthy();
     });
   });
 
@@ -68,9 +68,9 @@ describe("CreatePlaylistDialog", () => {
 
     render(<CreatePlaylistDialog open={true} onClose={onClose} />);
 
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "My Playlist" } });
-    fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "A great mix" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "My Playlist" } });
+    fireEvent.change(screen.getByLabelText(/Mô tả/), { target: { value: "A great mix" } });
+    fireEvent.click(screen.getByRole("button", { name: "Tạo" }));
 
     await waitFor(() => {
       expect(createPlaylistAction).toHaveBeenCalledWith({
@@ -90,26 +90,26 @@ describe("CreatePlaylistDialog", () => {
 
     render(<CreatePlaylistDialog open={true} onClose={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "My Playlist" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "My Playlist" } });
+    fireEvent.click(screen.getByRole("button", { name: "Tạo" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Failed to create")).toBeTruthy();
+      expect(screen.getByText("Không tạo được playlist")).toBeTruthy();
     });
   });
 
   it("disables submit button when title is empty", () => {
     render(<CreatePlaylistDialog open={true} onClose={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "Create" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Tạo" })).toHaveProperty("disabled", true);
   });
 
   it("enables submit button when title is entered", () => {
     render(<CreatePlaylistDialog open={true} onClose={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "My Playlist" } });
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "My Playlist" } });
 
-    expect(screen.getByRole("button", { name: "Create" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Tạo" })).toHaveProperty("disabled", false);
   });
 
   it("trims title whitespace", async () => {
@@ -117,8 +117,8 @@ describe("CreatePlaylistDialog", () => {
 
     render(<CreatePlaylistDialog open={true} onClose={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "  My Playlist  " } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "  My Playlist  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Tạo" }));
 
     await waitFor(() => {
       expect(createPlaylistAction).toHaveBeenCalledWith({
@@ -133,9 +133,9 @@ describe("CreatePlaylistDialog", () => {
 
     render(<CreatePlaylistDialog open={true} onClose={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "My Playlist" } });
-    fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "  A great mix  " } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "My Playlist" } });
+    fireEvent.change(screen.getByLabelText(/Mô tả/), { target: { value: "  A great mix  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Tạo" }));
 
     await waitFor(() => {
       expect(createPlaylistAction).toHaveBeenCalledWith({

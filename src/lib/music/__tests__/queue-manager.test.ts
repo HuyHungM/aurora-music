@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Track } from "@/lib/domain";
-import { NormalizationError, toTrackIdentity } from "@/lib/domain";
+import {
+  NormalizationError,
+  mergeSourceReference,
+  toTrackIdentity,
+} from "@/lib/domain";
+import { identityToTrack } from "@/lib/music/identity-track";
 import { usePlayerStore } from "@/lib/player/store";
 import { createQueueManager } from "@/lib/music/queue-manager";
 import type { QueueManager } from "@/lib/music/queue-manager";
@@ -77,25 +82,114 @@ describe("add", () => {
     expectPermutation(2);
   });
 
-  it("allows duplicate tracks and appends under shuffle", () => {
+  it("rejects a duplicate add and still appends correctly under shuffle", () => {
     const queue = manager();
     queue.add(track("a"));
     queue.add(track("a"));
-    expect(raw().queue).toHaveLength(2);
+    // One entry per canonical track: the second add is a no-op, and the
+    // queue ARRAY SLOT is the stable entry identity, so rejecting the add
+    // cannot invalidate the first one.
+    expect(raw().queue.map((entry) => entry.id)).toEqual(["a"]);
+    expectPermutation(1);
     // Shuffle requires an established current track (position >= 0),
     // matching how the UI enables it.
     queue.playAt(0);
     queue.setShuffle(true);
     queue.add(track("b"));
-    expect(raw().queue).toHaveLength(3);
+    expect(raw().queue.map((entry) => entry.id)).toEqual(["a", "b"]);
     expect(raw().currentTrack?.id).toBe("a");
-    expectPermutation(3);
+    expectPermutation(2);
+  });
+
+  it("treats a merged identity re-added as the same track", () => {
+    const queue = manager();
+    // A merged search group carries every source in metadata.sources, so
+    // re-adding the group (or one of its members) is the same track.
+    const group = identityToTrack(
+      mergeSourceReference(
+        toTrackIdentity(track("a"), { id: "aurora-a" }),
+        { source: "youtube", id: "yt-1" },
+      ),
+    );
+    queue.add(group);
+    queue.add(track("a"));
+    queue.add({ ...track("yt-1"), provider: "youtube" });
+    expect(raw().queue.map((entry) => entry.id)).toEqual([group.id]);
+    expectPermutation(1);
+  });
+
+  it("rejects a cross-provider rendering of a queued track", () => {
+    const queue = manager();
+    queue.add(track("a"));
+    // Same recording, different provider: an exact|strong matcher verdict,
+    // so one entry. Duration is carried so the duration signal agrees.
+    queue.add({
+      ...track("a"),
+      id: "dz-9",
+      provider: "deezer",
+      providerTrackId: "dz-9",
+      duration: 100,
+    });
+    expect(raw().queue).toHaveLength(1);
+    expectPermutation(1);
   });
 
   it("accepts TrackIdentity input", () => {
     const queue = manager();
     queue.add(toTrackIdentity(track("a"), { id: "aurora-a" }));
     expect(raw().queue.map((entry) => entry.id)).toEqual(["a"]);
+  });
+
+  it("absorbs a generated batch that overlaps the queue already playing", () => {
+    // Radio and keep-listening both append a batch through `add`. A batch
+    // that names tracks already queued - or a cross-provider rendering of one
+    // - must grow the queue by only its genuinely new tracks, which is what
+    // the coordinator's excludeKeys cannot guarantee on its own (it is a
+    // best-effort pre-filter, and a cross-provider hit needs the matcher).
+    const queue = manager();
+    for (const id of ["a", "b", "c"]) {
+      queue.add(track(id));
+    }
+    for (const candidate of [
+      track("b"),
+      track("d"),
+      track("c"),
+      {
+        ...track("a"),
+        id: "dz-a",
+        provider: "deezer",
+        providerTrackId: "dz-a",
+        duration: 180,
+      },
+      track("e"),
+    ]) {
+      queue.add(candidate);
+    }
+    expect(raw().queue.map((entry) => entry.id)).toEqual(["a", "b", "c", "d", "e"]);
+    expectPermutation(5);
+  });
+
+  it("keeps the play order a valid permutation after rejecting duplicates", () => {
+    const queue = manager();
+    manager().replace([track("a"), track("b"), track("c"), track("d")], {
+      autoplay: false,
+    });
+    queue.playAt(0);
+    queue.setShuffle(true);
+    expectPermutation(4);
+    const shuffled = [...raw().playOrder];
+
+    // Two rejections, one reposition. None may disturb the permutation, and
+    // none may change the current track.
+    queue.add(track("c"));
+    queue.add(track("a"));
+    queue.playNext(track("a"));
+
+    expectPermutation(4);
+    expect(raw().queue).toHaveLength(4);
+    expect(raw().currentTrack?.id).toBe("a");
+    // playNext("a") is a no-op: "a" IS the cursor entry.
+    expect(raw().playOrder).toEqual(shuffled);
   });
 });
 

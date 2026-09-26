@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { TrackActionMenu } from "@/components/tracks/track-action-menu";
 import { usePlayerStore } from "@/lib/player/store";
@@ -71,50 +71,59 @@ function makeTrack(id: string): Track {
 describe("TrackActionMenu", () => {
   it("renders menu button with accessible label", () => {
     render(<TrackActionMenu track={makeTrack("t1")} />);
-    expect(screen.getByRole("button", { name: "Actions for Track t1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Thao tác với Track t1" })).toBeTruthy();
   });
 
   it("opens menu when button is clicked", async () => {
     const user = userEvent.setup();
     render(<TrackActionMenu track={makeTrack("t1")} />);
     
-    await user.click(screen.getByRole("button", { name: "Actions for Track t1" }));
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
     
-    expect(screen.getByRole("menu", { name: "Track actions" })).toBeTruthy();
+    expect(screen.getByRole("menu", { name: "Thao tác với bài hát" })).toBeTruthy();
   });
 
   it("moves focus into the menu and returns it to the trigger on Escape", async () => {
     const user = userEvent.setup();
     render(<TrackActionMenu track={makeTrack("t1")} />);
-    const trigger = screen.getByRole("button", { name: "Actions for Track t1" });
+    const trigger = screen.getByRole("button", { name: "Thao tác với Track t1" });
 
     await user.click(trigger);
-    expect(document.activeElement?.textContent).toContain("Play next");
+    expect(document.activeElement?.textContent).toContain("Phát tiếp theo");
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("menu", { name: "Track actions" })).toBeNull();
+    // Focus returns at close request; the menu is still mounted, animating
+    // out and already inert, then unmounts when the exit ends. Queried by
+    // attribute, not role: an inert menu is correctly invisible to
+    // assistive tech, so a role query missing it would be the point.
     expect(document.activeElement).toBe(trigger);
+    expect(
+      document.querySelector('[data-presence="exiting"][role="menu"]'),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("menu", { name: "Thao tác với bài hát" })).toBeNull();
+    });
   });
 
   it("moves focus with arrow keys inside the menu", async () => {
     const user = userEvent.setup();
     render(<TrackActionMenu track={makeTrack("t1")} />);
-    await user.click(screen.getByRole("button", { name: "Actions for Track t1" }));
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
 
-    expect(document.activeElement?.textContent).toContain("Play next");
+    expect(document.activeElement?.textContent).toContain("Phát tiếp theo");
     await user.keyboard("{ArrowDown}");
-    expect(document.activeElement?.textContent).toContain("Add to queue");
+    expect(document.activeElement?.textContent).toContain("Thêm vào hàng chờ");
     await user.keyboard("{ArrowUp}");
-    expect(document.activeElement?.textContent).toContain("Play next");
+    expect(document.activeElement?.textContent).toContain("Phát tiếp theo");
   });
 
   it("shows Play next and Add to queue actions", async () => {
     const user = userEvent.setup();
     render(<TrackActionMenu track={makeTrack("t1")} />);
     
-    await user.click(screen.getByRole("button", { name: "Actions for Track t1" }));
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
     
-    expect(screen.getByRole("menuitem", { name: "Play next" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Add to queue" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Phát tiếp theo" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Thêm vào hàng chờ" })).toBeTruthy();
   });
 
   it("calls playNext when Play next is clicked", async () => {
@@ -127,8 +136,8 @@ describe("TrackActionMenu", () => {
     });
     
     render(<TrackActionMenu track={track} />);
-    await user.click(screen.getByRole("button", { name: "Actions for Track t1" }));
-    await user.click(screen.getByRole("menuitem", { name: "Play next" }));
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
+    await user.click(screen.getByRole("menuitem", { name: "Phát tiếp theo" }));
     
     const state = usePlayerStore.getState();
     expect(state.queue.map((t) => t.id)).toEqual(["existing", "t1"]);
@@ -144,8 +153,8 @@ describe("TrackActionMenu", () => {
     });
     
     render(<TrackActionMenu track={track} />);
-    await user.click(screen.getByRole("button", { name: "Actions for Track t1" }));
-    await user.click(screen.getByRole("menuitem", { name: "Add to queue" }));
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
+    await user.click(screen.getByRole("menuitem", { name: "Thêm vào hàng chờ" }));
     
     const state = usePlayerStore.getState();
     expect(state.queue.map((t) => t.id)).toEqual(["existing", "t1"]);
@@ -158,9 +167,9 @@ describe("TrackActionMenu", () => {
     const onLikeToggle = vi.fn();
     render(<TrackActionMenu track={makeTrack("t1")} showLike={true} onLikeToggle={onLikeToggle} />);
     
-    await user.click(screen.getByRole("button", { name: "Actions for Track t1" }));
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
     
-    expect(screen.getByRole("menuitem", { name: "Like" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Thích" })).toBeTruthy();
   });
 
   it("shows unlike action when showLike is true and isLiked is true", async () => {
@@ -168,18 +177,18 @@ describe("TrackActionMenu", () => {
     const onLikeToggle = vi.fn();
     render(<TrackActionMenu track={makeTrack("t1")} showLike={true} isLiked={true} onLikeToggle={onLikeToggle} />);
     
-    await user.click(screen.getByRole("button", { name: "Actions for Track t1" }));
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
     
-    expect(screen.getByRole("menuitem", { name: "Unlike" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Bỏ thích" })).toBeTruthy();
   });
 
   it("hides like action when showLike is false", async () => {
     const user = userEvent.setup();
     render(<TrackActionMenu track={makeTrack("t1")} showLike={false} />);
     
-    await user.click(screen.getByRole("button", { name: "Actions for Track t1" }));
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
     
-    expect(screen.queryByRole("menuitem", { name: "Like" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Unlike" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Thích" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Bỏ thích" })).toBeNull();
   });
 });

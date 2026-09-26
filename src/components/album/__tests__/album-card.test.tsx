@@ -27,7 +27,7 @@ describe("AlbumCard", () => {
 
   it("renders artist name", () => {
     render(<AlbumCard album={makeAlbum()} />);
-    expect(screen.getByText("Test Artist")).toBeTruthy();
+    expect(screen.getByText("Album · Test Artist")).toBeTruthy();
   });
 
   it("links to providerAlbumId when available", () => {

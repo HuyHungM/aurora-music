@@ -85,7 +85,7 @@ describe("Phase 6F accessibility and touch target fixes", () => {
     it("queue button meets 44px minimum", () => {
       usePlayerStore.setState({ currentTrack: makeTrack("1") });
       render(<MiniPlayer />);
-      const btn = screen.getByRole("button", { name: "Up next" });
+      const btn = screen.getByRole("button", { name: "Tiếp theo" });
       expect(btn.className).toContain("h-11");
       expect(btn.className).toContain("w-11");
     });
@@ -93,7 +93,7 @@ describe("Phase 6F accessibility and touch target fixes", () => {
     it("play button meets 44px minimum", () => {
       usePlayerStore.setState({ currentTrack: makeTrack("1") });
       render(<MiniPlayer />);
-      const btn = screen.getByRole("button", { name: "Play" });
+      const btn = screen.getByRole("button", { name: "Phát" });
       expect(btn.className).toContain("h-11");
       expect(btn.className).toContain("w-11");
     });
@@ -109,7 +109,7 @@ describe("Phase 6F accessibility and touch target fixes", () => {
         isQueueOpen: true,
       });
       render(<QueuePanel />);
-      const btn = screen.getByRole("button", { name: "Close queue" });
+      const btn = screen.getByRole("button", { name: "Đóng hàng chờ" });
       expect(btn.className).toContain("h-11");
       expect(btn.className).toContain("w-11");
     });
@@ -125,7 +125,7 @@ describe("Phase 6F accessibility and touch target fixes", () => {
         isQueueOpen: true,
       });
       render(<QueuePanel />);
-      const menuBtn = screen.getByRole("button", { name: "Actions for Track other" });
+      const menuBtn = screen.getByRole("button", { name: "Thao tác với Track other" });
       expect(menuBtn).toBeTruthy();
     });
   });

@@ -75,6 +75,14 @@ export function dbIsTrackLiked(email: string, providerTrackId: string): boolean 
   return runJson<boolean>("read", ["liked", email, providerTrackId]);
 }
 
+export function dbIsArtistFollowed(email: string): boolean {
+  return runJson<boolean>("read", ["followed", email]);
+}
+
+export function dbQueueSnapshotJson(email: string): unknown {
+  return runJson<unknown>("read", ["queuejson", email]);
+}
+
 export function dbPlaylistOwner(
   playlistId: string,
 ): { userId: string; email: string | null } | null {

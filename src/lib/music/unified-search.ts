@@ -34,6 +34,7 @@ import type {
   TrackMatcher,
 } from "@/lib/domain";
 import {
+  AUTO_MERGE_CLASSIFICATIONS,
   createTrackMatcher,
   mergeSourceReference,
   sourceReferenceKey,
@@ -79,8 +80,15 @@ export interface UnifiedSearchResult {
   diagnostics: UnifiedSearchDiagnostics;
 }
 
-/** Classifications allowed to auto-merge. `possible` never merges. */
-const MERGEABLE: readonly MatchClassification[] = ["exact", "strong"];
+/**
+ * Classifications allowed to auto-merge. `possible` never merges.
+ *
+ * Read from the matcher module rather than restated here: duplicate rejection
+ * (`domain/track-dedupe.ts`) reads the same constant, and two copies of "what
+ * counts as the same song" is precisely the drift this repository's
+ * canonical-identity work exists to prevent.
+ */
+const MERGEABLE = AUTO_MERGE_CLASSIFICATIONS;
 
 function emptyDiagnostics(): UnifiedSearchDiagnostics {
   return {

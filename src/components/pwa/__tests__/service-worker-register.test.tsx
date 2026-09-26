@@ -1,22 +1,36 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { ServiceWorkerRegister } from "@/components/pwa/service-worker-register";
 
 function stubServiceWorker(
   implementation?: Partial<{
     register: (url: string) => Promise<unknown>;
+    getRegistrations: () => Promise<
+      Array<{
+        unregister(): Promise<boolean>;
+        readonly active: { scriptURL: string } | null;
+        readonly waiting: { scriptURL: string } | null;
+        readonly installing: { scriptURL: string } | null;
+      }>
+    >;
   }>,
 ) {
   const register =
     implementation?.register ?? (async () => ({ scope: "/" }));
+  const getRegistrations =
+    implementation?.getRegistrations ?? (async () => []);
   Object.defineProperty(window.navigator, "serviceWorker", {
-    value: { register: vi.fn(register) },
+    value: { register: vi.fn(register), getRegistrations: vi.fn(getRegistrations) },
     configurable: true,
     writable: true,
   });
-  return (window.navigator as Navigator & { serviceWorker: { register: ReturnType<typeof vi.fn> } })
-    .serviceWorker;
+  return window.navigator as Navigator & {
+    serviceWorker: {
+      register: ReturnType<typeof vi.fn>;
+      getRegistrations: ReturnType<typeof vi.fn>;
+    };
+  };
 }
 
 function removeServiceWorker() {
@@ -32,6 +46,10 @@ async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "production");
+});
+
 afterEach(() => {
   cleanup();
   removeServiceWorker();
@@ -41,7 +59,7 @@ afterEach(() => {
 
 describe("service worker registration", () => {
   it("registers /sw.js once after load without blocking render", async () => {
-    const worker = stubServiceWorker();
+    const { serviceWorker: worker } = stubServiceWorker();
     const { container } = render(<ServiceWorkerRegister />);
     expect(container.firstChild).toBeNull();
     await settle();
@@ -50,7 +68,7 @@ describe("service worker registration", () => {
   });
 
   it("fails silently when registration rejects", async () => {
-    const worker = stubServiceWorker({
+    const { serviceWorker: worker } = stubServiceWorker({
       register: async () => {
         throw new Error("denied");
       },
@@ -65,5 +83,32 @@ describe("service worker registration", () => {
     removeServiceWorker();
     expect(() => render(<ServiceWorkerRegister />)).not.toThrow();
     await settle();
+  });
+
+  it("never registers outside production (development isolation)", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const { serviceWorker: worker } = stubServiceWorker();
+    render(<ServiceWorkerRegister />);
+    await settle();
+    expect(worker.register).not.toHaveBeenCalled();
+  });
+
+  it("releases a stale Aurora worker instead of registering in development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const unregister = vi.fn(async () => true);
+    const { serviceWorker: worker } = stubServiceWorker({
+      getRegistrations: async () => [
+        {
+          unregister,
+          active: { scriptURL: "http://localhost:3000/sw.js" },
+          waiting: null,
+          installing: null,
+        },
+      ],
+    });
+    render(<ServiceWorkerRegister />);
+    await settle();
+    expect(worker.register).not.toHaveBeenCalled();
+    expect(unregister).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useLocale } from "@/components/i18n/locale-provider";
 
 /**
  * Minimal online/offline state (Phase 21). Event-driven only: no polling,
@@ -40,6 +41,7 @@ export function useOnlineStatus(): boolean {
  */
 export function OfflineIndicator() {
   const online = useOnlineStatus();
+  const { t } = useLocale();
   if (online) {
     return null;
   }
@@ -47,9 +49,9 @@ export function OfflineIndicator() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed inset-x-0 top-3 z-50 mx-auto w-max max-w-[90%] rounded-full border border-border-subtle bg-surface-1 px-4 py-1.5 text-xs text-text-secondary shadow-lg"
+      className="fixed inset-x-0 top-[calc(0.75rem+env(safe-area-inset-top))] z-toast mx-auto w-max max-w-[90%] rounded-full border border-border-subtle bg-surface-1 px-4 py-1.5 text-xs text-text-secondary shadow-lg"
     >
-      You&apos;re offline. Music playback requires an internet connection.
+      {t("offline.message")}
     </div>
   );
 }

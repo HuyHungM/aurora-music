@@ -26,25 +26,25 @@ function makeError(digest?: string) {
 describe("AppError", () => {
   it("renders heading and description", () => {
     render(<AppError error={makeError()} reset={vi.fn()} />);
-    expect(screen.getByRole("heading", { name: "Something went wrong" })).toBeTruthy();
-    expect(screen.getByText(/unexpected error occurred/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Đã xảy ra lỗi" })).toBeTruthy();
+    expect(screen.getByText(/Tải trang này gặp sự cố/)).toBeTruthy();
   });
 
   it("shows digest when provided", () => {
     render(<AppError error={makeError("abc123")} reset={vi.fn()} />);
-    expect(screen.getByText("Reference: abc123")).toBeTruthy();
+    expect(screen.getByText("Mã tham chiếu: abc123")).toBeTruthy();
   });
 
   it("hides digest when absent", () => {
     render(<AppError error={makeError()} reset={vi.fn()} />);
-    expect(screen.queryByText(/Reference:/)).toBeNull();
+    expect(screen.queryByText(/Mã tham chiếu:/)).toBeNull();
   });
 
   it("calls reset when Try again is clicked", async () => {
     const user = userEvent.setup();
     const reset = vi.fn();
     render(<AppError error={makeError()} reset={reset} />);
-    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await user.click(screen.getByRole("button", { name: "Thử lại" }));
     expect(reset).toHaveBeenCalledOnce();
   });
 
@@ -52,14 +52,14 @@ describe("AppError", () => {
     const user = userEvent.setup();
     mocks.mockPush.mockClear();
     render(<AppError error={makeError()} reset={vi.fn()} />);
-    await user.click(screen.getByRole("button", { name: "Back to home" }));
+    await user.click(screen.getByRole("button", { name: "Về trang chủ" }));
     expect(mocks.mockPush).toHaveBeenCalledWith("/");
   });
 
   it("shows the mapped safe message and code", () => {
     render(<AppError error={makeError()} reset={vi.fn()} />);
-    expect(screen.getByText("Something went wrong. Please try again.")).toBeTruthy();
-    expect(screen.getByText("Error code: UNKNOWN_ERROR")).toBeTruthy();
+    expect(screen.getByText("Đã xảy ra lỗi. Vui lòng thử lại.")).toBeTruthy();
+    expect(screen.getByText("Mã lỗi: UNKNOWN_ERROR")).toBeTruthy();
   });
 
   it("shows the offline hint when the browser is offline", () => {
@@ -70,7 +70,7 @@ describe("AppError", () => {
     });
     try {
       render(<AppError error={makeError()} reset={vi.fn()} />);
-      expect(screen.getByText(/You're offline/)).toBeTruthy();
+      expect(screen.getByText(/Bạn đang ngoại tuyến/)).toBeTruthy();
     } finally {
       Object.defineProperty(window.navigator, "onLine", {
         value: true,

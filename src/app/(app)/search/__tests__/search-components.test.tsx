@@ -60,7 +60,7 @@ describe("SearchHistorySection", () => {
 
   it("renders the section heading", () => {
     render(<SearchHistorySection history={history} />);
-    expect(screen.getByText("Recent searches")).toBeTruthy();
+    expect(screen.getByText("Đã tìm gần đây")).toBeTruthy();
   });
 
   it("renders nothing when history is empty", () => {
@@ -70,11 +70,11 @@ describe("SearchHistorySection", () => {
 
   it("has a clear button", () => {
     render(<SearchHistorySection history={history} />);
-    expect(screen.getByText("Clear")).toBeTruthy();
+    expect(screen.getByText("Xóa")).toBeTruthy();
   });
 
   it("clear button has accessible label", () => {
     render(<SearchHistorySection history={history} />);
-    expect(screen.getByRole("button", { name: "Clear search history" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Xóa" })).toBeTruthy();
   });
 });

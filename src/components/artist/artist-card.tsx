@@ -1,28 +1,31 @@
 import Link from "next/link";
 import type { Artist } from "@/lib/domain";
-import { TrackArt } from "@/components/tracks/track-art";
+import type { Locale } from "@/lib/i18n/locale";
+import { DEFAULT_LOCALE } from "@/lib/i18n/locale";
+import { getT } from "@/lib/i18n/translate";
+import { Artwork } from "@/components/ui/artwork";
 
-export function ArtistCard({ artist }: { artist: Artist }) {
+export function ArtistCard({ artist, locale = DEFAULT_LOCALE }: { artist: Artist; locale?: Locale }) {
+  const t = getT(locale);
   const href = `/artist/${encodeURIComponent(artist.providerArtistId ?? artist.id)}`;
   return (
     <Link
       href={href}
-      className="group flex flex-col items-center gap-2 rounded-lg p-3 transition-colors hover:bg-surface-2/60 w-36"
+      className="aurora-rise group flex min-w-0 flex-col items-center gap-2.5 rounded-xl border border-transparent p-2 text-center transition-colors hover:border-border-subtle hover:bg-surface-1"
     >
-      <TrackArt
+      <Artwork
         src={artist.image}
         alt={artist.name}
-        size={80}
-        className="rounded-card"
+        size="medium"
+        rounded="rounded-full"
+        className="aspect-square h-auto w-full max-w-28"
       />
-      <span className="text-center text-sm font-medium text-text-primary truncate w-full">
-        {artist.name}
-      </span>
-      {artist.genres && artist.genres.length > 0 ? (
-        <span className="text-center text-xs text-text-muted truncate w-full">
-          {artist.genres[0]}
+      <span className="flex w-full min-w-0 flex-col gap-0.5">
+        <span className="t-card-title truncate">{artist.name}</span>
+        <span className="t-metadata truncate">
+          {t("artistCard.kindArtist")}{artist.genres?.[0] ? ` · ${artist.genres[0]}` : ""}
         </span>
-      ) : null}
+      </span>
     </Link>
   );
 }

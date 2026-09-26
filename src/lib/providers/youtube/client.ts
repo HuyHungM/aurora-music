@@ -1,12 +1,12 @@
 /**
  * Server-only YouTube Data API v3 transport over native fetch.
  *
- * Zero new dependencies: the Data API covers search, videos, channels,
- * and playlists deterministically with a single server-only API key.
- * `youtubei.js` is intentionally NOT used (anonymous-client emulation is
- * fragile and heavier than needed for metadata discovery). Stream
- * extraction is out of scope for this phase — no URLs produced here are
- * playable stream URLs.
+ * This is the OFFICIAL adapter and the only module that spends official
+ * quota. Phase 55 moved discovery (search, video metadata) to InnerTube and
+ * left this file with the operations that genuinely need official semantics:
+ * channel metadata, and playlists. See `docs/youtube-request-map.md` for the
+ * per-endpoint justification and `tiered-transport.ts` for the source
+ * selection that keeps this adapter out of the common path.
  *
  * All failures are normalized to Aurora engine errors at this boundary;
  * raw fetch/SDK errors never escape.
@@ -14,6 +14,9 @@
 
 import { ExtractorError } from "@/lib/domain";
 import { InvalidProviderCredentialsError } from "@/lib/errors";
+import { dataApiCircuit } from "./innertube/data-api-circuit";
+import type { DataApiCircuit } from "./innertube/data-api-circuit";
+import { recordYouTubeMetric } from "./innertube/metrics";
 import type {
   YouTubeApiTransport,
   YouTubeChannelListResponse,
@@ -114,6 +117,12 @@ export type FetchFn = (
 export interface YouTubeClientOptions {
   fetchFn?: FetchFn;
   timeoutMs?: number;
+  /**
+   * Quota breaker. Defaults to the process-wide instance so production cannot
+   * forget it. Tests pass their own (or call `dataApiCircuit.reset()`), because
+   * the breaker is deliberately process state: sharing it is the point.
+   */
+  circuit?: DataApiCircuit;
 }
 
 export function createYouTubeApiTransport(
@@ -129,12 +138,24 @@ export function createYouTubeApiTransport(
         json(): Promise<unknown>;
       }>);
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const circuit = options.circuit ?? dataApiCircuit;
 
   async function request(
     operation: string,
     path: string,
     params: Record<string, string>,
   ): Promise<Record<string, unknown>> {
+    if (circuit.shouldSkip()) {
+      // Thrown BEFORE the fetch: an open circuit means the call is known to
+      // fail, and spending an upstream round-trip to learn that again is the
+      // behaviour this phase exists to remove.
+      throw new ExtractorError(
+        PROVIDER_ID,
+        operation,
+        "YouTube Data API is paused after a quota failure",
+        { retryable: false },
+      );
+    }
     const url = new URL(`${API_BASE}${path}`);
     url.searchParams.set("key", apiKey);
     for (const [key, value] of Object.entries(params)) {
@@ -147,6 +168,7 @@ export function createYouTubeApiTransport(
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
+      circuit.reportOtherFailure();
       throw new ExtractorError(
         PROVIDER_ID,
         operation,
@@ -159,6 +181,7 @@ export function createYouTubeApiTransport(
     try {
       body = await response.json();
     } catch (error) {
+      circuit.reportOtherFailure();
       throw new ExtractorError(PROVIDER_ID, operation, "YouTube returned an unreadable response", {
         cause: error,
       });
@@ -168,16 +191,23 @@ export function createYouTubeApiTransport(
       const parsed = (body ?? {}) as ApiErrorBody;
       const message =
         typeof parsed.error?.message === "string" ? parsed.error.message : "";
+      // Classify BEFORE mapping, so the breaker sees Google's own reason
+      // rather than having to recover it from a message string.
+      circuit.reportQuotaFailure(firstReason(parsed), response.status);
+      recordYouTubeMetric("data_api_failed");
       mapApiFailure(operation, response.status, parsed, message);
     }
 
     if (!body || typeof body !== "object" || Array.isArray(body)) {
+      circuit.reportOtherFailure();
       throw new ExtractorError(PROVIDER_ID, operation, "YouTube returned a malformed response");
     }
     const record = body as Record<string, unknown>;
     if (record.items !== undefined && !Array.isArray(record.items)) {
+      circuit.reportOtherFailure();
       throw new ExtractorError(PROVIDER_ID, operation, "YouTube returned a malformed response");
     }
+    circuit.reportSuccess();
     return record;
   }
 
@@ -209,8 +239,14 @@ export function createYouTubeApiTransport(
     },
 
     async getVideos(videoIds) {
+      // `part` is exactly what `normalizeVideo` reads and nothing more.
+      // `status` was previously requested and never consumed — `privacyStatus`
+      // is only read by `isAvailableVideo`, which the provider does not call
+      // (private videos surface as `TrackNotFoundError` on exact lookup, not
+      // as a filtered row). Requesting a part nobody reads is a documented
+      // waste; §27 says request only what is needed.
       return (await request("getVideos", "/videos", {
-        part: "snippet,contentDetails,status",
+        part: "snippet,contentDetails",
         id: videoIds.join(","),
         maxResults: String(Math.min(videoIds.length, 50)),
       })) as unknown as YouTubeVideoListResponse;

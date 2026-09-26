@@ -1,25 +1,34 @@
 import Link from "next/link";
 import type { Album } from "@/lib/domain";
-import { TrackArt } from "@/components/tracks/track-art";
+import type { Locale } from "@/lib/i18n/locale";
+import { DEFAULT_LOCALE } from "@/lib/i18n/locale";
+import { getT } from "@/lib/i18n/translate";
+import { Artwork } from "@/components/ui/artwork";
 
-export function AlbumCard({ album }: { album: Album }) {
+export function AlbumCard({ album, locale = DEFAULT_LOCALE }: { album: Album; locale?: Locale }) {
+  const t = getT(locale);
   const href = `/album/${encodeURIComponent(album.providerAlbumId ?? album.id)}`;
   return (
     <Link
       href={href}
-      className="group flex flex-col items-center gap-2 rounded-lg p-3 transition-colors hover:bg-surface-2/60 w-36"
+      className="aurora-rise group flex min-w-0 flex-col gap-2.5 rounded-xl border border-transparent p-2 transition-colors hover:border-border-subtle hover:bg-surface-1"
     >
-      <TrackArt
-        src={album.artwork}
-        alt={album.title}
-        size={80}
-        className="rounded-card"
-      />
-      <span className="text-center text-sm font-medium text-text-primary truncate w-full">
-        {album.title}
+      <span className="relative block overflow-hidden rounded-lg">
+        <Artwork
+          src={album.artwork}
+          alt={album.title}
+          size="medium"
+          rounded="rounded-lg"
+          className="aspect-square h-auto w-full"
+        />
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 bg-gradient-to-t from-black/45 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100"
+        />
       </span>
-      <span className="text-center text-xs text-text-muted truncate w-full">
-        {album.artistName}
+      <span className="flex min-w-0 flex-col gap-0.5 px-0.5">
+        <span className="t-card-title truncate">{album.title}</span>
+        <span className="t-metadata truncate">{t("albumCard.kindAlbum")} · {album.artistName}</span>
       </span>
     </Link>
   );

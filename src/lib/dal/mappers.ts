@@ -1,10 +1,12 @@
 import type { Prisma } from "@/generated/prisma/client";
+import { CanonicalDuplicateIndex } from "@/lib/domain";
 import type {
   Artist,
   Follow,
   Like,
   Playlist,
   PlaylistItem,
+  PlaylistVisibility,
   RecentlyPlayed,
   SearchHistory,
   Track,
@@ -22,6 +24,22 @@ export function mapUser(row: Prisma.UserModel): User {
   };
 }
 
+/**
+ * The `include` a playlist read must use to feed `mapPlaylist`.
+ *
+ * Exported next to the payload type it produces so the two cannot drift: a
+ * narrower include here would be a *silent* behaviour change, because the
+ * canonical collapse would then run against a track with no artist and
+ * `mapTrackRow` would produce `artistName: undefined` — making every row look
+ * uncanonicalizable and disabling the collapse with no type error at all.
+ */
+export const playlistTracksInclude = {
+  tracks: {
+    include: { track: { include: { artist: true, album: true } } },
+    orderBy: { position: "asc" },
+  },
+} as const;
+
 export function mapPlaylistItem(
   row: Prisma.PlaylistTrackGetPayload<{ include: { track: true } }>,
 ): PlaylistItem {
@@ -30,6 +48,48 @@ export function mapPlaylistItem(
     trackId: row.track.providerTrackId,
     provider: row.track.provider as PlaylistItem["provider"],
   };
+}
+
+/**
+ * Keeps the first membership of each canonical track, in stored position
+ * order.
+ *
+ * Membership uniqueness is enforced on WRITE (`@@unique([playlistId, trackId])`
+ * plus the canonical check in `addTrackToPlaylist`), so a playlist this build
+ * has written cannot hold a repeat. This exists for the other case: a playlist
+ * that predates the canonical check can hold two memberships for one recording,
+ * reached through two provider paths. Cleaning that in SQL would mean comparing
+ * titles and durations inside the database, which is the fuzzy deletion the
+ * migration explicitly refuses; the calibrated matcher lives in TypeScript, so
+ * the collapse happens here, in the single place memberships become tracks.
+ *
+ * FIRST POSITION WINS, so the ordering the listener arranged is preserved and
+ * the surviving membership is the row that keeps its own `id`, `position` and
+ * `addedAt` — nothing is rewritten, and removing the playlist's other copy
+ * afterwards still works because that row is untouched in the database.
+ *
+ * Deduplicating here rather than in each read path is the point: the library
+ * card's count, the detail list, the shared read and the reorder response all
+ * derive from this one array, so they cannot disagree about how many songs a
+ * playlist has.
+ */
+export function collapsePlaylistMemberships<
+  T extends { position: number; track: Parameters<typeof mapTrackRow>[0] },
+>(entries: readonly T[]): T[] {
+  if (entries.length < 2) {
+    return [...entries];
+  }
+  const index = new CanonicalDuplicateIndex();
+  const kept: T[] = [];
+  for (const entry of entries) {
+    const track = mapTrackRow(entry.track);
+    if (index.find(track)) {
+      continue;
+    }
+    index.add(track);
+    kept.push(entry);
+  }
+  return kept;
 }
 
 export function mapLike(row: Prisma.LikeGetPayload<{ include: { track: true } }>): Like {
@@ -73,10 +133,17 @@ export function mapSearchHistory(row: Prisma.SearchHistoryModel): SearchHistory 
   };
 }
 
+/**
+ * Phase 47: a missing or unrecognised `visibility` row fails CLOSED to
+ * "private". A private playlist must never become readable because of a
+ * corrupt or unexpected stored value.
+ */
+function mapVisibility(value: string): PlaylistVisibility {
+  return value === "shared" ? "shared" : "private";
+}
+
 export function mapPlaylist(
-  row: Prisma.PlaylistGetPayload<{
-    include: { tracks: { include: { track: true }; orderBy: { position: "asc" } } };
-  }>,
+  row: Prisma.PlaylistGetPayload<{ include: typeof playlistTracksInclude }>,
 ): Playlist {
   return {
     id: row.id,
@@ -84,7 +151,15 @@ export function mapPlaylist(
     title: row.title,
     description: row.description ?? undefined,
     artwork: row.artwork ?? undefined,
-    items: row.tracks.map(mapPlaylistItem),
+    visibility: mapVisibility(row.visibility),
+    shareToken: row.shareToken ?? undefined,
+    // Collapsed here, once, so every playlist read reports the same distinct
+    // tracks. See `collapsePlaylistMemberships`.
+    items: collapsePlaylistMemberships(row.tracks).map((entry) => ({
+      id: entry.id,
+      trackId: entry.track.providerTrackId,
+      provider: entry.track.provider as PlaylistItem["provider"],
+    })),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -103,6 +178,10 @@ export function mapTrackRow(row: TrackRow): Track {
   return {
     id: row.providerTrackId,
     provider: row.provider as Track["provider"],
+    // Stable provider identity must survive the catalog round trip:
+    // without it toTrackIdentity throws, the engine facade drops the
+    // row, and the controller reports the track unplayable.
+    providerTrackId: row.providerTrackId,
     title: row.title,
     artistId: row.artist.providerArtistId,
     artistName: row.artist.name,

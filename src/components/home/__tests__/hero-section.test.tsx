@@ -55,13 +55,13 @@ describe("HeroSection", () => {
   it("shows play button when track is not playing", () => {
     const track = makePlayableTrack("t1", { title: "Hero Track" });
     render(<HeroSection track={track} />);
-    expect(screen.getByRole("button", { name: "Play Hero Track" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Phát Hero Track" })).toBeTruthy();
   });
 
   it("starts playback when play button is clicked", async () => {
     const track = makePlayableTrack("t1", { title: "Hero Track" });
     render(<HeroSection track={track} />);
-    fireEvent.click(screen.getByRole("button", { name: "Play Hero Track" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Hero Track" }));
     await waitFor(() =>
       expect(usePlayerStore.getState().currentTrack?.id).toBe("t1"),
     );
@@ -74,16 +74,16 @@ describe("HeroSection", () => {
       providerTrackId: "t1",
     });
     render(<HeroSection track={track} />);
-    fireEvent.click(screen.getByRole("button", { name: "Play Hero Track" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Hero Track" }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Pause Hero Track" })).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Tạm dừng Hero Track" })).toBeTruthy(),
     );
   });
 
-  it("shows Featured label", () => {
+  it("shows Spotlight label", () => {
     const track = makePlayableTrack("t1", { title: "Hero Track" });
     render(<HeroSection track={track} />);
-    expect(screen.getByText("Featured")).toBeTruthy();
+    expect(screen.getByText("Nổi bật")).toBeTruthy();
   });
 
   it("shows album name when available", () => {

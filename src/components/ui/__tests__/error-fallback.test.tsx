@@ -10,7 +10,7 @@ afterEach(() => {
 
 function renderFallback(overrides: Partial<Parameters<typeof ErrorFallback>[0]> = {}) {
   const props = {
-    message: "Something went wrong. Please try again.",
+    message: "Đã xảy ra lỗi. Vui lòng thử lại.",
     code: "UNKNOWN_ERROR",
     onRetry: vi.fn(),
     onHome: vi.fn(),
@@ -24,29 +24,29 @@ describe("ErrorFallback", () => {
   it("renders heading, message, and code without technical details", () => {
     renderFallback();
     expect(screen.getByRole("alert")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Something went wrong" })).toBeTruthy();
-    expect(screen.getByText("Something went wrong. Please try again.")).toBeTruthy();
-    expect(screen.getByText("Error code: UNKNOWN_ERROR")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Đã xảy ra lỗi" })).toBeTruthy();
+    expect(screen.getByText("Đã xảy ra lỗi. Vui lòng thử lại.")).toBeTruthy();
+    expect(screen.getByText("Mã lỗi: UNKNOWN_ERROR")).toBeTruthy();
   });
 
   it("shows the digest reference instead of the code when provided", () => {
     renderFallback({ digest: "abc123" });
-    expect(screen.getByText("Reference: abc123")).toBeTruthy();
-    expect(screen.queryByText(/Error code:/)).toBeNull();
+    expect(screen.getByText("Mã tham chiếu: abc123")).toBeTruthy();
+    expect(screen.queryByText(/Mã lỗi:/)).toBeNull();
   });
 
   it("shows the offline hint only when offline", () => {
     renderFallback({ offline: false });
-    expect(screen.queryByText(/You're offline/)).toBeNull();
+    expect(screen.queryByText(/ngoại tuyến/)).toBeNull();
     cleanup();
     renderFallback({ offline: true });
-    expect(screen.getByText(/You're offline/)).toBeTruthy();
+    expect(screen.getByText(/ngoại tuyến/)).toBeTruthy();
   });
 
   it("invokes retry exactly once per click and never touches playback", async () => {
     const user = userEvent.setup();
     const props = renderFallback();
-    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await user.click(screen.getByRole("button", { name: "Thử lại" }));
     expect(props.onRetry).toHaveBeenCalledOnce();
     expect(props.onHome).not.toHaveBeenCalled();
   });
@@ -54,7 +54,7 @@ describe("ErrorFallback", () => {
   it("navigates home on Back to home", async () => {
     const user = userEvent.setup();
     const props = renderFallback();
-    await user.click(screen.getByRole("button", { name: "Back to home" }));
+    await user.click(screen.getByRole("button", { name: "Về trang chủ" }));
     expect(props.onHome).toHaveBeenCalledOnce();
   });
 });

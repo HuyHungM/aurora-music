@@ -58,10 +58,34 @@ describe("isPortFree", () => {
     ).toBe(false);
   });
 
+  it("reports free on Bun's connection-refusal shape (no cause)", async () => {
+    // Phase 50. Bun's fetch rejects with the code directly on the error
+    // ("ConnectionRefused") and no `cause`, unlike Node's
+    // "fetch failed" + cause.code = "ECONNREFUSED".
+    const refused = Object.assign(new TypeError("Unable to connect"), {
+      code: "ConnectionRefused",
+    });
+    expect(
+      await isPortFree("http://x", async () => {
+        throw refused;
+      }),
+    ).toBe(true);
+  });
+
   it("fails closed on ambiguous errors", async () => {
     expect(
       await isPortFree("http://x", async () => {
         throw new Error("TLS kaboom");
+      }),
+    ).toBe(false);
+  });
+
+  it("fails closed when only an unrelated code is present", async () => {
+    // A non-refusal code must not be mistaken for a free port.
+    const other = Object.assign(new Error("nope"), { code: "UND_ERR_SOCKET" });
+    expect(
+      await isPortFree("http://x", async () => {
+        throw other;
       }),
     ).toBe(false);
   });

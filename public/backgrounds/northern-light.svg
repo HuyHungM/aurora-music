@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Northern Light">
+  <!-- Northern Light. Three distinct vertical curtains, because the defining
+       feature of the real thing is a RIBBON: a narrow, tall, soft-edged band
+       that reads as a shape. This is the only preset built from hard-edged
+       geometry rather than pure radial washes, and it is what stops the set
+       from looking like five variations on one gradient. -->
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="0.1" y2="1">
+      <stop offset="0" stop-color="#050a12" />
+      <stop offset="0.55" stop-color="#06101a" />
+      <stop offset="1" stop-color="#03070d" />
+    </linearGradient>
+    <linearGradient id="ribbonA" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#7ef0c8" stop-opacity="0.5" />
+      <stop offset="0.45" stop-color="#3fbf9a" stop-opacity="0.24" />
+      <stop offset="1" stop-color="#2b8f78" stop-opacity="0" />
+    </linearGradient>
+    <linearGradient id="ribbonB" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#5fd0e8" stop-opacity="0.42" />
+      <stop offset="0.5" stop-color="#3d8fc4" stop-opacity="0.18" />
+      <stop offset="1" stop-color="#2b6a96" stop-opacity="0" />
+    </linearGradient>
+    <linearGradient id="ribbonC" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#8f7ce0" stop-opacity="0.34" />
+      <stop offset="0.55" stop-color="#5a4aa8" stop-opacity="0.14" />
+      <stop offset="1" stop-color="#3f3480" stop-opacity="0" />
+    </linearGradient>
+    <linearGradient id="veil" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#03070d" stop-opacity="0.12" />
+      <stop offset="1" stop-color="#03070d" stop-opacity="0.64" />
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#base)" />
+  <path d="M300 -40 C 420 220, 250 520, 360 1040 L 560 1040 C 450 520, 620 200, 500 -40 Z" fill="url(#ribbonA)" />
+  <path d="M760 -40 C 880 260, 720 560, 820 1040 L 1010 1040 C 910 560, 1080 240, 960 -40 Z" fill="url(#ribbonB)" />
+  <path d="M1180 -40 C 1270 240, 1150 480, 1220 1040 L 1400 1040 C 1330 480, 1450 220, 1360 -40 Z" fill="url(#ribbonC)" />
+  <rect width="1600" height="1000" fill="url(#veil)" />
+</svg>

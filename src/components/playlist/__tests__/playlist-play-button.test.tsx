@@ -65,12 +65,12 @@ function makeTrack(id: string): Track {
 describe("PlaylistPlayButton", () => {
   it("renders play button with correct label", () => {
     render(<PlaylistPlayButton tracks={[makeTrack("t1")]} />);
-    expect(screen.getByRole("button", { name: "Play playlist" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Phát playlist" })).toBeTruthy();
   });
 
   it("renders Play text", () => {
     render(<PlaylistPlayButton tracks={[makeTrack("t1")]} />);
-    expect(screen.getByText("Play")).toBeTruthy();
+    expect(screen.getByText("Phát")).toBeTruthy();
   });
 
   it("calls playCollection with all tracks when clicked", async () => {
@@ -78,7 +78,7 @@ describe("PlaylistPlayButton", () => {
     const tracks = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
     render(<PlaylistPlayButton tracks={tracks} />);
 
-    await user.click(screen.getByRole("button", { name: "Play playlist" }));
+    await user.click(screen.getByRole("button", { name: "Phát playlist" }));
 
     const state = usePlayerStore.getState();
     expect(state.queue.map((t) => t.id)).toEqual(["t1", "t2", "t3"]);

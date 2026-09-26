@@ -2,7 +2,13 @@
 
 ## Prerequisites
 
-- Node.js 22+, `npm ci` (lockfile canonical; no Bun/pnpm/Yarn migration).
+- Bun 1.4.0 (canonical package manager; `bun.lock` is the only lockfile —
+  there is no `package-lock.json`). Install with `bun install`; CI uses
+  `bun install --frozen-lockfile`. A `postinstall` hook runs
+  `prisma generate`, so a fresh install yields a working tree.
+- Node.js 22+ stays present in the environment for toolchain internals that
+  shell out to a Node runtime (Prisma's engine spawn, Next's own helpers). It
+  is not used to install dependencies or to run project scripts.
 - PostgreSQL reachable; `DATABASE_URL` set (required in every environment).
 - `AUTH_SECRET` set when `NODE_ENV=production` (dummy values only ever in
   CI placeholders, never real secrets in logs or VCS).
@@ -10,15 +16,22 @@
 ## Canonical release order
 
 ```text
-validate (typecheck, lint, unit)
-→ build (`npm run build`)
+install (`bun install`)
+→ build (`bun run build`)          ← must precede typecheck on a clean clone
+→ validate (`bun run typecheck`, `bun run lint`, `bun run test`)
 → migration review (`git status` + allowlist test)
-→ migration deploy (`prisma migrate deploy`)
-→ application start (`npm run start -- -p PORT`)
+→ migration deploy (`bunx prisma migrate deploy`)
+→ application start (`bun run start -- -p PORT`)
 → readiness (`GET /api/health` → 200 `{"status":"ok"}`)
-→ smoke (`npm run smoke:prod -- --spawn --port PORT`)
+→ smoke (`bun run smoke:prod -- --spawn --port PORT`)
 → traffic
 ```
+
+`bun run typecheck` type-checks against `.next/types`, which only a
+`next build` (or `next dev`) generates; on a tree that has never been built
+the `LayoutProps`-style generated types are absent and typecheck fails. The
+build step above is therefore ordered first, not last. This is Next.js 16
+behaviour and is unrelated to the package manager.
 
 Migrate **before** deploying the new artifact: both current migrations are
 purely additive, so old code also runs against the new schema, while new
@@ -52,16 +65,82 @@ code requires it.
 
 ## Smoke checks
 
-- `npm run smoke:prod [baseUrl]` probes a running server (shell, headers,
+- `bun run smoke:prod [baseUrl]` probes a running server (shell, headers,
   manifest/icons, service worker content, proxy absence, fixture gating,
   auth sanity). Exit 0/1/2 (pass/fail/misconfiguration).
-- `npm run smoke:prod -- --spawn --port PORT` additionally refuses an
+- `bun run smoke:prod -- --spawn --port PORT` additionally refuses an
   occupied port, requires `.next/BUILD_ID` (so a stale build can never
   validate), starts an owned server, waits for `/api/health` readiness,
   runs the checks, then terminates the child and verifies the exit
   (no orphans, no stale-server false positives).
 
-## Rollback
+## Backup and restore runbook
+
+**Back up before any migration that touches data.** A migration is the only
+kind of change in this project that can destroy data.
+
+Take a dump (custom format, so the restore carries indexes and constraints
+rather than replaying SQL):
+
+```
+pg_dump --format=custom --no-owner --no-privileges \
+  --file aurora-$(date +%Y%m%d-%H%M%S).pgc "$DATABASE_URL"
+```
+
+Keep the archive off the database host. A backup that dies with the host is not
+a backup.
+
+**Verify the restore, do not assume it.** The drill does the whole cycle against
+a throwaway database and cleans up after itself:
+
+```
+AURORA_RESTORE_DRILL=1 bun run db:restore-drill
+```
+
+It creates `aurora_restore_drill`, dumps, restores, runs `db:integrity`
+against the restored copy, compares row counts across 13 tables, and drops the
+target. Run it after any change to the backup procedure, on a schedule, and once
+before you need it.
+
+Against an already-restored database - the real recovery case - verify with:
+
+```
+DATABASE_URL="postgresql://...@host/aurora_restored" bun run db:integrity
+```
+
+`db:integrity` is read-only, so it is safe to point at a recovered copy. It
+checks orphaned rows, that every required unique index is present AND unique,
+that uniqueness actually holds in the data, that required columns are NOT NULL,
+that playlist positions are contiguous, that every user-scoped row resolves to a
+real user, and that no migration is failed or half-applied.
+
+**Recovery order after a restore:** run `bun run db:integrity`, then
+`bun run smoke:prod`, then compare the migration count in `_prisma_migrations`
+against the deployment you are rolling forward to. A schema that is a migration
+behind the code will start, and will then fail in a way that looks like a data
+bug.
+
+**Drill guards.** The drill refuses to start without `AURORA_RESTORE_DRILL=1`,
+refuses if the target equals the source database, and requires a plain lowercase
+name. It is not part of the default pipeline and must never be.
+
+## Feature flags and kill switches
+
+Server-side flags are read from one variable and need no deploy to change:
+
+```
+AURORA_FEATURE_FLAGS="radio=0,playlistSharing=0"
+```
+
+Current flags, their defaults and their owners are declared in
+`src/lib/feature-flags.ts`; that registry is the documentation. Parsing never
+throws - a typo is collected and ignored rather than stopping the process, so a
+mistyped kill switch cannot take the site down.
+
+`playlistSharing` blocks the transition TO shared only. Going back to private is
+always permitted: revocation must work even when the feature is being killed.
+
+## Rollback## Rollback
 
 - Application rollback = redeploy the previous artifact. Safe: migrations
   to date are additive, so old code runs on the new schema.

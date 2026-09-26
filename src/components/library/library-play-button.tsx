@@ -1,34 +1,53 @@
 "use client";
 
 import type { Track } from "@/lib/domain";
-import { useMusicEngine } from "@/lib/music/use-music-engine";
+import { useMusicEngine, useMusicEngineState } from "@/lib/music/use-music-engine";
+import { useLocale } from "@/components/i18n/locale-provider";
+import { CollectionPlayButton } from "@/components/ui/collection-play-button";
 import { Button } from "@/components/ui/button";
-import { PlayIcon } from "@/components/ui/icons";
+import { ShuffleIcon } from "@/components/ui/icons";
 
 export function LibraryPlayButton({
   tracks,
-  label,
+  labelKey,
+  shuffle = false,
 }: {
   tracks: Track[];
-  label: string;
+  /** Translation key for the Play/Shuffle accessible names. */
+  labelKey: string;
+  /** Shuffle-play: start the collection with shuffle enabled. */
+  shuffle?: boolean;
 }) {
   const engine = useMusicEngine();
+  const isShuffled = useMusicEngineState((s) => s.shuffle);
+  const { t } = useLocale();
+  const playLabel = t(labelKey);
+  const shuffleLabel = t("collectionPlay.shuffle");
 
-  const handleClick = () => {
-    if (tracks.length === 0) return;
+  if (!shuffle) {
+    return <CollectionPlayButton tracks={tracks} label={playLabel} />;
+  }
+
+  const handleShufflePlay = () => {
+    if (tracks.length === 0) {
+      return;
+    }
     engine?.playCollection(tracks, 0);
+    if (!isShuffled) {
+      engine?.shuffle();
+    }
   };
 
   return (
     <Button
-      variant="primary"
+      variant="secondary"
       size="sm"
-      onClick={handleClick}
-      aria-label={`Play ${label}`}
-      className="gap-1.5"
+      onClick={handleShufflePlay}
+      aria-label={shuffleLabel}
+      className="aurora-press gap-1.5"
     >
-      <PlayIcon size={16} />
-      <span>Play</span>
+      <ShuffleIcon size={16} />
+      <span>{t("collectionPlay.shuffle")}</span>
     </Button>
   );
 }

@@ -179,6 +179,31 @@ describe("controller + store integration", () => {
     expect(surface.src).toBe("https://cdn.example/bbbbbbbbbbb.m4a");
   });
 
+  it("ended auto-advances into playback, not a paused load", async () => {
+    // Regression: the store's `ended` handler is subscribed before the
+    // controller's, so it claims a newer generation carrying autoplay intent
+    // first. The controller must not clear that intent when its own `ended`
+    // handler runs afterwards, or the advanced track loads paused and
+    // gapless playback silently stops working.
+    backend.resolveSource.mockImplementation(async (ref) => ({
+      url: `https://cdn.example/${ref.id}.m4a`,
+    }));
+    usePlayerStore.getState().replaceQueue([
+      youtubeTrack("aaaaaaaaaaa"),
+      youtubeTrack("bbbbbbbbbbb"),
+    ]);
+    await flush();
+    // replaceQueue autoplays the first track, so this is the baseline.
+    expect(surface.playedCalls).toBe(1);
+
+    surface.dispatch(EventEnum.ended);
+    await flush();
+
+    expect(surface.src).toBe("https://cdn.example/bbbbbbbbbbb.m4a");
+    expect(surface.playedCalls).toBe(2);
+    expect(surface.paused).toBe(false);
+  });
+
   it("restore loads paused and seeks after metadata", async () => {
     backend.resolveNextWith(sourceFor("aaaaaaaaaaa", "https://cdn.example/a.m4a"));
     usePlayerStore.getState().restoreTrack(youtubeTrack("aaaaaaaaaaa"), 30);
@@ -228,5 +253,171 @@ describe("controller + store integration", () => {
     });
     expect(state.queue).toHaveLength(1);
     expect(state.currentTrack?.id).toBe("sp-1");
+  });
+});
+
+describe("restored session resumes with a fresh source (Phase 43)", () => {
+  let surface: FakeAudioSurface;
+  let disposeEngine: (() => void) | null = null;
+  let disposeController: (() => void) | null = null;
+  let backend: ReturnType<typeof controllableResolver>;
+
+  beforeEach(() => {
+    resetStore();
+    surface = new FakeAudioSurface();
+    const engine = new PlayerEngine(surface);
+    disposeEngine = usePlayerStore.getState().bindEngine(engine);
+    backend = controllableResolver();
+    const controller = createPlaybackController({
+      resolver: backend.resolver,
+      engine,
+      reportError: (error) => {
+        usePlayerStore.getState().reportPlaybackError(error.kind, error.message);
+      },
+    });
+    setPlaybackController(controller);
+    disposeController = () => {
+      controller.shutdown();
+      setPlaybackController(null);
+    };
+  });
+
+  afterEach(() => {
+    disposeController?.();
+    disposeController = null;
+    disposeEngine?.();
+    disposeEngine = null;
+    usePlayerStore.getState().bindEngine(null);
+    setPlaybackController(null);
+    resetStore();
+  });
+
+  function restoreSession(mediaPosition: number) {
+    // Exactly what a validated persisted session looks like on restore:
+    // identity-only entries, no source, no autoplay.
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: [youtubeTrack("aaaaaaaaaaa"), youtubeTrack("bbbbbbbbbbb")],
+      playOrder: [1, 0],
+      position: 0,
+      shuffle: true,
+      repeat: "all",
+      mediaPosition,
+      currentTrack: youtubeTrack("bbbbbbbbbbb"),
+      volume: 0.75,
+      muted: false,
+    });
+  }
+
+  it("restores without resolving or autoplaying", () => {
+    restoreSession(92);
+    const state = usePlayerStore.getState();
+    expect(backend.resolveSource).not.toHaveBeenCalled();
+    expect(surface.src).toBe("");
+    expect(surface.playedCalls).toBe(0);
+    expect(state.isPlaying).toBe(false);
+    // The queue and its order are live, not a cache.
+    expect(state.queue.map((t) => t.id)).toEqual(["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    expect(state.playOrder).toEqual([1, 0]);
+    expect(state.position).toBe(0);
+    expect(state.shuffle).toBe(true);
+    expect(state.repeat).toBe("all");
+    expect(state.currentTrack?.id).toBe("bbbbbbbbbbb");
+    expect(state.pendingRestorePosition).toBe(92);
+  });
+
+  it("resolves a fresh playable source on Play, never a persisted URL", async () => {
+    restoreSession(92);
+    backend.resolveNextWith(sourceFor("bbbbbbbbbbb", "https://cdn.example/fresh.m4a"));
+
+    await usePlayerStore.getState().togglePlay();
+    await flush();
+
+    // Fresh resolution happened exactly once, for the restored identity.
+    expect(backend.resolveSource).toHaveBeenCalledTimes(1);
+    expect(surface.src).toBe("https://cdn.example/fresh.m4a");
+    expect(surface.playedCalls).toBe(1);
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+  });
+
+  it("seeks to the saved position once the fresh source reports metadata", async () => {
+    restoreSession(92);
+    backend.resolveNextWith(sourceFor("bbbbbbbbbbb", "https://cdn.example/fresh.m4a"));
+    await usePlayerStore.getState().togglePlay();
+    await flush();
+
+    surface.duration = 213;
+    surface.dispatch(EventEnum.loadedmetadata);
+
+    const state = usePlayerStore.getState();
+    expect(state.duration).toBe(213);
+    // Approximate resume (exact second is more than the spec requires).
+    expect(state.currentTime).toBeGreaterThanOrEqual(88);
+    expect(state.currentTime).toBeLessThanOrEqual(96);
+    expect(state.pendingRestorePosition).toBeNull();
+  });
+
+  it("clamps a saved position that exceeds the real duration", async () => {
+    restoreSession(5_000);
+    backend.resolveNextWith(sourceFor("bbbbbbbbbbb", "https://cdn.example/fresh.m4a"));
+    await usePlayerStore.getState().togglePlay();
+    await flush();
+
+    surface.duration = 213;
+    surface.dispatch(EventEnum.loadedmetadata);
+
+    const state = usePlayerStore.getState();
+    expect(state.currentTime).toBeLessThanOrEqual(213);
+    expect(state.error).toBeNull();
+  });
+
+  it("keeps the restored queue fully operable after resume", async () => {
+    restoreSession(92);
+    backend.resolveSource.mockImplementation(async (ref) => ({
+      url: `https://cdn.example/${ref.id}.m4a`,
+    }));
+
+    // next() navigates the restored queue normally.
+    usePlayerStore.getState().next();
+    await flush();
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("aaaaaaaaaaa");
+    expect(usePlayerStore.getState().position).toBe(1);
+
+    // previous() returns to the cursor track.
+    usePlayerStore.getState().prev();
+    await flush();
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("bbbbbbbbbbb");
+
+    // playAt jumps to an arbitrary restored position.
+    usePlayerStore.getState().playAtPosition(1);
+    await flush();
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("aaaaaaaaaaa");
+
+    // remove/move/clear still work on the restored queue. Removal
+    // targets a playOrder position and never the current one.
+    usePlayerStore.getState().removeFromQueue(0);
+    expect(usePlayerStore.getState().queue).toHaveLength(1);
+    usePlayerStore.getState().moveQueueItem(0, "up");
+    expect(usePlayerStore.getState().queue).toHaveLength(1);
+    usePlayerStore.getState().clearQueue();
+    expect(usePlayerStore.getState().queue).toEqual([]);
+    expect(usePlayerStore.getState().currentTrack).toBeNull();
+  });
+
+  it("an unresolvable restored track does not invalidate the queue", async () => {
+    restoreSession(92);
+    backend.rejectNextWith(
+      new PlaybackResolutionError(
+        { provider: "youtube", providerTrackId: "bbbbbbbbbbb" },
+        "resolve",
+        "Video unavailable",
+      ),
+    );
+    await usePlayerStore.getState().togglePlay();
+    await flush();
+
+    const state = usePlayerStore.getState();
+    expect(state.error?.kind).toBe("unavailable");
+    expect(state.queue).toHaveLength(2);
+    expect(state.currentTrack?.id).toBe("bbbbbbbbbbb");
   });
 });

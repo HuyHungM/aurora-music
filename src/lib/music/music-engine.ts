@@ -60,6 +60,14 @@ export interface PlayInputOptions {
 export interface MusicEngineState {
   currentTrack: TrackIdentity | null;
   queue: readonly TrackIdentity[];
+  /**
+   * Playback order as indices into `queue`. Published here rather than read
+   * off the queue facade so a reorder repaints subscribers: `queue` is
+   * deliberately reference-stable across a reorder, so selecting only `queue`
+   * makes useSyncExternalStore bail out and the move/shuffle controls
+   * silently stop repainting even though the model changed.
+   */
+  playOrder: readonly number[];
   currentIndex: number;
   isPlaying: boolean;
   position: number;
@@ -76,6 +84,7 @@ export interface MusicEngineState {
 export const EMPTY_ENGINE_STATE: MusicEngineState = {
   currentTrack: null,
   queue: [],
+  playOrder: [],
   currentIndex: -1,
   isPlaying: false,
   position: 0,
@@ -248,6 +257,11 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
   let lastQueueRef: Track[] | null = null;
   let lastItems: readonly TrackIdentity[] = [];
   const identityCache = new Map<Track, TrackIdentity>();
+  // playOrder needs the same treatment as queue: the queue manager hands back
+  // a defensive copy (`[...state.playOrder]`) on every getSnapshot(), so
+  // selecting it directly would yield a fresh reference on every
+  // notification and re-render subscribers in a loop.
+  let lastPlayOrder: readonly number[] = [];
   // Serialized errors must be reference-stable across snapshots while the
   // underlying store error is unchanged. A fresh literal per getState()
   // breaks useSyncExternalStore consumers (infinite render-phase retries
@@ -330,6 +344,21 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
     return lastItems;
   }
 
+  function snapshotPlayOrder(): readonly number[] {
+    const playOrder = queueManager.getSnapshot().playOrder;
+    // Same reference-stabilization as snapshotQueue: getSnapshot() hands back
+    // a defensive copy, so without this every snapshot would look like a
+    // reorder and useSyncExternalStore would re-render forever.
+    if (
+      playOrder.length === lastPlayOrder.length &&
+      playOrder.every((item, index) => item === lastPlayOrder[index])
+    ) {
+      return lastPlayOrder;
+    }
+    lastPlayOrder = Object.freeze(playOrder.slice());
+    return lastPlayOrder;
+  }
+
   function currentIdentity(): TrackIdentity | null {
     // Cached conversion (not the manager's fresh objects): toTrackIdentity
     // mints a new internal id per call, so only the cache keeps snapshot
@@ -364,6 +393,7 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
     const snapshot = {
       currentTrack: currentIdentity(),
       queue: snapshotQueue(),
+      playOrder: snapshotPlayOrder(),
       currentIndex: queueSnapshot.currentIndex,
       isPlaying: state.isPlaying,
       position: state.currentTime,
@@ -732,6 +762,7 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
       lastStartedIndex = -1;
       lastQueueRef = null;
       lastItems = [];
+      lastPlayOrder = [];
       identityCache.clear();
       lastStoreError = undefined;
       lastSerializedError = null;

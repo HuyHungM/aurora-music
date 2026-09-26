@@ -268,6 +268,12 @@ export function createPlaybackController(
   let hasLoadedSource = false;
   let hasPlayedOnce = false;
   let lastDuration = 0;
+  /**
+   * Generation that installed the currently loaded source. `ended` arrives
+   * on the source this points at, so it is the only generation allowed to
+   * tear that source's transport intent down. See `onEnded`.
+   */
+  let sourceGeneration: number | null = null;
 
   // --- Recovery machine (Phase 16, ephemeral) ---
   let cycle: ActiveCycle | null = null;
@@ -511,6 +517,7 @@ export function createPlaybackController(
       return;
     }
     activeSource = source;
+    sourceGeneration = generation;
     hasLoadedSource = true;
     hasPlayedOnce = false;
     elementPaused = false;
@@ -764,6 +771,19 @@ export function createPlaybackController(
     if (disposed) {
       return;
     }
+    // The store's own `ended` handler is subscribed first (player-host binds
+    // the store before constructing this controller) and advances the queue
+    // synchronously, so by the time this handler runs the store has already
+    // claimed a NEWER generation carrying autoplay intent. Everything below
+    // belongs to the generation that loaded the ended source, and autoplay is
+    // applied as `autoplay && wantPlay` after an await — so clearing it here
+    // would strand the freshly advanced track loaded but paused, silently
+    // breaking gapless auto-advance on every natural transition. Bail out when
+    // a newer generation owns the state; the old cycle was already reset by
+    // `loadIdentity` -> `resetRecoveryForNewWork`.
+    if (sourceGeneration !== null && sourceGeneration !== guard.current()) {
+      return;
+    }
     wantPlay = false;
     elementPaused = true;
     disarmStallTimer();
@@ -798,6 +818,7 @@ export function createPlaybackController(
         return;
       }
       activeSource = null;
+      sourceGeneration = null;
       hasLoadedSource = false;
       reportError(toControllerError(error));
       return;
@@ -807,11 +828,13 @@ export function createPlaybackController(
     }
     if (isAudioSourceExpired(source, now())) {
       activeSource = null;
+      sourceGeneration = null;
       hasLoadedSource = false;
       reportError({ kind: "unavailable", message: "This track has no playable stream right now." });
       return;
     }
     activeSource = source;
+    sourceGeneration = generation;
     hasLoadedSource = true;
     const playable = track ?? identityToLegacyTrack(identity);
     engine.load(withPlaybackSource(playable, source), autoplay && wantPlay);
@@ -850,6 +873,12 @@ export function createPlaybackController(
     pendingSeek = null;
     activeIdentity = identity;
     activeSource = null;
+    // `sourceGeneration` deliberately survives here. It marks the generation
+    // that installed the source the element is still playing, and `onEnded`
+    // reads it to tell "my source just ended" apart from "a newer load
+    // already took over". Clearing it at claim time would erase exactly the
+    // evidence onEnded needs. It is re-pointed in resolveAndLoad once the new
+    // source is actually installed, and cleared by stop()/shutdown().
     hasLoadedSource = false;
     hasPlayedOnce = false;
     resetRecoveryForNewWork();
@@ -977,6 +1006,7 @@ export function createPlaybackController(
       pendingSeek = null;
       activeIdentity = null;
       activeSource = null;
+      sourceGeneration = null;
       hasLoadedSource = false;
       hasPlayedOnce = false;
       resetRecoveryForNewWork();
@@ -1024,6 +1054,7 @@ export function createPlaybackController(
       pendingSeek = null;
       activeIdentity = null;
       activeSource = null;
+      sourceGeneration = null;
       hasLoadedSource = false;
       hasPlayedOnce = false;
       clearPendingTimers();

@@ -2,12 +2,15 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { ACTIVATE_MESSAGE, LOCALE_MESSAGE } from "@/lib/pwa/service-worker";
+
 const ORIGIN = "http://127.0.0.1:3100";
 
 interface FakeRequest {
   method: string;
   url: string;
   mode?: string;
+  headers?: { get(name: string): string | null };
 }
 
 class FakeResponse {
@@ -59,9 +62,21 @@ interface WorkerHarness {
   api: {
     AURORA_SW_VERSION: string;
     STATIC_CACHE: string;
+    META_CACHE: string;
+    META_LOCALE_URL: string;
+    ACTIVATE_MESSAGE: string;
+    LOCALE_MESSAGE: string;
+    DEFAULT_LOCALE: string;
     classifyRequest(request: FakeRequest): string;
-    OFFLINE_TITLE: string;
-    OFFLINE_BODY: string;
+    OFFLINE_COPY: Record<string, { lang: string; title: string; body: string }>;
+    offlineCopy(locale: string): { lang: string; title: string; body: string };
+    localeFromRequest(request: FakeRequest): string;
+    normalizeLocale(value: unknown): string;
+    rememberLocale(locale: string): Promise<void>;
+    readRememberedLocale(): Promise<string | null>;
+    resolveOfflineLocale(request: FakeRequest): Promise<string>;
+    offlineHtml(locale: string): string;
+    offlineFallbackResponse(locale: string): FakeResponse;
   };
   listeners: Map<string, Array<(event: never) => void>>;
   fetchCalls: string[];
@@ -107,10 +122,16 @@ function loadWorker(
         cacheStores.set(name, new Map());
       }
       const store = cacheStores.get(name) as Map<string, FakeResponse>;
+      // Cache Storage accepts a string URL as readily as a Request, and the
+      // worker uses the string form for its meta entry so it does not depend on
+      // a `Request` global being in scope inside the evaluated file. Keyed
+      // either way, so both spellings behave the same here.
+      const keyOf = (input: FakeRequest | string): string =>
+        typeof input === "string" ? input : input.url;
       return {
-        match: async (request: FakeRequest) => store.get(request.url) ?? null,
-        put: async (request: FakeRequest, response: FakeResponse) => {
-          store.set(request.url, response);
+        match: async (input: FakeRequest | string) => store.get(keyOf(input)) ?? null,
+        put: async (input: FakeRequest | string, response: FakeResponse) => {
+          store.set(keyOf(input), response);
         },
       };
     },
@@ -150,9 +171,19 @@ function loadWorker(
 
 function request(
   url: string,
-  init: { method?: string; mode?: string } = {},
+  init: { method?: string; mode?: string; cookie?: string } = {},
 ): FakeRequest {
-  return { method: init.method ?? "GET", url, mode: init.mode };
+  const req: FakeRequest = {
+    method: init.method ?? "GET",
+    url,
+    mode: init.mode,
+  };
+  if (init.cookie !== undefined) {
+    req.headers = {
+      get: (name: string) => (name.toLowerCase() === "cookie" ? init.cookie ?? null : null),
+    };
+  }
+  return req;
 }
 
 async function runFetch(
@@ -185,6 +216,37 @@ async function runEvent(
   await Promise.all(pending);
 }
 
+async function runMessage(
+  harness: WorkerHarness,
+  data: unknown,
+): Promise<void> {
+  const handlers = harness.listeners.get("message") ?? [];
+  const pending: Array<Promise<unknown>> = [];
+  for (const handler of handlers) {
+    handler({
+      data,
+      waitUntil: (promise: Promise<unknown>) => pending.push(promise),
+    } as never);
+  }
+  await Promise.all(pending);
+}
+
+/**
+ * Total responses held across every cache the worker has opened.
+ *
+ * The invariant the worker cares about is "nothing is stored", not "no cache
+ * was opened": `caches.open` on a name that does not exist yet creates it. So
+ * counting stores would conflate "resolved a setting" with "cached a document",
+ * and would start failing for a change that caches nothing at all.
+ */
+function storedResponseCount(harness: WorkerHarness): number {
+  let total = 0;
+  for (const store of harness.cacheStores.values()) {
+    total += store.size;
+  }
+  return total;
+}
+
 describe("service worker versioning", () => {
   it("uses one bounded versioned cache name", () => {
     const harness = loadWorker(async () => new FakeResponse("x"));
@@ -194,20 +256,178 @@ describe("service worker versioning", () => {
     );
   });
 
-  it("install skips waiting and activate cleans only old aurora caches", async () => {
+  it("install does not take over, and activate cleans only old aurora caches", async () => {
     const harness = loadWorker(async () => new FakeResponse("x"));
     harness.cacheStores.set(harness.api.STATIC_CACHE, new Map());
     harness.cacheStores.set("aurora-old:static", new Map());
     harness.cacheStores.set("foreign-cache", new Map());
 
+    // RULE 37: install must NOT skip waiting. Taking control mid-session
+    // re-parents a running page onto a new build, and Aurora's session must
+    // survive a deploy.
     await runEvent(harness, "install");
-    expect(harness.skippedWaiting.called).toBe(true);
+    expect(harness.skippedWaiting.called).toBe(false);
 
     await runEvent(harness, "activate");
     expect(harness.deletedCaches).toEqual(["aurora-old:static"]);
     expect(harness.cacheStores.has(harness.api.STATIC_CACHE)).toBe(true);
     expect(harness.cacheStores.has("foreign-cache")).toBe(true);
     expect(harness.claimed.called).toBe(true);
+  });
+
+  it("activates only when the page explicitly hands over control", async () => {
+    const harness = loadWorker(async () => new FakeResponse("x"));
+
+    await runEvent(harness, "install");
+    expect(harness.skippedWaiting.called).toBe(false);
+
+    // An unrelated message must not trigger a takeover.
+    await runMessage(harness, { type: "something-else" });
+    expect(harness.skippedWaiting.called).toBe(false);
+
+    await runMessage(harness, { type: harness.api.ACTIVATE_MESSAGE });
+    expect(harness.skippedWaiting.called).toBe(true);
+  });
+
+  it("uses the same activation message the page sends", async () => {
+    // The worker is a plain static file and cannot import the page module, so
+    // the literal is duplicated. This pins the two together: a rename on one
+    // side would otherwise leave every update parked forever, silently.
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    expect(harness.api.ACTIVATE_MESSAGE).toBe(ACTIVATE_MESSAGE);
+    expect(harness.api.ACTIVATE_MESSAGE).toBe("aurora:activate");
+  });
+
+  it("uses the same locale message the page sends", () => {
+    // Same reasoning as above, and the same failure mode if it drifts: the
+    // offline page would silently revert to the shipped default in every
+    // browser, which is the bug this replaced.
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    expect(harness.api.LOCALE_MESSAGE).toBe(LOCALE_MESSAGE);
+    expect(harness.api.LOCALE_MESSAGE).toBe("aurora:locale");
+  });
+});
+
+describe("service worker offline locale, as the page tells it", () => {
+  it("remembers what the page announced and reads it back", async () => {
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    expect(await harness.api.readRememberedLocale()).toBeNull();
+    await harness.api.rememberLocale("en");
+    expect(await harness.api.readRememberedLocale()).toBe("en");
+    // A switch back is announced too, and must overwrite rather than append.
+    await harness.api.rememberLocale("vi");
+    expect(await harness.api.readRememberedLocale()).toBe("vi");
+  });
+
+  it("normalises whatever the page announces", async () => {
+    // The page is the only source, so it is also untrusted input as far as the
+    // worker is concerned: anything that is not a supported locale becomes the
+    // shipped default rather than reaching `offlineCopy`.
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    for (const value of ["xx", "", "en-US", "VI", null, undefined, 7, {}]) {
+      expect(harness.api.normalizeLocale(value)).toBe(
+        harness.api.DEFAULT_LOCALE,
+      );
+    }
+    expect(harness.api.normalizeLocale("en")).toBe("en");
+  });
+
+  it("prefers what the page said over the cookie on the request", async () => {
+    // The measured Chromium behaviour: the navigation `Request` a worker
+    // receives has no `cookie` header, so the cookie path cannot be the primary
+    // source. It is still consulted when nothing has been announced, which is
+    // the case on browsers that do expose the header.
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    await harness.api.rememberLocale("en");
+    // Request says Vietnamese, the page says English: the page is right,
+    // because the page is what the visitor actually chose.
+    expect(
+      await harness.api.resolveOfflineLocale(
+        request("/", { cookie: "aurora-locale=vi" }),
+      ),
+    ).toBe("en");
+  });
+
+  it("falls back to the request cookie before the shipped default", async () => {
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    expect(
+      await harness.api.resolveOfflineLocale(
+        request("/", { cookie: "aurora-locale=en" }),
+      ),
+    ).toBe("en");
+    // Nothing remembered and no cookie: the shipped default, never English.
+    expect(await harness.api.resolveOfflineLocale(request("/"))).toBe(
+      harness.api.DEFAULT_LOCALE,
+    );
+  });
+
+  it("stores the announced locale and never any document", async () => {
+    // The one thing the meta store is allowed to hold is a two-letter locale.
+    const harness = loadWorker(async () => {
+      throw new Error("offline");
+    });
+    await runMessage(harness, { type: harness.api.LOCALE_MESSAGE, locale: "en" });
+    await runFetch(
+      harness,
+      request(`${ORIGIN}/library`, { mode: "navigate" }),
+    );
+    expect(storedResponseCount(harness)).toBe(1);
+    const stored = harness.cacheStores
+      .get(harness.api.META_CACHE)
+      ?.get(harness.api.META_LOCALE_URL);
+    expect(await stored?.text()).toBe("en");
+  });
+
+  it("persists the locale when the page posts it", async () => {
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    await runMessage(harness, { type: harness.api.LOCALE_MESSAGE, locale: "en" });
+    expect(await harness.api.readRememberedLocale()).toBe("en");
+    // The store is a separate cache from static assets, so announcing a
+    // language can never evict a hashed chunk.
+    expect(harness.openCalls).toContain(harness.api.META_CACHE);
+    expect(harness.api.META_CACHE).not.toBe(harness.api.STATIC_CACHE);
+  });
+});
+
+describe("service worker offline fallback", () => {
+  it("reads the visitor's locale off the navigation request", () => {
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    expect(harness.api.localeFromRequest(request("/"))).toBe(
+      harness.api.DEFAULT_LOCALE,
+    );
+    expect(
+      harness.api.localeFromRequest(
+        request("/", { cookie: "aurora-locale=en; other=1" }),
+      ),
+    ).toBe("en");
+    expect(
+      harness.api.localeFromRequest(
+        request("/", { cookie: "other=1; aurora-locale=vi" }),
+      ),
+    ).toBe("vi");
+  });
+
+  it("falls back to the shipped default for unknown or broken values", () => {
+    // RULE 47: a Vietnamese default-locale user is never shown English.
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    expect(
+      harness.api.localeFromRequest(request("/", { cookie: "aurora-locale=xx" })),
+    ).toBe(harness.api.DEFAULT_LOCALE);
+    expect(harness.api.offlineCopy("xx")).toEqual(
+      harness.api.OFFLINE_COPY[harness.api.DEFAULT_LOCALE],
+    );
+  });
+
+  it("renders the offline page in the visitor's language", () => {
+    const harness = loadWorker(async () => new FakeResponse("x"));
+    const vi = harness.api.offlineHtml("vi");
+    const en = harness.api.offlineHtml("en");
+    expect(vi).toContain('lang="vi"');
+    expect(en).toContain('lang="en"');
+    expect(vi).toContain(harness.api.OFFLINE_COPY.vi.title);
+    expect(en).toContain(harness.api.OFFLINE_COPY.en.title);
+    // The page is a shell notice, never a cached copy of a real page.
+    expect(vi).not.toMatch(/googlevideo/i);
   });
 });
 
@@ -292,10 +512,29 @@ describe("service worker fetch behavior", () => {
     expect(response?.status).toBe(200);
     expect(response?.headers.get("content-type")).toContain("text/html");
     const body = (await response?.text()) ?? "";
-    expect(body).toContain(harness.api.OFFLINE_TITLE);
-    expect(body).toContain(harness.api.OFFLINE_BODY);
+    // Nothing announced and no cookie: the shipped Vietnamese default.
+    expect(body).toContain(harness.api.OFFLINE_COPY[harness.api.DEFAULT_LOCALE].title);
+    expect(body).toContain(harness.api.OFFLINE_COPY[harness.api.DEFAULT_LOCALE].body);
     expect(body).not.toMatch(/googlevideo|http/i);
-    expect(harness.cacheStores.size).toBe(0);
+    // NO HTML IS CACHED, so a personalized page can never leak across users or
+    // sessions. Asserting on the number of cache NAMES would be the wrong
+    // assertion now: resolving the locale opens the meta store (creating an
+    // empty one) without storing anything in it. The invariant is that no
+    // store holds a response.
+    expect(storedResponseCount(harness)).toBe(0);
+  });
+
+  it("serves the offline fallback in the visitor's language", async () => {
+    const harness = loadWorker(async () => {
+      throw new Error("offline");
+    });
+    const response = await runFetch(
+      harness,
+      request(`${ORIGIN}/library`, { mode: "navigate", cookie: "aurora-locale=en" }),
+    );
+    const body = (await response?.text()) ?? "";
+    expect(body).toContain(harness.api.OFFLINE_COPY.en.title);
+    expect(body).not.toContain(harness.api.OFFLINE_COPY.vi.title);
   });
 
   it("never puts playback, api, or write traffic into any cache", async () => {

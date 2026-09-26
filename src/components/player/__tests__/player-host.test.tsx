@@ -71,8 +71,8 @@ function setRangeValue(input: HTMLInputElement, value: string) {
 }
 
 const controls = () =>
-  within(screen.getByRole("group", { name: "Playback controls" }));
-const bar = () => within(screen.getByRole("region", { name: "Player bar" }));
+  within(screen.getByRole("group", { name: "Điều khiển phát" }));
+const bar = () => within(screen.getByRole("region", { name: "Thanh phát nhạc" }));
 
 function youtubeTrack(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -104,8 +104,8 @@ describe("PlayerHost + player bar", () => {
   it("renders an empty bar until a track is loaded", async () => {
     render(<PlayerHost />);
     await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
-    expect(await screen.findByText("Nothing playing")).toBeTruthy();
-    expect(controls().getByRole("button", { name: "Play" })).toHaveProperty("disabled", true);
+    expect(await screen.findByText("Chưa phát gì cả")).toBeTruthy();
+    expect(controls().getByRole("button", { name: "Phát" })).toHaveProperty("disabled", true);
   });
 
   it("shows the current track and toggles playback from the bar", async () => {
@@ -115,13 +115,13 @@ describe("PlayerHost + player bar", () => {
     usePlayerStore.getState().playTrack(youtubeTrack("aaaaaaaaaaa", { artistName: "Bar Artist" }));
     expect(await bar().findByText("Track aaaaaaaaaaa")).toBeTruthy();
     expect(bar().getByText("Bar Artist")).toBeTruthy();
-    await controls().findByRole("button", { name: "Pause" });
+    await controls().findByRole("button", { name: "Tạm dừng" });
 
-    fireEvent.click(controls().getByRole("button", { name: "Pause" }));
-    expect(await controls().findByRole("button", { name: "Play" })).toBeTruthy();
+    fireEvent.click(controls().getByRole("button", { name: "Tạm dừng" }));
+    expect(await controls().findByRole("button", { name: "Phát" })).toBeTruthy();
 
-    fireEvent.click(controls().getByRole("button", { name: "Play" }));
-    expect(await controls().findByRole("button", { name: "Pause" })).toBeTruthy();
+    fireEvent.click(controls().getByRole("button", { name: "Phát" }));
+    expect(await controls().findByRole("button", { name: "Tạm dừng" })).toBeTruthy();
   });
 
   it("displays the stream error message in an accessible status region", async () => {
@@ -156,13 +156,13 @@ describe("PlayerHost + player bar", () => {
     surface.dispatch(EventEnum.loadedmetadata);
     await screen.findByText("3:20");
 
-    setRangeValue(screen.getByLabelText("Seek"), "40");
+    setRangeValue(screen.getByLabelText("Tua"), "40");
     expect(await screen.findByText("0:40")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Mute" }));
-    expect(await screen.findByRole("button", { name: "Unmute" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Tắt tiếng" }));
+    expect(await screen.findByRole("button", { name: "Bật tiếng" })).toBeTruthy();
 
-    setRangeValue(screen.getByLabelText("Volume"), "0.25");
+    setRangeValue(screen.getByLabelText("Âm lượng"), "0.25");
     await waitFor(() => expect(usePlayerStore.getState().volume).toBe(0.25));
   });
 
@@ -173,15 +173,15 @@ describe("PlayerHost + player bar", () => {
     usePlayerStore.getState().playTrack(
       youtubeTrack("bbbbbbbbbbb", { artistName: "Mini Artist" }),
     );
-    const mini = within(await screen.findByRole("region", { name: "Mini player" }));
+    const mini = within(await screen.findByRole("region", { name: "Trình phát thu gọn" }));
     expect(mini.getByText("Track bbbbbbbbbbb")).toBeTruthy();
     expect(mini.getByText("Mini Artist")).toBeTruthy();
 
-    fireEvent.click(mini.getByRole("button", { name: "Pause" }));
-    expect(await mini.findByRole("button", { name: "Play" })).toBeTruthy();
+    fireEvent.click(mini.getByRole("button", { name: "Tạm dừng" }));
+    expect(await mini.findByRole("button", { name: "Phát" })).toBeTruthy();
 
-    fireEvent.click(mini.getByRole("button", { name: "Play" }));
-    expect(await mini.findByRole("button", { name: "Pause" })).toBeTruthy();
+    fireEvent.click(mini.getByRole("button", { name: "Phát" }));
+    expect(await mini.findByRole("button", { name: "Tạm dừng" })).toBeTruthy();
   });
 
   it("logs host initialization and shutdown exactly once", async () => {
@@ -194,10 +194,25 @@ describe("PlayerHost + player bar", () => {
       const { unmount } = render(<PlayerHost />);
       await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
       unmount();
-      expect(records.map((record) => record.event)).toEqual([
+      // Each lifecycle event appears exactly once. Asserted by count rather than
+      // by an exact ordered list, because PlayerHost legitimately hosts more than
+      // one diagnosable subsystem: Phase 52 added multi-tab playback ownership,
+      // which announces its own start and stop. The property under test is
+      // "once, not zero and not twice" - a strict list would turn every future
+      // subsystem into a false failure and would stop anyone adding one.
+      const events = records.map((record) => record.event);
+      for (const event of [
         "app_initialized",
         "app_shutdown",
-      ]);
+        "playback_ownership_started",
+        "playback_ownership_stopped",
+      ]) {
+        expect(events.filter((candidate) => candidate === event)).toEqual([event]);
+      }
+      // Ordering still matters: initialize before shutdown.
+      expect(events.indexOf("app_initialized")).toBeLessThan(
+        events.indexOf("app_shutdown"),
+      );
     } finally {
       restore();
       setLogLevel("error");

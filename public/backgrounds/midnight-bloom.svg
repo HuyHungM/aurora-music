@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Midnight Bloom">
+  <!-- Midnight Bloom. The only preset with any warmth in it: a faint rose
+       low-right against the cold base. It stays inside the restraint window -
+       low chroma, low alpha, a large area - so it reads as a rose-coloured
+       light in a cold room rather than as a pink theme. Chosen last on
+       purpose: the set should not be five variations of one hue, and this is
+       what makes "Polar Glow" and "Northern Light" legible as different
+       choices. -->
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#0a0812" />
+      <stop offset="0.6" stop-color="#0b0817" />
+      <stop offset="1" stop-color="#06050c" />
+    </linearGradient>
+    <radialGradient id="bloom" cx="0.78" cy="0.88" r="0.62">
+      <stop offset="0" stop-color="#c86a9e" stop-opacity="0.36" />
+      <stop offset="0.38" stop-color="#a24d84" stop-opacity="0.16" />
+      <stop offset="1" stop-color="#7a3763" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="cold" cx="0.16" cy="0.1" r="0.66">
+      <stop offset="0" stop-color="#4b3a9c" stop-opacity="0.34" />
+      <stop offset="1" stop-color="#4b3a9c" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="veil" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#06050c" stop-opacity="0.12" />
+      <stop offset="1" stop-color="#06050c" stop-opacity="0.62" />
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#base)" />
+  <rect width="1600" height="1000" fill="url(#cold)" />
+  <rect width="1600" height="1000" fill="url(#bloom)" />
+  <rect width="1600" height="1000" fill="url(#veil)" />
+</svg>

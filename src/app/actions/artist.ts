@@ -1,7 +1,7 @@
 "use server";
 
-import { requireUser, getSessionUserId } from "@/lib/dal/session";
-import { followArtist, unfollowArtist, isFollowing } from "@/lib/dal/follow";
+import { requireUser } from "@/lib/dal/session";
+import { followArtist, unfollowArtist } from "@/lib/dal/follow";
 import type { Artist } from "@/lib/domain";
 
 export async function followArtistAction(
@@ -27,17 +27,11 @@ export async function unfollowArtistAction(
     });
     return { ok: true, following: false };
   } catch {
-    return { ok: false, following: false };
+    // `following` reports the state the caller should DISPLAY. A failed
+    // unfollow leaves the user following, so reporting `false` here told
+    // callers the opposite of the truth. `FollowButton` masked it by
+    // hardcoding its own rollback value, which is exactly the kind of
+    // compensation that stops mattering the moment a second caller appears.
+    return { ok: false, following: true };
   }
-}
-
-export async function checkFollowingAction(
-  providerArtistId: string,
-  provider: string,
-): Promise<boolean> {
-  const userId = await getSessionUserId();
-  if (!userId) {
-    return false;
-  }
-  return isFollowing(userId, { provider, providerArtistId });
 }

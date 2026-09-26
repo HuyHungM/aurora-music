@@ -1,26 +1,32 @@
-import { SearchIcon } from "@/components/ui/icons";
+import type { Locale } from "@/lib/i18n/locale";
+import { DEFAULT_LOCALE } from "@/lib/i18n/locale";
+import { getT } from "@/lib/i18n/translate";
+import { SearchField } from "@/components/search/search-field";
 
-export function SearchForm({ defaultValue }: { defaultValue: string }) {
+/**
+ * The `/search` page's own field.
+ *
+ * The input itself is the shared client `SearchField`; this stays a server
+ * component so the copy is resolved in the request locale (no client
+ * dictionary, no hydration mismatch) and so the query the page rendered
+ * results for is the exact query the field starts with.
+ */
+export function SearchForm({
+  defaultValue,
+  locale = DEFAULT_LOCALE,
+}: {
+  defaultValue: string;
+  locale?: Locale;
+}) {
+  const t = getT(locale);
   return (
-    <form action="/search" method="get" role="search" className="w-full">
-      <label htmlFor="search-q" className="sr-only">
-        Search tracks
-      </label>
-      <div className="relative">
-        <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-text-muted">
-          <SearchIcon size={18} />
-        </span>
-        <input
-          id="search-q"
-          name="q"
-          type="search"
-          defaultValue={defaultValue}
-          placeholder="Search open music by track, artist, or album"
-          autoComplete="off"
-          spellCheck={false}
-          className="h-12 w-full rounded-full border border-border-strong bg-surface-1 pl-11 pr-4 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-        />
-      </div>
-    </form>
+    <SearchField
+      id="search-q"
+      variant="page"
+      label={t("searchForm.label")}
+      placeholder={t("searchForm.placeholder")}
+      clearLabel={t("searchForm.clear")}
+      defaultValue={defaultValue}
+    />
   );
 }

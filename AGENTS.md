@@ -15,8 +15,24 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - `docs/scope-boundaries.md` — deliberate exclusions/deferred features.
 - `docs/security.md` — operational security posture.
 - `docs/deployment.md` — release/deployment procedure.
-- Phase reports (`PHASE_*.md`, `MUSIC_PROVIDER_PLAN.md`) are historical
-  evidence, not the ongoing specification.
+- Phase reports were historical evidence, not the ongoing specification, and
+  the early ones have since been removed from the tree. They are not a
+  citation target: a rule that used to live in one now lives in one of the
+  documents above.
+
+## Toolchain
+
+**Bun is the canonical package manager and script runtime.** `bun.lock` is the
+only lockfile; there is no `package-lock.json`.
+
+- Install: `bun install` (CI uses `bun install --frozen-lockfile`).
+- Scripts: `bun run <script>`. Do not write `npm run`, `npm ci` or `npx` in
+  instructions, code, or CI — use `bun run` and `bunx`.
+- A `postinstall` hook runs `prisma generate`, so a fresh `bun install`
+  produces a working tree; never delete `src/generated` without reinstalling.
+- `bun run typecheck` depends on `.next/types`, which only a `next build` (or
+  `next dev`) generates. On a clean clone, run `bun run build` before
+  `bun run typecheck`. This is Next.js 16 behaviour, not a Bun limitation.
 
 Behavior changes must update `PRODUCT_SPEC.md` and/or `ARCHITECTURE.md`
 in the same change; new exclusions/deferrals must update

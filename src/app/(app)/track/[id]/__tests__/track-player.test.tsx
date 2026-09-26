@@ -15,6 +15,12 @@ vi.mock("@/app/actions/track", () => ({
   checkTrackLikedAction: vi.fn(async () => false),
 }));
 
+vi.mock("@/app/actions/playlist", () => ({
+  listUserPlaylistsAction: vi.fn().mockResolvedValue({ ok: true, playlists: [] }),
+  addTrackToPlaylistAction: vi.fn().mockResolvedValue({ ok: true }),
+  createPlaylistAction: vi.fn().mockResolvedValue({ ok: true, playlistId: "new" }),
+}));
+
 function resetStore() {
   usePlayerStore.setState({
     currentTrack: null,
@@ -60,13 +66,13 @@ describe("TrackPlayer", () => {
   it("shows Play button when not playing", () => {
     const track = makePlayableTrack("t1");
     render(<TrackPlayer track={track} initialLiked={false} />);
-    expect(screen.getByRole("button", { name: "Play Track t1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Phát Track t1" })).toBeTruthy();
   });
 
   it("starts playback when Play is clicked", async () => {
     const track = makePlayableTrack("t1");
     render(<TrackPlayer track={track} initialLiked={false} />);
-    fireEvent.click(screen.getByRole("button", { name: "Play Track t1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Track t1" }));
     await waitFor(() =>
       expect(usePlayerStore.getState().currentTrack?.id).toBe("t1"),
     );
@@ -75,23 +81,23 @@ describe("TrackPlayer", () => {
   it("toggles to Pause when playing", async () => {
     const track = makePlayableTrack("t1", { provider: "youtube", providerTrackId: "t1" });
     render(<TrackPlayer track={track} initialLiked={false} />);
-    fireEvent.click(screen.getByRole("button", { name: "Play Track t1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Phát Track t1" }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Pause Track t1" })).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Tạm dừng Track t1" })).toBeTruthy(),
     );
   });
 
   it("shows filled heart when liked", () => {
     const track = makePlayableTrack("t1");
     render(<TrackPlayer track={track} initialLiked={true} />);
-    const likeButton = screen.getByRole("button", { name: "Unlike Track t1" });
+    const likeButton = screen.getByRole("button", { name: "Bỏ thích Track t1" });
     expect(likeButton).toBeTruthy();
   });
 
   it("shows empty heart when not liked", () => {
     const track = makePlayableTrack("t1");
     render(<TrackPlayer track={track} initialLiked={false} />);
-    const likeButton = screen.getByRole("button", { name: "Like Track t1" });
+    const likeButton = screen.getByRole("button", { name: "Thích Track t1" });
     expect(likeButton).toBeTruthy();
   });
 
@@ -104,7 +110,7 @@ describe("TrackPlayer", () => {
   it("shows explicit badge when track is explicit", () => {
     const track = makePlayableTrack("t1", { explicit: true });
     render(<TrackPlayer track={track} initialLiked={false} />);
-    expect(screen.getByText("Explicit")).toBeTruthy();
+    expect(screen.getByText("Nhạy cảm")).toBeTruthy();
   });
 
   it("shows genres when available", () => {
@@ -112,5 +118,28 @@ describe("TrackPlayer", () => {
     render(<TrackPlayer track={track} initialLiked={false} />);
     expect(screen.getByText("Rock")).toBeTruthy();
     expect(screen.getByText("Alternative")).toBeTruthy();
+  });
+
+  /**
+   * Phase 49 regression. `genres` is a provider-supplied JSON column with no
+   * uniqueness guarantee on any read path, and the chips were keyed directly
+   * by the genre string. A stored `["pop","pop"]` therefore rendered a
+   * duplicate chip AND handed React a duplicate key - the same class of
+   * provider-value-as-identity bug that `TrackList` was fixed for.
+   */
+  it("de-duplicates repeated genres so keys stay unique", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const track = makePlayableTrack("t1", { genres: ["pop", "pop", "indie"] });
+      render(<TrackPlayer track={track} initialLiked={false} />);
+
+      // Each genre appears exactly once.
+      expect(screen.getAllByText("pop")).toHaveLength(1);
+      expect(screen.getAllByText("indie")).toHaveLength(1);
+      // ...and React never saw a duplicate key.
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

@@ -1,0 +1,20 @@
+-- AlterTable: Aurora V-Shape equalizer preference (Phase 53 addendum).
+-- Nullable JSONB column only, deliberately shaped like `appearance`: null means
+-- "no explicit preference" and falls back to the anonymous cookie, then to
+-- DEFAULT_EQ. No backfill, no default, no NOT NULL.
+--
+-- A column and not a table, because a preference belongs on the account. A
+-- separate `UserAudioEq` table would be a second preference *system* - a second
+-- schema to migrate, a second write that can fail, a second thing to back up -
+-- and addendum §40 rules that out explicitly.
+--
+-- A column and not a key inside `appearance`, because the two are unrelated
+-- domains. `Appearance` is a closed, typed shape with its own ranges, decoder
+-- and wire format; a key added to it would break its per-field repair and mean
+-- that writing a glass slider could clobber somebody's equalizer curve.
+--
+-- JSONB rather than ten numeric columns, because the document
+-- `src/lib/audio/eq.ts` encodes omits every band equal to the default. Omission
+-- is the whole point of the format - a listener who has not touched the
+-- equalizer is worth `{"v":1}` - and it is not representable as columns.
+ALTER TABLE "User" ADD COLUMN "audioEq" JSONB;

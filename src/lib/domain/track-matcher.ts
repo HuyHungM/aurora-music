@@ -77,6 +77,28 @@ export const MATCH_THRESHOLD_POSSIBLE = 30;
 
 export type MatchClassification = "exact" | "strong" | "possible" | "rejected";
 
+/**
+ * The classifications a caller MAY act on automatically — treat two
+ * representations as one logical track, or merge their sources.
+ *
+ * `possible` is deliberately absent. `possible` means the evidence cleared
+ * the reject layer but did not reach `strong`, and acting on it is how a
+ * different song that merely shares a title ends up silently deleted from
+ * somebody's playlist. This constant is the single definition of that policy
+ * so search grouping, duplicate rejection and every other caller cannot each
+ * decide their own threshold: `unified-search.ts` and `track-dedupe.ts` both
+ * read it, and neither may widen it (Phase 07 stays calibrated).
+ */
+export const AUTO_MERGE_CLASSIFICATIONS: readonly MatchClassification[] = [
+  "exact",
+  "strong",
+];
+
+/** True when a match result may be acted on without a human decision. */
+export function isAutoMergeable(result: TrackMatchResult): boolean {
+  return result.matched && AUTO_MERGE_CLASSIFICATIONS.includes(result.classification);
+}
+
 export type MatchSignal =
   | "same-source-id"
   | "isrc"

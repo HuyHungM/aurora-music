@@ -2,7 +2,12 @@ export type { ProviderId, SourceType, TrackRef } from "./common";
 export type { Track } from "./track";
 export type { Artist } from "./artist";
 export type { Album } from "./album";
-export type { Playlist, PlaylistItem } from "./playlist";
+export type {
+  Playlist,
+  PlaylistItem,
+  PlaylistVisibility,
+  SharedPlaylist,
+} from "./playlist";
 export type { User } from "./user";
 export type { Like } from "./like";
 export type { Follow } from "./follow";
@@ -29,7 +34,7 @@ export {
   toTrackRef,
 } from "./source-reference";
 export type { TrackIdentity } from "./track-identity";
-export { findSourceReference, primaryTrackRef } from "./track-identity";
+export { findSourceReference, identityKeys, primaryTrackRef } from "./track-identity";
 export type {
   CanonicalSearchInput,
   ToIdentityOptions,
@@ -53,6 +58,7 @@ export type {
   TrackMatcher,
 } from "./track-matcher";
 export {
+  AUTO_MERGE_CLASSIFICATIONS,
   DURATION_CLOSE_MS,
   DURATION_CLOSE_REL_CAP_MS,
   DURATION_CLOSE_REL_RATIO,
@@ -83,8 +89,22 @@ export {
   WEIGHT_VERSION_SAME,
   createTrackMatcher,
   findBestMatch,
+  isAutoMergeable,
   rankMatches,
 } from "./track-matcher";
+export type {
+  CanonicalDuplicate,
+  CanonicalDuplicateOptions,
+  CanonicalTrackLike,
+  DuplicateReason,
+} from "./track-dedupe";
+export {
+  CanonicalDuplicateIndex,
+  canonicalIdentityOf,
+  canonicalTrackKeys,
+  dedupeCanonicalTracks,
+  findCanonicalDuplicate,
+} from "./track-dedupe";
 export type { ParsedTitle, VersionComparison, VersionKind } from "./match-text";
 export {
   DISTINCT_VERSION_KINDS,

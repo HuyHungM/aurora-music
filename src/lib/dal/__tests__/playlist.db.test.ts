@@ -4,12 +4,12 @@ import {
   addTrackToPlaylist,
   createPlaylist,
   deletePlaylist,
-  getPlaylist,
   listUserPlaylists,
   removeTrackFromPlaylist,
   reorderPlaylist,
   updatePlaylist,
 } from "@/lib/dal/playlist";
+import { getOwnedPlaylist } from "@/lib/dal/library";
 import { AuthorizationError, ConflictError, ResourceNotFoundError } from "@/lib/errors";
 import { dbTest } from "./harness";
 
@@ -41,7 +41,7 @@ afterAll(async () => {
   await dbTest.cleanup(namespace);
 });
 
-describe("createPlaylist / getPlaylist / listUserPlaylists", () => {
+describe("createPlaylist / getOwnedPlaylist / listUserPlaylists", () => {
   it("creates an empty playlist owned by the user", async () => {
     const playlist = await createPlaylist(
       ownerId,
@@ -56,14 +56,14 @@ describe("createPlaylist / getPlaylist / listUserPlaylists", () => {
     expect(playlist.id).toBeTruthy();
   });
 
-  it("reads back a playlist by id", async () => {
+  it("reads back a playlist by id for its owner", async () => {
     const id = await seedPlaylist();
-    const playlist = await getPlaylist(id, prisma);
+    const playlist = await getOwnedPlaylist(ownerId, id, prisma);
     expect(playlist?.title).toBe("Seed");
   });
 
   it("returns null for a missing playlist", async () => {
-    await expect(getPlaylist("missing", prisma)).resolves.toBeNull();
+    await expect(getOwnedPlaylist(ownerId, "missing", prisma)).resolves.toBeNull();
   });
 
   it("lists only the user's playlists", async () => {
@@ -79,7 +79,7 @@ describe("addTrackToPlaylist", () => {
     const id = await seedPlaylist();
     await addTrackToPlaylist(ownerId, id, trackOne, prisma);
     await addTrackToPlaylist(ownerId, id, trackTwo, prisma);
-    const playlist = await getPlaylist(id, prisma);
+    const playlist = await getOwnedPlaylist(ownerId, id, prisma);
     expect(playlist?.items.map((item) => item.trackId)).toEqual([trackOne.id, trackTwo.id]);
   });
 
@@ -318,7 +318,7 @@ describe("reorderPlaylist", () => {
       // expected
     }
 
-    const playlist = await getPlaylist(id, prisma);
+    const playlist = await getOwnedPlaylist(ownerId, id, prisma);
     expect(playlist?.items.map((item) => item.trackId)).toEqual([trackOne.id, trackTwo.id]);
   });
 });
@@ -347,7 +347,7 @@ describe("updatePlaylist / deletePlaylist", () => {
   it("deletes the playlist for its owner", async () => {
     const id = await seedPlaylist();
     await deletePlaylist(ownerId, id, prisma);
-    await expect(getPlaylist(id, prisma)).resolves.toBeNull();
+    await expect(getOwnedPlaylist(ownerId, id, prisma)).resolves.toBeNull();
   });
 
   it("rejects a non-owner delete", async () => {

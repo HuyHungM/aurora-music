@@ -1,14 +1,15 @@
 export interface NavItemConfig {
   href: string;
-  label: string;
+  /** Translation key resolved through the locale dictionaries. */
+  labelKey: string;
   icon: "home" | "search" | "library" | "radio";
 }
 
 export const navItems: NavItemConfig[] = [
-  { href: "/", label: "Home", icon: "home" },
-  { href: "/search", label: "Search", icon: "search" },
-  { href: "/library", label: "Library", icon: "library" },
-  { href: "/radio", label: "Radio", icon: "radio" },
+  { href: "/", labelKey: "nav.home", icon: "home" },
+  { href: "/search", labelKey: "nav.search", icon: "search" },
+  { href: "/library", labelKey: "nav.library", icon: "library" },
+  { href: "/radio", labelKey: "nav.radio", icon: "radio" },
 ];
 
 export function isActivePath(pathname: string, href: string): boolean {

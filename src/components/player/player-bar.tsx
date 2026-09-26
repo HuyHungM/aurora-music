@@ -3,13 +3,25 @@
 import { resolveArtworkUrl } from "@/lib/domain";
 import { usePlayerStore } from "@/lib/player/store";
 import { useMusicEngine, useMusicEngineState } from "@/lib/music/use-music-engine";
-import type { EngineRepeatMode } from "@/lib/music/music-engine";
+import { identityToTrack } from "@/lib/music/identity-track";
 import { formatPlaybackTime } from "@/lib/player/format";
-import { TrackArt } from "@/components/tracks/track-art";
+import { Artwork } from "@/components/ui/artwork";
+import { useLocale } from "@/components/i18n/locale-provider";
+import { PlayerLikeButton } from "@/components/tracks/liked-tracks";
+import { TrackActionMenu } from "@/components/tracks/track-action-menu";
 import { Button } from "@/components/ui/button";
+import { AutoplayButton } from "@/components/player/autoplay-button";
 import {
-  PauseIcon,
-  PlayIcon,
+  nextRepeatMode,
+  PlayPauseButton,
+  repeatDisplay,
+  SeekSlider,
+  SHUFFLE_DISABLED_CLASS,
+  shuffleIconClass,
+  shuffleToggleClass,
+  useShuffleControl,
+} from "@/components/ui/player-controls";
+import {
   QueueIcon,
   RepeatIcon,
   RepeatOneIcon,
@@ -19,27 +31,6 @@ import {
   VolumeIcon,
   VolumeMuteIcon,
 } from "@/components/ui/icons";
-
-/** Engine repeat vocabulary mapped back onto the established UI labels. */
-function repeatLabel(repeat: EngineRepeatMode): "off" | "all" | "one" {
-  if (repeat === "track") {
-    return "one";
-  }
-  if (repeat === "queue") {
-    return "all";
-  }
-  return "off";
-}
-
-function nextRepeatMode(repeat: EngineRepeatMode): EngineRepeatMode {
-  if (repeat === "off") {
-    return "queue";
-  }
-  if (repeat === "queue") {
-    return "track";
-  }
-  return "off";
-}
 
 export function PlayerBar() {
   const engine = useMusicEngine();
@@ -52,148 +43,148 @@ export function PlayerBar() {
   const muted = useMusicEngineState((s) => s.muted);
   const error = useMusicEngineState((s) => s.error);
   const shuffle = useMusicEngineState((s) => s.shuffle);
+  // Availability and the three labels come from one shared source, so this
+  // surface cannot disagree with the mini bar or the full player about whether
+  // shuffle can be used or what it is called.
+  const shuffleControl = useShuffleControl();
   const repeat = useMusicEngineState((s) => s.repeat);
   const queueIndex = useMusicEngineState((s) => s.currentIndex);
-  const repeatDisplay = repeatLabel(repeat);
+  const { t } = useLocale();
+  const rd = repeatDisplay(repeat);
+  const repeatLabel =
+    rd === "one" ? t("player.repeatOne") : rd === "all" ? t("player.repeatAll") : t("player.repeatOff");
   const artistName = currentTrack?.artists[0]?.name ?? "";
   const artworkUrl = currentTrack ? resolveArtworkUrl(currentTrack.artwork) : undefined;
   // Queue-panel visibility is local UI chrome state, not engine state.
   const openQueue = usePlayerStore((s) => s.openQueue);
 
   const seekMax = duration > 0 ? duration : 1;
-  const seekValue = Math.min(Math.max(currentTime, 0), seekMax);
+  const progress = Math.min(Math.max(currentTime, 0), seekMax) / seekMax;
   const displayVolume = muted ? 0 : volume;
 
   return (
     <div
       role="region"
-      aria-label="Player bar"
-      className="fixed inset-x-0 bottom-0 z-40 hidden h-[6rem] border-t border-border-subtle bg-surface-1 lg:left-60 lg:flex"
+      aria-label={t("player.bar")}
+      // `aurora-glass` replaces `bg-background-subtle/95 backdrop-blur-md`
+      // (Phase 53, §29). The player is the surface most often overlapped by
+      // scrolling content, which is exactly why the chrome glass level is the
+      // MOST opaque of the three rather than the least: a translucent
+      // transport bar with list rows visible through it is a legibility
+      // problem before it is a premium look. `--glass-chrome-alpha` encodes
+      // that, and this is the surface it was chosen for.
+      className="aurora-glass fixed inset-x-0 bottom-0 z-player hidden border-t border-border-subtle lg:left-66 lg:flex"
     >
-      <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 px-6 py-3">
-        <div className="flex min-w-0 items-center gap-3">
+      {/* Hairline progress: the bar's top edge is the seek position. */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-x-0 top-0 h-0.5 bg-surface-active"
+      >
+        <div className="h-full bg-accent transition-[width]" style={{ width: `${progress * 100}%` }} />
+      </div>
+
+      <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 px-5 py-2.5">
+        {/* Identity: artwork + track + artist + compact Like. */}
+        <div className="flex min-w-0 items-center gap-2">
           {currentTrack ? (
             <>
-              <TrackArt src={artworkUrl} alt={currentTrack.title} size={44} />
-              <span className="flex min-w-0 flex-col">
-                <span className="truncate text-sm font-medium text-text-primary">
-                  {currentTrack.title}
-                </span>
-                <span className="truncate text-xs text-text-muted">
-                  {artistName}
-                </span>
+              <Artwork src={artworkUrl} alt="" size="player" pixelSize={48} />
+              <span className="flex min-w-0 flex-1 flex-col gap-px">
+                <span className="t-track-title truncate">{currentTrack.title}</span>
+                <span className="t-metadata truncate">{artistName}</span>
               </span>
+              <PlayerLikeButton />
+              <TrackActionMenu
+                track={identityToTrack(currentTrack)}
+                showAddToPlaylist
+              />
             </>
           ) : (
-            <span className="truncate text-sm text-text-muted">Nothing playing</span>
+            <span className="truncate text-sm text-text-muted">{t("player.nothingPlaying")}</span>
           )}
         </div>
 
-        <div className="flex items-center gap-2" role="group" aria-label="Playback controls">
+        {/* Primary transport: the reason the bar exists. */}
+        <div className="flex items-center gap-1" role="group" aria-label={t("player.controls")}>
           <Button
             variant="ghost"
             size="icon"
-            className="h-11 w-11"
-            aria-label={shuffle ? "Disable shuffle" : "Enable shuffle"}
+            className={`h-10 w-10 ${shuffleToggleClass(shuffle)} ${SHUFFLE_DISABLED_CLASS}`}
+            disabled={!shuffleControl.canShuffle}
+            aria-label={shuffleControl.actionLabel}
             aria-pressed={shuffle}
+            title={shuffleControl.title}
             onClick={() => engine?.shuffle()}
           >
-            <ShuffleIcon size={20} className={shuffle ? "text-accent" : ""} />
+            <ShuffleIcon size={18} className={shuffleIconClass(shuffle)} />
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            className="h-11 w-11"
-            aria-label="Previous track"
+            className="h-10 w-10"
+            aria-label={t("player.previous")}
             onClick={() => engine?.previous()}
             disabled={!currentTrack}
           >
-            <SkipBackIcon size={20} />
+            <SkipBackIcon size={18} />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-11 w-11"
-            aria-label={isPlaying ? "Pause" : "Play"}
-            onClick={() => engine?.togglePlay()}
+          <PlayPauseButton
+            playing={isPlaying}
+            loading={isLoading}
+            label={isPlaying ? t("player.pause") : t("player.play")}
+            onToggle={() => engine?.togglePlay()}
             disabled={!currentTrack || isLoading}
-          >
-            {isLoading ? (
-              <span className="h-5 w-5 animate-spin rounded-full border-2 border-text-muted border-t-transparent" />
-            ) : isPlaying ? (
-              <PauseIcon size={22} />
-            ) : (
-              <PlayIcon size={22} />
-            )}
-          </Button>
+          />
           <Button
             variant="ghost"
             size="icon"
-            className="h-11 w-11"
-            aria-label="Next track"
+            className="h-10 w-10"
+            aria-label={t("player.next")}
             onClick={() => engine?.skip()}
             disabled={!currentTrack}
           >
-            <SkipForwardIcon size={20} />
+            <SkipForwardIcon size={18} />
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            className="h-11 w-11"
-            aria-label={`Repeat: ${repeatDisplay}`}
-            aria-pressed={repeatDisplay !== "off"}
+            className="h-10 w-10"
+            aria-label={repeatLabel}
+            aria-pressed={rd !== "off"}
             onClick={() => engine?.setRepeat(nextRepeatMode(repeat))}
           >
-            {repeatDisplay === "one" ? (
-              <RepeatOneIcon size={20} className="text-accent" />
+            {rd === "one" ? (
+              <RepeatOneIcon size={18} className="text-accent" />
             ) : (
-              <RepeatIcon size={20} className={repeatDisplay === "all" ? "text-accent" : ""} />
+              <RepeatIcon size={18} className={rd === "all" ? "text-accent" : ""} />
             )}
           </Button>
         </div>
 
-        <div className="flex items-center gap-3 justify-self-end">
-          <div className="flex min-w-44 flex-col gap-1">
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={0}
-                max={seekMax}
-                step={1}
-                value={seekValue}
-                aria-label="Seek"
-                onChange={(event) => engine?.seek(Number(event.currentTarget.value))}
-                onKeyDown={(e) => {
-                  const step = 5;
-                  if (e.key === "ArrowRight") {
-                    e.preventDefault();
-                    engine?.seek(Math.min(currentTime + step, seekMax));
-                  } else if (e.key === "ArrowLeft") {
-                    e.preventDefault();
-                    engine?.seek(Math.max(currentTime - step, 0));
-                  } else if (e.key === "Home") {
-                    e.preventDefault();
-                    engine?.seek(0);
-                  } else if (e.key === "End") {
-                    e.preventDefault();
-                    engine?.seek(seekMax);
-                  }
-                }}
-                className="w-full accent-accent focus-visible:outline-2 focus-visible:outline-accent"
-              />
-            </div>
+        {/* Secondary: time + queue + volume. The seek block stays
+            narrow at xl so the right zone can never overflow onto the
+            transport controls at 1280px; it widens where room allows. */}
+        <div className="flex min-w-0 items-center gap-3 justify-self-end">
+          <div className="hidden w-32 flex-col gap-1 xl:flex 2xl:w-48">
+            <SeekSlider position={currentTime} duration={duration} onSeek={(v) => engine?.seek(v)} />
             <div className="flex justify-between text-[11px] tabular-nums text-text-muted">
               <span>{formatPlaybackTime(currentTime)}</span>
               <span>{formatPlaybackTime(duration)}</span>
             </div>
           </div>
-
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1">
+            {/* Autoplay sits with the queue controls, not in the transport
+                row: it is a secondary control, and putting it beside
+                play/pause would compete with the reason the bar exists. It is
+                immediately left of the queue button because the two are the
+                same idea — what is queued, and what happens when it runs
+                out. */}
+            <AutoplayButton size={20} />
             <Button
               variant="ghost"
               size="icon"
               className="h-11 w-11"
-              aria-label="Up next"
+              aria-label={t("player.upNext")}
               onClick={openQueue}
             >
               <QueueIcon size={20} />
@@ -202,8 +193,8 @@ export function PlayerBar() {
               variant="ghost"
               size="icon"
               className="h-11 w-11"
-            aria-label={muted ? "Unmute" : "Mute"}
-            onClick={() => engine?.toggleMute()}
+              aria-label={muted ? t("player.unmute") : t("player.mute")}
+              onClick={() => engine?.toggleMute()}
             >
               {muted ? <VolumeMuteIcon size={20} /> : <VolumeIcon size={20} />}
             </Button>
@@ -213,9 +204,9 @@ export function PlayerBar() {
               max={1}
               step={0.01}
               value={displayVolume}
-              aria-label="Volume"
+              aria-label={t("player.volume")}
               onChange={(event) => engine?.setVolume(Number(event.currentTarget.value))}
-              className="w-24 accent-accent"
+              className="hidden w-24 accent-accent xl:block"
             />
           </div>
         </div>
@@ -224,12 +215,12 @@ export function PlayerBar() {
       {error && currentTrack ? (
         <div
           role="status"
-          className="absolute inset-x-0 -top-7 mx-auto flex w-max max-w-[90%] items-center gap-3 truncate rounded-t-lg border border-b-0 border-border-subtle bg-surface-1 px-4 py-1.5 text-xs text-text-secondary"
+          className="absolute inset-x-0 -top-8 mx-auto flex w-max max-w-[90%] items-center gap-3 truncate rounded-t-xl border border-b-0 border-border-subtle bg-surface-elevated px-4 py-1.5 text-xs text-text-secondary"
         >
           <span className="truncate">{error.message}</span>
           <button
             type="button"
-            aria-label="Retry playback"
+            aria-label={t("player.retryPlayback")}
             onClick={() => {
               if (queueIndex >= 0) {
                 engine?.playAt(queueIndex);
@@ -237,7 +228,7 @@ export function PlayerBar() {
             }}
             className="shrink-0 rounded-full border border-border-strong px-2.5 py-0.5 font-semibold text-text-primary transition-colors hover:border-accent/50 hover:text-accent"
           >
-            Retry
+            {t("common.retry")}
           </button>
         </div>
       ) : null}

@@ -221,6 +221,75 @@ describe("PlayerHost authenticated persistence", () => {
     expect(usePlayerStore.getState().currentTrack?.id).toBe("user-A");
   });
 
+  it("restores the full queue with cursor, shuffle, and repeat intact", async () => {
+    mocks.getSessionUserIdAction.mockResolvedValue({
+      ok: true,
+      userId: "user-1",
+    });
+    mocks.getPlaybackStateAction.mockResolvedValue({
+      ok: true,
+      state: {
+        provider: "mock",
+        providerTrackId: "t-b",
+        position: 34,
+        revision: 2,
+        updatedAt: new Date().toISOString(),
+        queueSnapshot: {
+          version: 2,
+          entries: [
+            {
+              provider: "mock",
+              providerTrackId: "t-a",
+              title: "Track A",
+              artistId: "a1",
+              artistName: "Artist",
+            },
+            {
+              provider: "mock",
+              providerTrackId: "t-b",
+              title: "Track B",
+              artistId: "a1",
+              artistName: "Artist",
+            },
+          ],
+          playOrder: [1, 0],
+          position: 0,
+          mediaPosition: 34,
+          shuffle: true,
+          repeat: "all",
+          volume: 0.75,
+          muted: false,
+          savedAt: 1_700_000_000_000,
+        },
+      },
+    });
+    mocks.resolvePlaybackTrackAction.mockResolvedValue({
+      ok: true,
+      track: makePlayableTrack("t-b", { title: "Track B fresh" }),
+    });
+
+    render(<PlayerHost />);
+
+    await waitFor(() =>
+      expect(usePlayerStore.getState().queue.map((t) => t.id)).toEqual([
+        "t-a",
+        "t-b",
+      ]),
+    );
+    const state = usePlayerStore.getState();
+    expect(state.playOrder).toEqual([1, 0]);
+    expect(state.position).toBe(0);
+    expect(state.shuffle).toBe(true);
+    expect(state.repeat).toBe("all");
+    expect(state.currentTrack?.title).toBe("Track B fresh");
+    expect(state.pendingRestorePosition).toBe(34);
+    // Restored, not playing: no autoplay on restore.
+    expect(state.isPlaying).toBe(false);
+    // The restored queue is live: navigation works immediately.
+    state.next();
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("t-a");
+  });
+
   it("seek on restore applies once metadata loads", async () => {
     const surface = new FakeAudioSurface();
     const engine = new PlayerEngine(surface);
@@ -255,6 +324,6 @@ describe("PlayerHost authenticated persistence", () => {
     await waitFor(() =>
       expect(usePlayerStore.getState().currentTime).toBe(40),
     );
-    expect(screen.getByRole("region", { name: "Player bar" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Thanh phát nhạc" })).toBeTruthy();
   });
 });

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Polar Glow">
+  <!-- Polar Glow. The coldest of the five: a teal-white glow high in the frame
+       over a slate-navy base, with almost no violet. Deliberately the least
+       "Aurora" of the set so the presets are genuinely distinguishable rather
+       than five tints of the same purple. -->
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#0a1119" />
+      <stop offset="0.6" stop-color="#0b141d" />
+      <stop offset="1" stop-color="#060b11" />
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.02" r="0.92">
+      <stop offset="0" stop-color="#a8e4f2" stop-opacity="0.5" />
+      <stop offset="0.32" stop-color="#4fa8c4" stop-opacity="0.26" />
+      <stop offset="0.72" stop-color="#2d6d8c" stop-opacity="0.08" />
+      <stop offset="1" stop-color="#2d6d8c" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="shelf" cx="0.12" cy="1" r="0.6">
+      <stop offset="0" stop-color="#2f5f7d" stop-opacity="0.3" />
+      <stop offset="1" stop-color="#2f5f7d" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="veil" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#060b11" stop-opacity="0.14" />
+      <stop offset="1" stop-color="#060b11" stop-opacity="0.66" />
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#base)" />
+  <rect width="1600" height="1000" fill="url(#glow)" />
+  <rect width="1600" height="1000" fill="url(#shelf)" />
+  <rect width="1600" height="1000" fill="url(#veil)" />
+</svg>

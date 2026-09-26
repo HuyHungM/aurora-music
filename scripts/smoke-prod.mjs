@@ -3,7 +3,7 @@
  * server lifecycle (Phase 27).
  *
  * Usage:
- *   node scripts/smoke-prod.mjs [baseUrl] [--spawn] [--port N] [--timeout-ms N]
+ *   bun run smoke:prod [baseUrl] [--spawn] [--port N] [--timeout-ms N]
  *
  * - Default: probe an already-running server at baseUrl (no lifecycle).
  * - --spawn: fail closed if the port is occupied, start an owned
@@ -24,6 +24,17 @@ const ROOT_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 const NEXT_BIN = join(ROOT_DIR, "node_modules", "next", "dist", "bin", "next");
 
 let failures = 0;
+
+/**
+ * Removes line and block comments so a check can assert on executable code.
+ * Used where the same file documents a deliberate absence in prose — a plain
+ * text search would then match the explanation of what is *not* done.
+ * Not a parser: string literals containing `//` are a theoretical edge case
+ * this codebase does not have, and a real parser would be a dependency.
+ */
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
 
 function check(name, ok, detail = "") {
   const status = ok ? "PASS" : "FAIL";
@@ -61,11 +72,33 @@ export async function isPortFree(baseUrl, fetchImpl = fetch) {
     await fetchImpl(`${baseUrl}/api/health`, { redirect: "manual" });
     return false;
   } catch (error) {
-    const code =
+    // Phase 50 (Bun migration). Two runtimes report a refused connection
+    // differently, and both are equally definitive:
+    //   Node - `TypeError: fetch failed`, socket code on `error.cause.code`
+    //          as "ECONNREFUSED" / "ENOTFOUND".
+    //   Bun  - `TypeError: Unable to connect`, code directly on the error as
+    //          "ConnectionRefused", with no `cause` at all.
+    // Reading only `cause.code` made Bun's refusal look ambiguous, so the
+    // port guard below failed closed and `--spawn` refused to start on a port
+    // that was demonstrably free. Both shapes are recognised; the
+    // fail-closed default is untouched for genuinely uncertain failures
+    // (timeout, abort, TLS), so the guard can never be talked into testing a
+    // foreign server.
+    const codes = [
       error && typeof error === "object" && "cause" in error
         ? error.cause?.code
-        : undefined;
-    if (code === "ECONNREFUSED" || code === "ENOTFOUND") {
+        : undefined,
+      error && typeof error === "object" && "code" in error
+        ? error.code
+        : undefined,
+    ];
+    const isRefusal = codes.some(
+      (code) =>
+        code === "ECONNREFUSED" ||
+        code === "ENOTFOUND" ||
+        code === "ConnectionRefused",
+    );
+    if (isRefusal) {
       return true;
     }
     // Uncertain (timeout, abort, TLS error): fail closed, do not assume free.
@@ -144,15 +177,44 @@ async function runChecks(baseUrl) {
     (header(home, "referrer-policy") || "").includes("strict-origin-when-cross-origin"),
   );
 
-  // 4. PWA assets served.
+  // 4. PWA assets served. Phase 51: the manifest is framework-native, so this
+  // also proves the generated route works in a real production server, not
+  // just that a static file happens to be in `public/`.
   const manifest = await get(baseUrl, "/manifest.webmanifest");
   let manifestOk = manifest.status === 200;
+  let manifestBody = null;
   try {
-    manifestOk = manifestOk && JSON.parse(manifest.text).name === "Aurora Music";
+    manifestBody = JSON.parse(manifest.text);
+    manifestOk = manifestOk && manifestBody.name === "Aurora Music";
   } catch {
     manifestOk = false;
   }
   check("manifest served and valid", manifestOk);
+  // Installability-critical fields, verified against the running server: a
+  // browser refuses to install without a reachable icon set, and treats a
+  // manifest without these as a different application on every deploy.
+  check(
+    "manifest is installable (id, scope, start_url, display, icons)",
+    manifestOk &&
+      manifestBody.id === "/" &&
+      manifestBody.scope === "/" &&
+      manifestBody.start_url === "/" &&
+      manifestBody.display === "standalone" &&
+      Array.isArray(manifestBody.display_override) &&
+      manifestBody.display_override.includes("browser") &&
+      Array.isArray(manifestBody.icons) &&
+      manifestBody.icons.some((entry) => entry.purpose === "maskable"),
+  );
+  // Every declared icon and shortcut must actually resolve, or the launcher
+  // shows a broken entry.
+  for (const entry of manifestBody?.icons ?? []) {
+    const asset = await get(baseUrl, entry.src);
+    check(
+      `icon served as png: ${entry.src}`,
+      asset.status === 200 &&
+        (header(asset, "content-type") ?? "").includes("image/png"),
+    );
+  }
   const icon = await get(baseUrl, "/icons/icon-192.png");
   check(
     "icon served as png",
@@ -165,6 +227,42 @@ async function runChecks(baseUrl) {
       sw.text.includes("googlevideo.com") &&
       sw.text.includes("passthrough"),
   );
+  // The worker must not seize control of a running session (Phase 51): a new
+  // build parks and the page releases it at pagehide. Comments are stripped
+  // first, because the install handler's own comment names `skipWaiting()` in
+  // order to explain that the call is deliberately absent — a text search
+  // that counted the comment would report the opposite of the truth.
+  const swCode = stripComments(sw.text);
+  const installBlock = swCode.slice(swCode.indexOf('addEventListener("install"'));
+  const messageBlockAt = installBlock.indexOf('addEventListener("message"');
+  check(
+    "service worker defers activation instead of forcing it",
+    swCode.includes("aurora:activate") &&
+      messageBlockAt > 0 &&
+      !/skipWaiting\s*\(\s*\)/.test(installBlock.slice(0, messageBlockAt)),
+  );
+  // Safe-area insets are inert without viewport-fit=cover, which would leave
+  // the installed layout underneath the notch and home indicator.
+  check(
+    "viewport allows safe-area insets to resolve",
+    (home.text ?? "").includes("viewport-fit=cover"),
+  );
+  // Client configuration must stay inert: safe metadata only.
+  const appConfig = await get(baseUrl, "/api/app-config");
+  let appConfigOk = appConfig.status === 200;
+  try {
+    const config = JSON.parse(appConfig.text);
+    appConfigOk =
+      appConfigOk &&
+      config.appName === "Aurora Music" &&
+      config.platform === "web" &&
+      config.capabilities?.offlineAudio === false &&
+      config.capabilities?.pushNotifications === false &&
+      !/DATABASE_URL|AUTH_SECRET|process\.env/.test(appConfig.text);
+  } catch {
+    appConfigOk = false;
+  }
+  check("app-config served with safe metadata only", appConfigOk);
 
   // 5. No open proxy for arbitrary URLs.
   const proxy = await get(baseUrl, "/api/proxy?url=https://example.com/x.mp3");
@@ -231,7 +329,7 @@ function parseArgs(argv) {
 
 async function spawnServer(port, timeoutMs) {
   if (!existsSync(join(ROOT_DIR, ".next", "BUILD_ID"))) {
-    console.error("smoke-prod: no production build found. Run `npm run build` first.");
+    console.error("smoke-prod: no production build found. Run `bun run build` first.");
     process.exit(2);
   }
   const baseUrl = `http://127.0.0.1:${port}`;

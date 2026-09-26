@@ -13,6 +13,30 @@ model User {
   name           String?
   emailVerified  DateTime?
   image          String?
+  locale         String?
+  /// Phase 53 "Aurora Glass": the appearance preference, as the compact
+  /// versioned document `src/lib/appearance/appearance.ts` encodes. Nullable
+  /// column only, like `locale`: null means "no explicit preference" and
+  /// falls back to the anonymous cookie, then to `DEFAULT_APPEARANCE`. No
+  /// backfill, no default, and deliberately NOT part of `PlaybackState` -
+  /// appearance and playback session are two lifecycles, and resetting one
+  /// must never touch the other.
+  appearance     Json?
+  /// Phase 53 addendum "Aurora V-Shape": the equalizer preference, as the
+  /// compact versioned document `src/lib/audio/eq.ts` encodes. A second
+  /// COLUMN, not a second table and not a key inside `appearance`: the audio
+  /// preference and the visual preference are two domains with two documents,
+  /// and sharing one JSON bag would mean a glass edit could clobber a curve.
+  /// Nullable column only, like `locale`: null means "no explicit preference"
+  /// and falls back to the anonymous cookie, then to `DEFAULT_EQ`. No backfill,
+  /// no default, and deliberately NOT part of `PlaybackState` - the equalizer
+  /// is an audio preference and the session is a position in a queue, and
+  /// addendum §39 requires them to be separable.
+  audioEq        Json?
+  /// Phase 47 "Keep listening": generic queue continuation preference.
+  /// Defaults OFF so the documented end-of-queue stop behaviour is
+  /// preserved until a listener opts in. Radio remains independent.
+  keepListening  Boolean          @default(false)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   accounts       Account[]
@@ -154,6 +178,14 @@ model Follow {
   @@index([userId])
 }
 
+/// ONE ROW PER (user, track): the current "when did this listener last play
+/// this" state, not a play-event log. Replaying a track must move it to the
+/// newest position, not append a second row, so the constraint is what makes
+/// the recency list correct rather than merely de-duplicated at read time.
+/// `Like` and `Follow` already carry the equivalent uniqueness for the same
+/// reason. Cross-provider representations of one recording are two `Track`
+/// rows and are collapsed in the DAL, which is the only layer that can run
+/// the canonical matcher.
 model RecentlyPlayed {
   id       String   @id @default(cuid())
   userId   String
@@ -162,6 +194,7 @@ model RecentlyPlayed {
   track    Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
   playedAt DateTime @default(now())
 
+  @@unique([userId, trackId])
   @@index([userId, playedAt])
 }
 
@@ -181,12 +214,21 @@ model Playlist {
   user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   title       String
   description String?
+  /// Phase 47 reuses this existing URL column for custom artwork
+  /// (no second artwork field). Null renders the default artwork.
   artwork     String?
+  /// Phase 47 sharing: "private" | "shared". A shared playlist is
+  /// readable through its shareToken only; never through its id.
+  visibility  String          @default("private")
+  /// 192-bit URL-safe token, minted server-side. Carries no database
+  /// primary key, owner id, or provider id. Null while private.
+  shareToken  String?         @unique
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
   tracks      PlaylistTrack[]
 
   @@index([userId])
+  @@index([visibility])
 }
 
 model PlaylistTrack {
@@ -211,6 +253,7 @@ model PlaybackState {
   providerTrackId String
   position        Int
   revision        Int      @default(0)
+  queueSnapshot   Json?
   updatedAt       DateTime @updatedAt
 
   @@index([userId])

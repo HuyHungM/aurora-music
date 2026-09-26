@@ -67,7 +67,7 @@ function resetStore() {
   });
 }
 
-const bar = () => within(screen.getByRole("region", { name: "Player bar" }));
+const bar = () => within(screen.getByRole("region", { name: "Thanh phát nhạc" }));
 
 describe("PlayerHost recovery integration", () => {
   let surface: FakeAudioSurface;
@@ -99,7 +99,7 @@ describe("PlayerHost recovery integration", () => {
     await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
 
     usePlayerStore.getState().playTrack(youtubeTrack("aaaaaaaaaaa", "Song A"));
-    await bar().findByRole("button", { name: "Pause" });
+    await bar().findByRole("button", { name: "Tạm dừng" });
     const firstSrc = surface.src;
     expect(firstSrc).toContain("take1");
 
@@ -112,7 +112,7 @@ describe("PlayerHost recovery integration", () => {
       timeout: 5000,
     });
     expect(surface.currentTime).toBe(100);
-    await bar().findByRole("button", { name: "Pause" });
+    await bar().findByRole("button", { name: "Tạm dừng" });
     expect(screen.queryByRole("status")).toBeNull();
     expect(usePlayerStore.getState().currentTrack?.id).toBe("aaaaaaaaaaa");
   });
@@ -127,7 +127,7 @@ describe("PlayerHost recovery integration", () => {
         youtubeTrack("aaaaaaaaaaa", "Song A"),
         youtubeTrack("bbbbbbbbbbb", "Song B"),
       ]);
-    await bar().findByRole("button", { name: "Pause" });
+    await bar().findByRole("button", { name: "Tạm dừng" });
 
     surface.error = { code: 2 };
     surface.dispatch(EventEnum.error);
@@ -153,7 +153,7 @@ describe("PlayerHost recovery integration", () => {
     await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
 
     usePlayerStore.getState().playTrack(youtubeTrack("aaaaaaaaaaa", "Song A"));
-    await bar().findByRole("button", { name: "Pause" });
+    await bar().findByRole("button", { name: "Tạm dừng" });
     const playsBefore = surface.play as unknown as { mock: { calls: unknown[] } };
     const playCallsBefore = playsBefore.mock.calls.length;
 
@@ -167,7 +167,7 @@ describe("PlayerHost recovery integration", () => {
     expect(playsBefore.mock.calls.length).toBe(playCallsBefore);
     expect(usePlayerStore.getState().isPlaying).toBe(false);
     expect(screen.queryByRole("status")).toBeNull();
-    await bar().findByRole("button", { name: "Play" });
+    await bar().findByRole("button", { name: "Phát" });
   });
 
   it("surfaces one final error after retries are exhausted", async () => {
@@ -195,7 +195,7 @@ describe("PlayerHost recovery integration", () => {
     await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
 
     usePlayerStore.getState().playTrack(youtubeTrack("aaaaaaaaaaa", "Song A"));
-    await bar().findByRole("button", { name: "Pause" });
+    await bar().findByRole("button", { name: "Tạm dừng" });
 
     surface.error = { code: 2 };
     surface.dispatch(EventEnum.error);
@@ -239,7 +239,7 @@ describe("PlayerHost recovery integration", () => {
     await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
 
     usePlayerStore.getState().playTrack(youtubeTrack("aaaaaaaaaaa", "Song A"));
-    await bar().findByRole("button", { name: "Pause" });
+    await bar().findByRole("button", { name: "Tạm dừng" });
 
     surface.error = { code: 2 };
     surface.dispatch(EventEnum.error);
@@ -254,7 +254,7 @@ describe("PlayerHost recovery integration", () => {
     // Explicit user retry: new generation, fresh resolution budget, same
     // queue and track. The source still fails, so the error resurfaces —
     // bounded, without loops or queue damage.
-    fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
+    fireEvent.click(screen.getByRole("button", { name: "Thử phát lại" }));
     await waitFor(
       () => expect(mocks.resolveAudioSourceAction.mock.calls.length).toBeGreaterThan(3),
       { timeout: 8000 },

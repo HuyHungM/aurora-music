@@ -46,12 +46,12 @@ describe("Skeleton components", () => {
   describe("CardGridSkeleton", () => {
     it("renders default 5 cards", () => {
       const { container } = render(<CardGridSkeleton />);
-      expect(container.querySelectorAll(".h-24")).toHaveLength(5);
+      expect(container.querySelectorAll(".aspect-square")).toHaveLength(5);
     });
 
     it("renders custom count", () => {
       const { container } = render(<CardGridSkeleton count={2} />);
-      expect(container.querySelectorAll(".h-24")).toHaveLength(2);
+      expect(container.querySelectorAll(".aspect-square")).toHaveLength(2);
     });
   });
 

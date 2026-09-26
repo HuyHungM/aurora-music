@@ -2,21 +2,37 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+[Bun](https://bun.sh) is the package manager for this repository; `bun.lock` is
+the only lockfile.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
+bun install
 bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+You can start editing the page by modifying `src/app/page.tsx`. The page auto-updates as you edit the file.
+
+## Common commands
+
+Run every script through `bun run`; use `bunx` for one-off CLIs.
+
+```bash
+bun run build                    # production build (also generates .next/types)
+bun run typecheck                # tsc --noEmit; run after build on a clean clone
+bun run lint
+bun run test                     # vitest unit suite
+bun run test:db                  # migrate deploy + database suite
+bun run start                    # serve the production build
+bun run smoke:prod -- --spawn    # production smoke checks
+bunx playwright test             # E2E
+bunx prisma studio               # database browser
+```
+
+`bun install` runs a `postinstall` hook that generates the Prisma client, so a
+fresh install produces a working tree. See `docs/deployment.md` for the release
+order and `AGENTS.md` for the toolchain contract.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
