@@ -168,9 +168,9 @@ describe("PlaylistShareControl: what is being shared", () => {
   // announcement. The state is now stated exactly once.
   it("states the access state exactly once", async () => {
     await openDialog(playlist({ visibility: "shared", shareToken: TOKEN }));
-    expect(screen.getAllByText("Shared")).toHaveLength(0);
-    expect(screen.getAllByText("Private")).toHaveLength(0);
-    expect(screen.getAllByText("Public")).toHaveLength(1);
+    expect(screen.queryAllByText("Shared")).toHaveLength(0);
+    expect(screen.queryAllByText("Private")).toHaveLength(0);
+    expect(screen.queryAllByText("Public")).toHaveLength(1);
   });
 
   it("states the shared access state and warns that turning it off breaks the link", async () => {
