@@ -75,6 +75,45 @@ while new code requires it.
   validate), starts an owned server, waits for `/api/health` readiness,
   runs the checks, then terminates the child and verifies the exit
   (no orphans, no stale-server false positives).
+- `bun run db:check` is the read-only database smoke test: `SELECT 1` and the
+  exact `prisma.account.findUnique()` lookup Auth.js runs in
+  `getUserByAccount()` (sentinel key, writes nothing). Prefer it over
+  `db:verify`, which upserts a probe track, when you only need to prove the
+  connection and the adapter path.
+
+## Database TLS and the provider CA
+
+The application reaches PostgreSQL through Prisma's driver adapter
+(`@prisma/adapter-pg`) with the connection in `DATABASE_URL`. TLS is decided by
+that URL: `sslmode=require`, `verify-ca` and `verify-full` all perform full
+certificate **and** hostname verification against the runtime's trust store
+(`pg-connection-string` currently treats all three as `verify-full`).
+
+When the provider signs with its own CA — the production
+`self-signed certificate in certificate chain` failure — point the application
+at that CA instead of weakening the connection:
+
+```env
+AURORA_DATABASE_CA_CERT_PATH="/etc/aurora/postgres-ca.pem"
+```
+
+- It is the provider's **public** CA certificate (or bundle): a `.pem` with no
+  private key. An empty or unreadable file fails with a names-only
+  `ConfigError`, never with the file's contents in the message.
+- Keep it outside the repository (`.gitignore` already ignores `*.pem`).
+- When set, the application supplies `ssl: { ca, rejectUnauthorized: true }`
+  and removes any conflicting SSL parameters from the URL, so the CA cannot be
+  silently overridden. Certificate and hostname verification stay ON.
+- When unset, the connection string is used exactly as written and `pg`
+  verifies against the system trust store — the pre-existing behaviour.
+
+The same variable is honoured by `db:verify`, `db:check`, `db:integrity` and
+the E2E harness, so every path trusts the same CA.
+
+`sslmode=disable`, `sslmode=no-verify`, `ssl=false` and `uselibpqcompat=true`
+on `require`/`verify-ca` are refused in production. Resolve a certificate
+problem by supplying the CA, never by disabling verification.
+
 
 ## Backup and restore runbook
 

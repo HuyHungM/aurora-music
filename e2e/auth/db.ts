@@ -13,6 +13,10 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../../src/generated/prisma/client";
+import {
+  buildDatabaseAdapterConfig,
+  DATABASE_CA_CERT_PATH_VAR,
+} from "../../src/lib/db-tls";
 import { E2E_LOCALE, FIXTURE_ARTIST, FIXTURE_CROSS_PROVIDER_TRACKS, FIXTURE_TRACKS, TEST_USERS } from "./constants";
 
 const envFile = resolve(process.cwd(), ".env");
@@ -27,7 +31,21 @@ function createTestClient(): PrismaClient {
       "Authenticated E2E setup requires DATABASE_URL (same database the E2E server uses).",
     );
   }
-  return new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
+  // Same builder the application uses, so a configured provider CA applies to
+  // the seeding client too and this harness cannot drift from `src/lib/db.ts`.
+  const nodeEnv = process.env.NODE_ENV;
+  return new PrismaClient({
+    adapter: new PrismaPg(
+      buildDatabaseAdapterConfig({
+        url,
+        caCertPath: process.env[DATABASE_CA_CERT_PATH_VAR],
+        nodeEnv:
+          nodeEnv === "production" || nodeEnv === "test"
+            ? nodeEnv
+            : "development",
+      }),
+    ),
+  });
 }
 
 let client: PrismaClient | null = null;

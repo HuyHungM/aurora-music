@@ -54,6 +54,13 @@ const EnvSchema = z.object({
   // the origin from the request headers, which is what LAN and `localhost`
   // development need. Set it in any deployment that has a public hostname.
   AURORA_PUBLIC_URL: publicOriginSchema,
+  // Server-only. Absolute path to a PEM file holding the PostgreSQL provider's
+  // CA certificate(s), needed when the server chain ends at a private CA the
+  // runtime's system trust store does not contain - the production
+  // `self-signed certificate in certificate chain` failure. Optional: absent,
+  // the connection is left exactly as `DATABASE_URL` wrote it and `pg` verifies
+  // against the system trust store. Never carries a private key.
+  AURORA_DATABASE_CA_CERT_PATH: z.string().optional(),
   // Server-only. Enables the YouTube metadata provider (search/lookup).
   // Absent key = YouTube provider stays unregistered; never NEXT_PUBLIC.
   YOUTUBE_API_KEY: z.string().optional(),
@@ -93,6 +100,7 @@ export const envVarRequirements = {
   AUTH_GITHUB_ID: "optional",
   AUTH_GITHUB_SECRET: "optional",
   AURORA_PUBLIC_URL: "optional",
+  AURORA_DATABASE_CA_CERT_PATH: "optional",
   YOUTUBE_API_KEY: "optional",
   SPOTIFY_CLIENT_ID: "optional",
   SPOTIFY_CLIENT_SECRET: "optional",

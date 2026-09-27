@@ -1,5 +1,6 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { getEnv } from "@/lib/config/env";
+import { buildDatabaseAdapterConfig } from "@/lib/db-tls";
 import { PrismaClient } from "@/generated/prisma/client";
 
 export type { Prisma } from "@/generated/prisma/client";
@@ -7,24 +8,18 @@ export type { Prisma } from "@/generated/prisma/client";
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 function createClient(): PrismaClient {
-  const url = getEnv().DATABASE_URL;
-  let adapter;
+  const env = getEnv();
+  // The one place the database connection is assembled. TLS trust (the
+  // provider CA) and the production guard against weakened verification live
+  // in `buildDatabaseAdapterConfig`, so the application, the verification
+  // scripts and the E2E harness all resolve `DATABASE_URL` identically.
+  const config = buildDatabaseAdapterConfig({
+    url: env.DATABASE_URL,
+    caCertPath: env.AURORA_DATABASE_CA_CERT_PATH,
+    nodeEnv: env.NODE_ENV,
+  });
 
-  if (url.startsWith("postgresql://") || url.startsWith("postgres://")) {
-    adapter = new PrismaPg({ connectionString: url });
-  } else {
-    // Only the scheme goes into the message. The whole connection string
-    // carries the password, and this Error is thrown at boot, where it lands
-    // in stderr and in any crash capture — `docs/security.md` forbids logging
-    // secret values. The scheme is the part that is actually wrong here.
-    const scheme = url.slice(0, url.indexOf(":") + 1) || "(none)";
-    throw new Error(
-      `Unsupported DATABASE_URL scheme: ${scheme} ` +
-        `Expected "postgresql://" or "postgres://"`,
-    );
-  }
-
-  return new PrismaClient({ adapter });
+  return new PrismaClient({ adapter: new PrismaPg(config) });
 }
 
 export const prisma = globalForPrisma.prisma ?? createClient();

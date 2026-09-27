@@ -63,6 +63,13 @@ by automated gates. It is a statement of what holds, not a wishlist.
 
 - `DATABASE_URL` required; `AUTH_SECRET` required only when
   `NODE_ENV=production`. Everything else is optional/server-only.
+- **Database TLS keeps verification on.** The provider CA is supplied
+  explicitly through `AURORA_DATABASE_CA_CERT_PATH` (a public `.pem` path),
+  which is added as a trust anchor while certificate and hostname verification
+  stay enabled. `sslmode=disable`, `sslmode=no-verify`, `ssl=false` and
+  `uselibpqcompat=true` on `require`/`verify-ca` are refused in production, so
+  a certificate problem cannot be "fixed" by silently disabling validation.
+  See `docs/deployment.md`.
 - No `NEXT_PUBLIC_*` variables anywhere in source or `.env.example`.
 - Never log secret values; `src/lib/diagnostics/logger.ts` drops
   secret-shaped fields and redacts URL shapes fail-closed.

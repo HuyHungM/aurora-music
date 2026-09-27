@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "test:db": "prisma migrate deploy && vitest run --config vitest.db.config.mts",
     "db:verify": "tsx scripts/verify-db.mts",
+    "db:check": "tsx scripts/check-db.mts",
     "db:integrity": "tsx scripts/verify-data-integrity.mts",
     "db:restore-drill": "tsx scripts/verify-restore.mts",
     "db:studio": "prisma studio",

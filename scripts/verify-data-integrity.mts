@@ -48,18 +48,26 @@ process.loadEnvFile(resolve(process.cwd(), ".env"));
 
 const { PrismaPg } = await import("@prisma/adapter-pg");
 const { PrismaClient } = await import("../src/generated/prisma/client");
+const { buildDatabaseAdapterConfig, DATABASE_CA_CERT_PATH_VAR } = await import(
+  "../src/lib/db-tls"
+);
 
 const url = process.env.DATABASE_URL;
 if (!url) {
   throw new Error("DATABASE_URL is required to verify data integrity");
 }
-if (!url.startsWith("postgresql://") && !url.startsWith("postgres://")) {
-  throw new Error(
-    "Unsupported DATABASE_URL scheme. Expected \"postgresql://\" or \"postgres://\".",
-  );
-}
 
-const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
+const nodeEnv = process.env.NODE_ENV;
+const db = new PrismaClient({
+  adapter: new PrismaPg(
+    buildDatabaseAdapterConfig({
+      url,
+      caCertPath: process.env[DATABASE_CA_CERT_PATH_VAR],
+      nodeEnv:
+        nodeEnv === "production" || nodeEnv === "test" ? nodeEnv : "development",
+    }),
+  ),
+});
 
 /**
  * Orphan and ownership checks.

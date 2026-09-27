@@ -683,6 +683,21 @@ PostgreSQL via Prisma 7 (`prisma/schema.prisma`; migrations in
 allowlist test in `src/lib/dal/__tests__/playback-schema.test.ts`).
 Client emitted to `src/generated/prisma`.
 
+The connection runs through Prisma's PostgreSQL driver adapter
+(`@prisma/adapter-pg`), so the connection string is consumed by `pg`
+(`node-postgres`), not by a Prisma engine binary. `src/lib/db-tls.ts` is the
+one place that turns `DATABASE_URL` into the adapter's `pg.PoolConfig`: it
+leaves the string untouched by default (verification stays against the system
+trust store) and, when `AURORA_DATABASE_CA_CERT_PATH` names the provider's
+public CA, supplies `ssl: { ca, rejectUnauthorized: true }` after removing the
+URL's own SSL parameters — because `pg` merges the parsed connection string
+*over* the caller's config, so `?sslmode=require` would otherwise silently drop
+the CA. It also refuses, in production, the settings that disable verification
+(`sslmode=disable`/`no-verify`, `ssl=false`, and `uselibpqcompat=true` on
+`require`/`verify-ca`). The application, the `db:verify`/`db:check`/
+`db:integrity` scripts, and the E2E harness all build their client from this
+module, so one policy covers every path.
+
 | Model | Purpose |
 |---|---|
 | `User` | Identity; owns library rows; nullable `locale` holds the explicit authenticated language preference (null = no preference) |
