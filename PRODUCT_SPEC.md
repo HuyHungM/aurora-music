@@ -169,8 +169,14 @@ Explicit rules:
   parameter-stripped `contentType`, and `boundedRangeOk` — which separates "the
   CDN refuses whole-body reads of this adaptive URL" (expected) from "this URL
   is dead". A total failure emits one `playback_resolution_failed` summary
-  with candidate/valid/rejected counts and the top reasons. No signed playback
-  URL is ever logged, and none is ever persisted.
+  with candidate/valid/rejected counts, the top reasons, and `aliveButRefused`.
+  No signed playback URL is ever logged, and none is ever persisted.
+- **Refused-but-alive is recoverable, dead is not.** When every candidate was
+  refused *and* each proved alive on the bounded confirmation read, the media
+  exists and the CDN is declining the read at that moment, so the failure is
+  transient and the bounded recovery below re-resolves it. Any dead candidate
+  (404), an unconfirmed 403, a timeout, or a network error ends the cycle
+  immediately: re-resolving the same identity cannot change the answer.
 - **Ephemeral `AudioSource`.** Memory-only (`url`, `mimeType`,
   `durationMs`, `expiresAt`, `bitrate`). Expiry is checked before load;
   expired sources are never handed out — re-resolution is the recovery path,

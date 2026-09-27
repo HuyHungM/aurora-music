@@ -103,30 +103,84 @@ export const deletePlaylistSchema = z.object({
   playlistId: idSchema,
 });
 
-export const addTrackSchema = z.object({
-  playlistId: idSchema,
+/**
+ * The one contract for a `Track` a client may write into the catalog.
+ *
+ * Both catalog-writing server actions (`likeTrackAction`, and the playlist add
+ * path) parse through THIS schema, so "what a Track is allowed to contain" has
+ * a single authority rather than one per call site.
+ *
+ * What it is protecting, specifically: `upsertTrack` writes `title`,
+ * `artistName`, `albumName`, `artworkUrl`, `providerUrl` and `genres` into a
+ * catalog row that EVERY user reads, and a client supplies all of it. Before
+ * this schema the like path applied no validation at all, so any signed-in
+ * caller could write an arbitrarily long display string that every other
+ * user's library, playlist and search result then renders. That is storage and
+ * layout abuse in a shared table, not injection: Prisma is parameterised, and
+ * the DAL independently omits `streamUrl` / `previewUrl` / `metadata` on both
+ * branches.
+ *
+ * The bounds are deliberately far above real metadata (the longest observed
+ * provider title is a few hundred characters) and are here to bound a write,
+ * not to police content. `title` and `artistName` are required non-empty
+ * because `normalizeTrack` already throws on an empty one, so nothing that
+ * reached these actions legitimately can be rejected by that rule.
+ *
+ * `provider` stays an open, bounded string rather than an enum: `ProviderId` is
+ * `string` by design so a provider can be added without a schema change, and
+ * freezing the vocabulary here would silently reject a new source.
+ *
+ * Authorization is NOT this schema's job — ownership is enforced separately in
+ * the DAL (`requirePlaylistOwner`, `requireUser`).
+ */
+export const TRACK_TEXT_MAX_LENGTH = 500;
+export const TRACK_URL_MAX_LENGTH = 2048;
+export const TRACK_GENRES_MAX_COUNT = 20;
+export const TRACK_DURATION_MAX_MS = 86_400_000;
+
+export const trackInputSchema = z.object({
+  /** The provider's own id, and the catalog upsert key. */
+  id: idSchema,
+  provider: providerIdSchema,
+  providerTrackId: idSchema.optional(),
+  title: z.string().trim().min(1).max(TRACK_TEXT_MAX_LENGTH),
+  artistId: idSchema,
+  artistName: z.string().trim().min(1).max(TRACK_TEXT_MAX_LENGTH),
+  albumId: idSchema.optional(),
+  albumName: z.string().trim().max(TRACK_TEXT_MAX_LENGTH).optional(),
+  artworkUrl: z.string().trim().max(TRACK_URL_MAX_LENGTH).optional(),
+  // Upper bound only: `duration` is a provider-reported number and its unit is
+  // the provider's, so this bounds magnitude without asserting a unit.
+  duration: z
+    .number()
+    .finite()
+    .min(0)
+    .max(TRACK_DURATION_MAX_MS)
+    .optional(),
+  genres: z
+    .array(z.string().trim().max(100))
+    .max(TRACK_GENRES_MAX_COUNT)
+    .optional(),
+  releaseDate: z.string().trim().max(64).optional(),
+  providerUrl: z.string().trim().max(TRACK_URL_MAX_LENGTH).optional(),
+  explicit: z.boolean().optional(),
   // `streamUrl`, `previewUrl` and `metadata` are deliberately absent, so
   // zod strips them from the parsed payload before it can reach the DAL.
   // They are not needed (playback resolves a fresh AudioSource per load) and
   // accepting them let a client write a media URL into a shared, unowned
   // catalog row that every other user then reads. See `dal/catalog.ts`.
+});
+
+export const addTrackSchema = z.object({
+  playlistId: idSchema,
   // Ownership is still enforced separately, in the DAL
   // (`requirePlaylistOwner`); schema validation alone never authorizes.
-  track: z.object({
-    id: z.string(),
-    provider: z.string(),
-    title: z.string(),
-    artistId: z.string(),
-    artistName: z.string(),
-    albumId: z.string().optional(),
-    albumName: z.string().optional(),
-    artworkUrl: z.string().optional(),
-    duration: z.number().optional(),
-    genres: z.array(z.string()).optional(),
-    releaseDate: z.string().optional(),
-    providerUrl: z.string().optional(),
-    explicit: z.boolean().optional(),
-  }),
+  track: trackInputSchema,
+});
+
+/** The like path's payload. Same track contract, same catalog, same reason. */
+export const likeTrackSchema = z.object({
+  track: trackInputSchema,
 });
 
 export const removeTrackSchema = z.object({

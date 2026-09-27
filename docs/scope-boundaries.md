@@ -340,6 +340,16 @@ Deliberately **not** done, each with the reason rather than left as a gap:
   with no defect report behind it. It is recorded here as a known boundary,
   not an open bug, and must not be presented as either a solved or an
   outstanding defect.
+  - **Bounded on 2026-09-27, the boundary itself unchanged.** The remaining
+    half is *who may write what size*, not *whether a client may write display
+    fields*: `trackInputSchema` now bounds every client-writable field (text
+    500, URLs 2048, 20 genres, finite non-negative duration) and both
+    catalog-writing actions parse through it — the like path previously applied
+    no validation at all. A caller can still choose the *content* of a display
+    field for a track id it has legitimately discovered; it can no longer write
+    an unbounded string into a table every user renders. Attribution of a
+    display field to the provider is still out of scope, for the hot-path
+    reason above.
 - **Dead code found, not deleted, pending evidence:** `PlayerEngine.cleanup()`
   (`lib/player/engine.ts`) is implemented and only ever called from tests, so
   a torn-down `PlayerHost` leaves the audio element playing. It is reachable

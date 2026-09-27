@@ -162,6 +162,7 @@ const vi = {
     playlistSection: "Playlist",
     playlistTotal: "{count} playlist",
     createPlaylist: "Tạo playlist",
+    createPlaylistInSection: "Tạo playlist trong {section}",
   },
   playlist: {
     eyebrow: "Playlist",

@@ -60,13 +60,40 @@ export interface YouTubeResolverOptions {
    * injected validator answers yes/no and carries no reason of its own, so its
    * verdict is recorded as `validator_injected` — the real probe is what
    * produces a diagnosable reason in production.
+   *
+   * A full {@link FormatProbeVerdict} may be returned instead, which is the
+   * only way to exercise the paths that depend on the probe's own
+   * observations — notably `boundedRangeOk`, the evidence that separates
+   * "this URL is dead" from "this CDN declined the read right now", and with
+   * it the retry classification in `pickPlayableFormat`. Production never
+   * injects; only the real probe runs there.
    */
-  validateFormat?: (url: string) => Promise<boolean>;
+  validateFormat?: (url: string) => Promise<boolean | FormatProbeVerdict>;
 }
 
 /** One rejected candidate, as counted into the all-failed summary. */
 interface Rejection {
   reason: FormatProbeReason;
+  /**
+   * The probe's bounded confirmation read succeeded, so the URL is ALIVE and
+   * was only refused the open-ended read. Only the real probe produces this;
+   * an injected validator never does, which is what keeps a test double from
+   * being able to claim a source is recoverable.
+   */
+  alive: boolean;
+}
+
+/** What `pickPlayableFormat` concluded about a candidate set. */
+interface FormatPick {
+  /** The winning candidate, or null when none was consumable. */
+  candidate: PlaybackFormatCandidate | null;
+  /**
+   * Every candidate was refused AND at least one was demonstrably alive, i.e.
+   * the media exists and the CDN declined the browser's whole-body read. See
+   * `pickPlayableFormat` for why that is a transient verdict rather than a
+   * permanent one.
+   */
+  aliveButRefused: boolean;
 }
 
 /**
@@ -97,10 +124,13 @@ export function createYouTubeResolver(
       return await probeFormatConsumability(url);
     }
     try {
-      const ok = await injected(url);
-      return ok
-        ? { consumable: true, reason: "validator_injected" }
-        : { consumable: false, reason: "validator_injected" };
+      const answer = await injected(url);
+      if (typeof answer === "boolean") {
+        return answer
+          ? { consumable: true, reason: "validator_injected" }
+          : { consumable: false, reason: "validator_injected" };
+      }
+      return answer;
     } catch {
       // A broken probe is not evidence about the format; the next candidate is
       // still worth trying. Recording the reason keeps this path as visible as
@@ -109,9 +139,26 @@ export function createYouTubeResolver(
     }
   }
 
+  /**
+   * Ranks and probes candidates in order, returning the first consumable one.
+   *
+   * The `aliveButRefused` flag exists because "no format was consumable" is
+   * two different failures wearing the same message. A dead or unreadable
+   * source (404, a timeout, a signed URL that has expired) cannot be helped by
+   * asking again, so it stays permanent. A source whose every URL answered the
+   * bounded read but refused the open-ended one is a different animal: the
+   * media is there, and the refusal is a property of the CDN's read policy at
+   * that moment rather than of the URL. Measured on 2026-09-27, an 8-minute
+   * burst of live-playback tests drove every candidate of one video to
+   * `probe_status_403` - all seven, including the progressive format - and an
+   * isolated probe of the same video seconds later returned 206 on all seven.
+   * Classifying that permanently was why a throttle window left every
+   * subsequent track unplayable until the user pressed play again by hand:
+   * `classifyFailure` reads `retryable` and had been told "no".
+   */
   async function pickPlayableFormat(
     candidates: PlaybackFormatCandidate[],
-  ): Promise<PlaybackFormatCandidate | null> {
+  ): Promise<FormatPick> {
     const ranked = rankAudioFormats(candidates);
     const rejections: Rejection[] = [];
     for (const candidate of ranked) {
@@ -125,9 +172,12 @@ export function createYouTubeResolver(
             selectedHasVideo: candidate.hasVideo,
           });
         }
-        return candidate;
+        return { candidate, aliveButRefused: false };
       }
-      rejections.push({ reason: verdict.reason });
+      rejections.push({
+        reason: verdict.reason,
+        alive: verdict.boundedRangeOk === true,
+      });
       // Never the URL: it is a signed, expiring googlevideo link. `itag` and the
       // probe's own observations identify the candidate precisely instead.
       logger.debug("Playback format skipped", {
@@ -145,14 +195,17 @@ export function createYouTubeResolver(
     // A total failure is the case that needs the most context and had the
     // least: one summary so the cause is a count of reasons, not four
     // context-free skip lines.
+    const aliveButRefused =
+      rejections.length > 0 && rejections.every((r) => r.alive);
     logger.warn("Playback resolution found no usable audio format", {
       event: "playback_resolution_failed",
       candidateCount: ranked.length,
       validCount: 0,
       rejectedCount: rejections.length,
       topRejectionReasons: summarizeReasons(rejections),
+      aliveButRefused,
     });
-    return null;
+    return { candidate: null, aliveButRefused };
   }
 
   async function resolveVideoId(videoId: string): Promise<AudioSource> {
@@ -188,9 +241,18 @@ export function createYouTubeResolver(
       fail(videoId, "resolve", "Live streams are not supported");
     }
 
-    const format = await pickPlayableFormat(info.formats);
+    const { candidate: format, aliveButRefused } = await pickPlayableFormat(
+      info.formats,
+    );
     if (!format) {
-      fail(videoId, "stream", "No playable audio format available");
+      // `aliveButRefused` is the only path that opts into a retry: the source
+      // answered a bounded read, so the media exists and a later attempt can
+      // succeed. Everything else (404, timeout, network error, an injected
+      // validator) keeps the permanent default, because re-resolving the same
+      // identity cannot change the answer.
+      fail(videoId, "stream", "No playable audio format available", {
+        retryable: aliveButRefused,
+      });
     }
 
     const source: AudioSource = { url: format.url };

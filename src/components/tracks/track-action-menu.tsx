@@ -203,10 +203,20 @@ export function TrackActionMenu({
   // from the surface that was actually rendered, so the taller playlist
   // picker cannot be assumed to fit in the room the short row menu needed.
   // See `menu-placement.ts` for why it is measured rather than guessed.
+  //
+  // `placementKey` is what makes that true in practice. The picker REPLACES
+  // the row menu in the same slot while `mounted` stays true, so without a key
+  // that changes on the swap the effect never re-runs: the height measured is
+  // the row menu's, and a verdict computed for a 5-item menu gets applied to
+  // the ~130px taller picker. That is not a cosmetic difference - the picker
+  // then extends past the room the verdict cleared and its lower items land
+  // under the fixed player bar, where they are visible but unclickable, and
+  // "add to playlist" fails for exactly the users with the most playlists.
   const openUp = useMenuOpenUp({
     open: mounted,
     triggerRef,
     surfaceRef: containerRef,
+    placementKey: showPlaylistMenu ? "playlist-picker" : "row-menu",
   });
 
   const handleToggle = () => {

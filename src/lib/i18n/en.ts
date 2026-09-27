@@ -155,6 +155,7 @@ const en: Messages = {
     playlistSection: "Playlists",
     playlistTotal: "{count} total",
     createPlaylist: "Create playlist",
+    createPlaylistInSection: "Create playlist in {section}",
   },
   playlist: {
     eyebrow: "Playlist",

@@ -168,4 +168,77 @@ describe("useMenuOpenUp", () => {
     });
     expect(result.current).toBe(false);
   });
+
+  describe("when a taller surface swaps into the same slot", () => {
+    /**
+     * The row menu and the playlist picker occupy ONE slot: opening the picker
+     * replaces the row menu while the menu stays open. `open` does not change,
+     * so `placementKey` is the only thing that can tell the rule the surface it
+     * is now judging is a different one.
+     *
+     * These are the numbers from the real failure. A 5-item row menu is ~200px
+     * and clears the 120px transport clearance from a trigger at [400, 440] in
+     * a 768px viewport, so it stays down. The picker that replaces it in the
+     * same slot is ~330px: it ends 158px below the fold, on top of the player
+     * bar, while 160px of room sits above. Judged on the row menu's height the
+     * picker is left pointing into the transport, where its lower items are
+     * visible, unclickable, and blocking "add to playlist" for exactly the
+     * users with the most playlists.
+     */
+    function setupSwap() {
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const triggerEl = document.createElement("button");
+      const surfaceEl = document.createElement("div");
+      const menu = document.createElement("div");
+      menu.setAttribute("role", "menu");
+      surfaceEl.appendChild(menu);
+      stubRect(triggerEl, { top: 400, bottom: 440 });
+      stubRect(menu, { height: 200 });
+      container.append(triggerEl, surfaceEl);
+
+      const view = renderHook(
+        ({ key }: { key: string }) => {
+          const triggerRef = useRef<HTMLElement | null>(null);
+          const surfaceRef = useRef<HTMLElement | null>(null);
+          triggerRef.current = triggerEl;
+          surfaceRef.current = surfaceEl;
+          return useMenuOpenUp({
+            open: true,
+            triggerRef,
+            surfaceRef,
+            placementKey: key,
+          });
+        },
+        { initialProps: { key: "row-menu" } },
+      );
+      return { ...view, menu };
+    }
+
+    it("re-judges the new surface when the key changes", () => {
+      const view = setupSwap();
+      // The short row menu fits below, so it opens down.
+      expect(view.result.current).toBe(false);
+
+      // The picker swaps in, taller, without the menu ever closing.
+      stubRect(view.menu, { height: 330 });
+      view.rerender({ key: "playlist-picker" });
+
+      expect(view.result.current).toBe(true);
+    });
+
+    it("keeps the stale verdict when no key is supplied", () => {
+      // The failure itself, stated as a test: the surface changed and the
+      // decision did not, because nothing told it to look again. This is the
+      // case a host hits by omitting `placementKey` - the queue panel passes
+      // one, and the row menu's host now does too.
+      const view = setupSwap();
+      expect(view.result.current).toBe(false);
+
+      stubRect(view.menu, { height: 330 });
+      view.rerender({ key: "row-menu" });
+
+      expect(view.result.current).toBe(false);
+    });
+  });
 });

@@ -7,6 +7,7 @@ import type {
 } from "@/lib/providers/youtube/playback/types";
 import { createYouTubeResolver as createYouTubeResolverImpl } from "@/lib/providers/youtube/playback/youtube-resolver";
 import type { YouTubeResolver } from "@/lib/providers/youtube/playback/youtube-resolver";
+import type { FormatProbeVerdict } from "@/lib/providers/youtube/playback/format-validation";
 import { setLogLevel, setLogSink } from "@/lib/diagnostics/logger";
 import type { LogRecord } from "@/lib/diagnostics/logger";
 import { toTrackIdentity } from "@/lib/domain/track-normalizer";
@@ -56,7 +57,9 @@ function clientWith(info: PlaybackMediaInfo | Error): YouTubePlaybackClient {
 
 function resolverWith(
   info: PlaybackMediaInfo | Error,
-  validateFormat: (url: string) => Promise<boolean> = async () => true,
+  validateFormat: (
+    url: string,
+  ) => Promise<boolean | FormatProbeVerdict> = async () => true,
 ) {
   return createYouTubeResolverImpl(clientWith(info), { validateFormat });
 }
@@ -457,5 +460,147 @@ describe("YouTubeResolver format diagnostics", () => {
     const blob = JSON.stringify(records);
     expect(blob).not.toContain("cdn.example");
     expect(blob).not.toMatch(/https?:\/\//);
+  });
+});
+
+/**
+ * M3-02: "no consumable format" is two failures, not one.
+ *
+ * Measured on 2026-09-27: an 8-minute burst of live-playback tests drove all
+ * seven candidates of one video to `probe_status_403` - including the
+ * progressive format that had answered 206 on every candidate minutes earlier -
+ * while a bounded read on each still succeeded. The media existed; the CDN was
+ * declining the browser's whole-body read. That was reported as
+ * `retryable: false`, so `classifyFailure` called it permanent and recovery
+ * never re-resolved: the user had to press play again by hand after the
+ * throttle cleared.
+ *
+ * The classification now keys on the probe's own evidence rather than on the
+ * status code alone. These cases pin both directions, because the safe
+ * failure here is the wrong one: an over-broad retryable rule would re-resolve
+ * genuinely dead sources forever (bounded, but pointless), and a too-narrow one
+ * leaves the throttle case broken.
+ */
+describe("YouTubeResolver alive-but-refused classification", () => {
+  const MUXED = "https://cdn.example/muxed.mp4";
+
+  function ladder(): PlaybackMediaInfo {
+    return media({
+      formats: [
+        {
+          url: "https://cdn.example/opus.webm",
+          itag: 251,
+          mimeType: 'audio/webm; codecs="opus"',
+          bitrate: 180_658,
+          hasAudio: true,
+          hasVideo: false,
+        },
+        {
+          url: MUXED,
+          itag: 18,
+          mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+          bitrate: 255_920,
+          hasAudio: true,
+          hasVideo: true,
+        },
+      ],
+    });
+  }
+
+  const refusedWholeBody: FormatProbeVerdict = {
+    consumable: false,
+    reason: "probe_status_403",
+    status: 403,
+    boundedRangeOk: true,
+  };
+
+  it("marks an all-refused-but-alive source retryable", async () => {
+    const error = await resolverWith(ladder(), async () => refusedWholeBody)
+      .resolveSource({ source: "youtube", id: VIDEO_ID })
+      .catch((cause) => cause);
+    expect(error).toMatchObject({
+      name: "PlaybackResolutionError",
+      stage: "stream",
+      retryable: true,
+    });
+  });
+
+  it("keeps a dead source permanent", async () => {
+    const error = await resolverWith(ladder(), async () => ({
+      consumable: false,
+      reason: "probe_status_404",
+      status: 404,
+    }))
+      .resolveSource({ source: "youtube", id: VIDEO_ID })
+      .catch((cause) => cause);
+    expect(error).toMatchObject({ stage: "stream", retryable: false });
+  });
+
+  it("keeps a refused source permanent when one candidate is genuinely dead", async () => {
+    // A single 404 means the media is gone, so the surviving 403-alive URLs are
+    // signed links to nothing. Retrying would re-resolve a deleted video.
+    const error = await resolverWith(ladder(), async (url) =>
+      url === MUXED
+        ? { consumable: false, reason: "probe_status_404", status: 404 }
+        : refusedWholeBody,
+    )
+      .resolveSource({ source: "youtube", id: VIDEO_ID })
+      .catch((cause) => cause);
+    expect(error).toMatchObject({ stage: "stream", retryable: false });
+  });
+
+  it("keeps a 403 with no bounded confirmation permanent", async () => {
+    // No bounded read means the URL proved nothing, which is the expired
+    // signature case the confirmation exists to tell apart.
+    const error = await resolverWith(ladder(), async () => ({
+      consumable: false,
+      reason: "probe_status_403",
+      status: 403,
+    }))
+      .resolveSource({ source: "youtube", id: VIDEO_ID })
+      .catch((cause) => cause);
+    expect(error).toMatchObject({ stage: "stream", retryable: false });
+  });
+
+  it("keeps a timeout permanent", async () => {
+    const error = await resolverWith(ladder(), async () => ({
+      consumable: false,
+      reason: "probe_timeout",
+    }))
+      .resolveSource({ source: "youtube", id: VIDEO_ID })
+      .catch((cause) => cause);
+    expect(error).toMatchObject({ stage: "stream", retryable: false });
+  });
+
+  it("keeps a zero-candidate resolution permanent", async () => {
+    const error = await resolverWith(media({ formats: [] }), async () => true)
+      .resolveSource({ source: "youtube", id: VIDEO_ID })
+      .catch((cause) => cause);
+    expect(error).toMatchObject({ stage: "stream", retryable: false });
+  });
+
+  it("logs the verdict so the retry decision is diagnosable", async () => {
+    const records: LogRecord[] = [];
+    const restore = setLogSink((record) => {
+      records.push(record);
+    });
+    setLogLevel("debug");
+    try {
+      await resolverWith(ladder(), async () => refusedWholeBody)
+        .resolveSource({ source: "youtube", id: VIDEO_ID })
+        .catch(() => undefined);
+    } finally {
+      restore();
+      setLogLevel("error");
+    }
+    const summary = records.find((r) => r.event === "playback_resolution_failed");
+    expect(summary?.fields).toMatchObject({
+      candidateCount: 2,
+      rejectedCount: 2,
+      topRejectionReasons: "probe_status_403=2",
+      aliveButRefused: true,
+    });
+    // The new field is a boolean verdict, never evidence about the URL.
+    expect(JSON.stringify(records)).not.toContain("cdn.example");
   });
 });

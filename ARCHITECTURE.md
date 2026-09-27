@@ -290,12 +290,32 @@ not merely as a convention. See §8a.
   `probe_timeout`, `probe_network_error`, `missing_url`), `status`,
   `contentType`, and `boundedRangeOk`. A 403 alone cannot distinguish a dead
   URL from the whole-body refusal above, so a rejected 403/416 is confirmed
-  with **one** extra bounded read that sets `boundedRangeOk`. That flag is
-  diagnostic only and never promotes a candidate: the browser would still fail
-  on it, and promoting it would reinstate the code-4 regression. When no
-  candidate survives, one `playback_resolution_failed` record summarises
-  `candidateCount` / `validCount` / `rejectedCount` / `topRejectionReasons`. No
-  signed URL appears in any of it.
+  with **one** extra bounded read that sets `boundedRangeOk`. That flag never
+  promotes a candidate: the browser would still fail on it, and promoting it
+  would reinstate the code-4 regression. When no candidate survives, one
+  `playback_resolution_failed` record summarises `candidateCount` /
+  `validCount` / `rejectedCount` / `topRejectionReasons`, plus the boolean
+  `aliveButRefused` described next. No signed URL appears in any of it.
+
+  **Refused-but-alive is a transient failure (2026-09-27).** "No consumable
+  format" is two different failures wearing one message, and the distinction
+  the probe already collects decides between them. Measured on 2026-09-27: an
+  8-minute burst of live-playback tests drove **all seven** candidates of one
+  video to `probe_status_403` — including the progressive format, which had
+  answered 206 on every candidate minutes earlier — while a bounded read on
+  each still succeeded; an isolated probe of the same video immediately after
+  returned 206 on all seven. The media existed; the CDN was declining the
+  browser's whole-body read *at that moment*. So when every candidate was
+  refused **and** each proved alive on the bounded read, the `stream`-stage
+  error is raised with `retryable: true` and recovery performs its bounded
+  retry; every other combination (404, a 403 with no bounded confirmation, a
+  timeout, a network error, zero candidates) keeps the permanent default,
+  because re-resolving the same identity cannot change the answer. A single
+  dead candidate among alive ones is enough to stay permanent — a 404 means
+  the media is gone, so the surviving signed URLs point at nothing. The
+  distinction is computed from the probe's own evidence, so an injected test
+  validator (a bare boolean, reason `validator_injected`) can never make a
+  source look recoverable.
 - **Expiry:** `expiresAt` carried on the `AudioSource`; expired candidates
   skipped at selection and rejected at load.
 
@@ -637,11 +657,24 @@ Sole persistence + ownership authority (`src/lib/dal/*`):
   - `addTrackSchema` omits the same three fields, so zod strips them at the
     untrusted edge before the value can reach the DAL. Schema validation is
     shape, not authorization: it never substitutes for the DAL's `Pick`.
+  - **One track contract, both writers (2026-09-27).** `trackInputSchema` is
+    the single definition of a client-writable `Track`, and both catalog-writing
+    actions parse through it: `addTrackToPlaylistAction` and `likeTrackAction`.
+    The like path previously applied no validation at all, so any signed-in
+    caller could write an arbitrarily long `title`/`artistName`/`artworkUrl`/
+    `providerUrl`/`genres[]` into a row every other user renders. Fields are
+    bounded far above real provider metadata (text 500, URLs 2048, 20 genres,
+    finite non-negative duration), and `title`/`artistName` are required
+    non-empty because `normalizeTrack` already throws on an empty one — so no
+    legitimately produced track can be rejected by that rule. `provider` stays a
+    bounded open string, not an enum: `ProviderId` is `string` by design so a
+    provider can be added without a schema change. The **parsed** value is what
+    is passed to the DAL, never the caller's object, so a stripped or trimmed
+    field cannot reach the DAL by way of the original argument.
   Playback does not depend on those columns. `PlaybackController` resolves a
   fresh `AudioSource` per load and never reads `streamUrl`/`previewUrl` as
   playback input, not even as a fallback, so removing the write path cannot
-  break playback. The residual — client-supplied *display* fields on first
-  write — is recorded in `docs/scope-boundaries.md`.
+  break playback.
 
 ## 13. Database
 
@@ -1918,6 +1951,15 @@ the property is asserted.
   a real defect, found by a test that read the rendered string.
 - `prefers-reduced-motion` is honoured; the ambient drift keyframes live inside
   the existing `no-preference` block.
+- **An accessible name is unique on a screen.** Two controls answering to the
+  same name are indistinguishable to a screen-reader user and ambiguous to any
+  role-based query, so a repeated *action* is fine but a repeated *name* is not:
+  the library's section-header "Create playlist" and the empty-state CTA both
+  exist, and the header one is named after the section it acts on
+  (`library.createPlaylistInSection` → "Create playlist in Playlists"). The same
+  rule applies to per-row action labels, which are scoped by the region they
+  belong to rather than being globally unique — a track row and the player bar
+  legitimately both say "Actions for <track>".
 
 ## 33. Aurora V-Shape and the equalizer (Phase 53 addendum)
 

@@ -23,7 +23,13 @@ export function PlaylistSection({ playlists }: { playlists: Playlist[] }) {
             variant="ghost"
             size="sm"
             onClick={() => setShowCreateDialog(true)}
-            aria-label={t("library.createPlaylist")}
+            // Scoped to the section: the empty state below repeats the
+            // "Create playlist" action, and two controls sharing one
+            // accessible name are indistinguishable to a screen-reader user
+            // and ambiguous to `getByRole`. This one is the header action.
+            aria-label={t("library.createPlaylistInSection", {
+              section: t("library.playlistSection"),
+            })}
             className="gap-1"
           >
             <PlusIcon size={16} />

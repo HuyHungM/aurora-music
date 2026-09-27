@@ -1,14 +1,16 @@
+import { FIXTURE_A, FIXTURE_B } from "@/lib/e2e/fixture-ids";
+
 /**
  * Live E2E fixture contract (Phase 17 §10). Plain data only:
  * provider + id + expected title fragment + playable flag.
  * No URLs, no expiry values, no secrets — ever.
+ *
+ * The ids live in `src/lib/e2e/fixture-ids.ts` because the fixture ROUTE also
+ * needs them: the secondary queue entry has to be a genuinely different
+ * recording, and two copies of the same id is exactly what the product's
+ * canonical dedupe (correctly) refuses to queue twice.
  */
-export const FIXTURE_A = {
-  provider: "youtube",
-  providerTrackId: "dQw4w9WgXcQ",
-  titleFragment: "Never Gonna Give You Up",
-  playable: true,
-} as const;
+export { FIXTURE_A, FIXTURE_B };
 
 export const INVALID_ID = "aaaaaaaaaaa";
 
