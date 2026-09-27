@@ -69,7 +69,10 @@ by automated gates. It is a statement of what holds, not a wishlist.
   stay enabled. `sslmode=disable`, `sslmode=no-verify`, `ssl=false` and
   `uselibpqcompat=true` on `require`/`verify-ca` are refused in production, so
   a certificate problem cannot be "fixed" by silently disabling validation.
-  See `docs/deployment.md`.
+  A managed provider that signs with a per-project CA (Aiven's
+  `<project-id> Project CA`) is the canonical case: supply that CA as the trust
+  anchor. It is a public certificate but is a host secret like any other — it
+  is never committed to Git and never served. See `docs/deployment.md`.
 - No `NEXT_PUBLIC_*` variables anywhere in source or `.env.example`.
 - Never log secret values; `src/lib/diagnostics/logger.ts` drops
   secret-shaped fields and redacts URL shapes fail-closed.

@@ -110,6 +110,28 @@ AURORA_DATABASE_CA_CERT_PATH="/etc/aurora/postgres-ca.pem"
 The same variable is honoured by `db:verify`, `db:check`, `db:integrity` and
 the E2E harness, so every path trusts the same CA.
 
+### Managed provider with a per-project CA (Aiven)
+
+Aiven PostgreSQL signs the server certificate with a **per-project CA**
+(`<project-id> Project CA`) that is self-signed and therefore absent from every
+public trust store. The server sends the complete chain (leaf -> project CA),
+so the only missing piece is the trust anchor and hostname verification already
+passes; the observed failure is `SELF_SIGNED_CERT_IN_CHAIN`. Trust Aiven's own
+CA; never weaken the connection:
+
+1. In the Aiven Console, open the service and download its **CA certificate**
+   (`ca.pem`). Do not take a CA from a third-party site.
+2. Store it on the host, outside the repository and outside the web root, e.g.
+   `/home/container/secrets/aiven-ca.pem`.
+3. Set `AURORA_DATABASE_CA_CERT_PATH` to that absolute path and leave
+   `sslmode=require` (and the rest of `DATABASE_URL`) unchanged.
+4. Restart the application, then run `bun run db:check` (`SELECT 1` plus the
+   `getUserByAccount` lookup against a sentinel key).
+
+The CA file is a **public** certificate (no private key). Never commit it to
+Git — `.gitignore` already ignores `*.pem` — and never serve it. Certificate
+and hostname verification remain enabled (`rejectUnauthorized: true`).
+
 `sslmode=disable`, `sslmode=no-verify`, `ssl=false` and `uselibpqcompat=true`
 on `require`/`verify-ca` are refused in production. Resolve a certificate
 problem by supplying the CA, never by disabling verification.
