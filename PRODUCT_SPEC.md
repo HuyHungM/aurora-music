@@ -85,11 +85,23 @@ Mechanics:
 - No custom cookie or session code; secure `HttpOnly` / `SameSite=Lax`
   cookies via Auth.js defaults (`__Secure-` prefix in production).
 - Sign-out redirects to the fixed `/` target (no open redirects).
-- **Sign-in always targets the host the browser is on.** The authorization
+- **Sign-in always targets the origin the browser is on.** The authorization
   `redirect_uri` and every link `/api/auth/*` renders are built from the
   request the browser made, so opening the dev server from another device
   (`http://<lan-ip>:3000`) starts OAuth against that same origin instead of
   `localhost` — which would try to return the token to the phone itself.
+- **A deployment with a public hostname declares it** as
+  `AURORA_PUBLIC_URL` (`https://auroramuzik.dpdns.org`), and that declaration —
+  not the `Host` header — decides the `redirect_uri`. Two things make this
+  necessary rather than cosmetic. The internal origin the process listens on
+  (`http://127.0.0.1:24584`) must never reach Google: with the port attached,
+  the callback is rejected as `redirect_uri_mismatch` and nobody can sign in.
+  And the port a server was *booted* with is not the port the *public* origin
+  has, which is why the declaration exists rather than a port-stripping rule.
+  A tunnel's `Host` header cannot be the authority here, because a tunnel
+  configured to append the internal port to the public hostname is precisely
+  the failure being fixed. Unset, the request headers decide — correct for
+  localhost and LAN, which have no public origin to declare.
 - Mutations require a session user; the DAL rechecks resource ownership.
 
 ## 4. Provider model

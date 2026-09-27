@@ -28,7 +28,13 @@ const publicOriginSchema = z
   })
   .transform((value) =>
     value === undefined ? undefined : (parsePublicOrigin(value) as string),
-  );
+  )
+  // The outer `.optional()` is load-bearing for the inferred type, not for the
+  // value: a `ZodEffects` wrapper makes its key REQUIRED in `EnvConfig`, so
+  // every `EnvConfig` literal in the tree would have had to spell this field
+  // out. Re-wrapping keeps it optional, like every other optional variable,
+  // and still short-circuits `undefined` before the transform above runs.
+  .optional();
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),

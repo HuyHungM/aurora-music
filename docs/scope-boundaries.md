@@ -142,16 +142,24 @@ things on that origin are left unsolved on purpose:
   honestly — the share control falls back to a selection copy and then to a
   selectable link field, identity ids fall back to `getRandomValues`, and the
   service worker simply does not register — but **PWA install/offline and the
-  system share sheet cannot work on a plain-HTTP origin.** The same holds for
-  the deployed production URL, which is reached over plain HTTP rather than
-  TLS; TLS termination is an edge responsibility (`docs/deployment.md`) and
-  the edge in front of it does not currently provide it, so "production is a
-  secure context" is not an assumption the app may make anywhere. Registration
+  system share sheet cannot work on a plain-HTTP origin.** Registration
   therefore feature-detects instead of dereferencing, and the compiled result
   of that is gated by `verify:client-bundle` and `e2e/pwa.spec.ts` — see
   `ARCHITECTURE.md` for why a source-level guard was not enough. Adding a dev
-  certificate, a tunnel or edge TLS is environment work, not a product
-  feature, and it is not authorized here.
+  certificate is environment work, not a product feature, and it is not
+  authorized here.
+- **TLS exists at the public origin but not at the origin the process listens
+  on, and the two must never be treated as the same host.** The deployed
+  public origin (`https://auroramuzik.dpdns.org`) terminates TLS at the edge,
+  so it *is* a secure context; the origin Next.js is bound to
+  (`http://127.0.0.1:24584`) is not. This was previously recorded the other way
+  round — the claim that the deployed URL is reached over plain HTTP was
+  measured to be false, and the correction is why the public origin is now a
+  declared value (`AURORA_PUBLIC_URL`, `ARCHITECTURE.md` §14) rather than
+  something inferred from a `Host` header that may carry the internal port.
+  Registration still feature-detects rather than assuming a secure context,
+  because the dev and LAN origins genuinely are not one, and a LAN browser
+  must still degrade honestly.
 - **Google OAuth refuses a private-network redirect URI.** Google answers
   the LAN callback with `invalid_request: device_id and device_name are
   required for private IP`, so Google sign-in cannot complete from

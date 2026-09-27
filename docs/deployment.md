@@ -163,7 +163,66 @@ always permitted: revocation must work even when the feature is being killed.
   absence disables providers, never breaks boot. Live E2E stays opt-in
   (`AURORA_E2E_LIVE_PLAYBACK=1`) and out of CI.
 
+## Public origin and OAuth (required behind a tunnel or reverse proxy)
+
+Set the public origin. It is what Google's registered redirect URI must match,
+and the only way to get there is to stop deriving it from the request:
+
+```env
+AURORA_PUBLIC_URL="https://auroramuzik.dpdns.org"
+```
+
+Google Cloud Console → Credentials → the OAuth client:
+
+| Field | Value |
+| --- | --- |
+| Authorized JavaScript origin | `https://auroramuzik.dpdns.org` |
+| Authorized redirect URI | `https://auroramuzik.dpdns.org/api/auth/callback/google` |
+
+No port, no trailing slash, and no `http://`. The origin the *process* listens
+on stays internal and is not part of OAuth:
+
+```env
+PORT=24584                 # next start binds 24584
+                           # Cloudflared origin: http://127.0.0.1:24584
+```
+
+`PORT` is what Next.js reads. Nothing else in the repository refers to this
+port by name — the value lives in the launcher's environment and in the tunnel
+configuration, which is why `AURORA_PUBLIC_URL` exists: the application must
+not need to know its own port to build a correct public URL.
+
+Tunnel route:
+
+| Field | Value |
+| --- | --- |
+| Hostname | `auroramuzik.dpdns.org` |
+| Path | `*` |
+| Service type | HTTP |
+| URL | `http://127.0.0.1:24584` |
+| HTTP Host Header | **unset** — or exactly `auroramuzik.dpdns.org` |
+
+Never `127.0.0.1:24584`, `localhost:24584` or `<public-host>:24584` in the
+Host Header override. `AURORA_PUBLIC_URL` makes the application ignore that
+header, so the override is no longer load-bearing, but leaving a wrong one in
+place keeps every other proxied URL on the deployment wrong too.
+
+Verify the generated URI rather than the configuration, because the two can
+disagree:
+
+```bash
+curl -s https://auroramuzik.dpdns.org/api/auth/providers
+# callbackUrl must be exactly:
+#   https://auroramuzik.dpdns.org/api/auth/callback/google
+```
+
+If `AURORA_PUBLIC_URL` and `AUTH_URL` (or `NEXTAUTH_URL`) are both set and
+disagree, the server refuses to boot. Do not resolve that by deleting one —
+they are one declaration in two places, and the disagreement is the bug.
+
 ## Edge responsibilities (not in-app)
 
-- TLS termination (no HSTS forced by the app), Host-header sanitization
-  (`trustHost: true` assumes a sane proxy), rate limiting, backups.
+- TLS termination (no HSTS forced by the app), rate limiting, backups.
+- Host-header sanitization is no longer a requirement *when*
+  `AURORA_PUBLIC_URL` is set — the application pins the origin itself and
+  ignores the header. Without it, `trustHost: true` still assumes a sane proxy.

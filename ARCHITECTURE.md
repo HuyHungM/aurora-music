@@ -712,6 +712,26 @@ until the rollback analysis is redone.
 
 - Auth.js (NextAuth v5 beta): Prisma adapter, **JWT session strategy**,
   `trustHost: true`, `secret = AUTH_SECRET` (production-required).
+- **The public origin is declared, not inferred: `AURORA_PUBLIC_URL`.**
+  Auth.js derives *every* absolute URL it emits — `signinUrl`, `callbackUrl`,
+  the OIDC `redirect_uri`, the post-callback redirect, and whether the session
+  cookie is `Secure` — from one value: the origin of the `Request` it is handed.
+  That origin is not observable by the application. Next builds `request.url`
+  from the hostname and port the server was **booted** with, and the only proxy
+  headers that could stand in for the public hostname are headers a
+  misconfigured proxy gets wrong. So a deployment with a public hostname
+  declares it once (`https://auroramuzik.dpdns.org`) and the application stops
+  reading the origin off the wire. Validated and normalized to a bare
+  `URL#origin` by `parsePublicOrigin` (`src/lib/config/public-origin.ts`) at
+  the `parseEnv` boundary; a **path is rejected**, because Auth.js derives
+  `basePath` from `new URL(AUTH_URL).pathname` and a declared path would
+  silently relocate the callback route. Optional — absent, the origin comes
+  from the request headers, which is what localhost and LAN need — and a
+  disagreeing `AUTH_URL`/`NEXTAUTH_URL` fails the boot rather than producing a
+  half-fixed deployment. `src/lib/auth.ts` copies the declared origin into
+  `process.env.AUTH_URL` before `NextAuth()` runs, so Auth.js's own
+  `createActionURL` (the built-in `/api/auth/signin` page) agrees with the
+  OAuth flow instead of falling back to the header.
 - Providers built conditionally (`buildProviders`): Google and GitHub each
   added only when its ID + secret pair is present; zero providers is a valid
   boot state.
@@ -721,25 +741,37 @@ until the rollback analysis is redone.
   `requireUser()` (throws `AuthenticationError`) / `getSessionUserId()`.
   Mutations require a user; the DAL rechecks ownership per resource.
 - Sign-out redirects to fixed `/`; no open redirects anywhere.
-- **The auth route re-anchors its request origin to the browser's host.**
+- **The auth route re-anchors its request origin before Auth.js sees it.**
   `src/app/api/auth/[...nextauth]/route.ts` wraps `handlers.GET`/`POST` in
-  `toBrowserOrigin()`: when Next's `request.url` origin differs from
-  `x-forwarded-host ?? host` (Next 16 dev pins it to `http://localhost:3000`
-  from `resolve-routes.js`, regardless of the `Host` header), the handler is
-  handed a rebuilt `NextRequest` on the browser's host, otherwise it is
-  passed through untouched. Auth.js derives every URL it emits —
-  `signinUrl`, `callbackUrl`, the OIDC `redirect_uri`, and the post-callback /
-  sign-out redirect (`baseUrl: url.origin`) — from `request.url`, so without
-  this a phone opening `http://192.168.1.32:3000` is handed
-  `localhost:3000` links that resolve to the phone itself. The rewrite
-  changes the origin only: the scheme is read from `x-forwarded-proto` or
-  the request's own scheme and never guessed, so plain HTTP keeps
-  non-`Secure` cookies and `trustHost: true` remains Auth.js's documented
-  trust in host headers. No cookie flag, `SameSite` policy, safe origin or
-  redirect target is relaxed anywhere. The app's own `signInWith` /
-  `signOutUser` server actions were already correct (they build their URL
-  from `headers()`); this closes the `/api/auth/*` surface they share with
-  the default sign-in page.
+  `toBrowserOrigin()`, a thin adapter over `resolveBrowserOrigin()`: when the
+  request's origin is not the one the browser used, the handler is handed a
+  rebuilt `NextRequest`; otherwise the request is passed through untouched. The
+  decision has two sources, in order:
+  1. `AURORA_PUBLIC_URL`, when declared, for host **and** scheme, with the
+     headers not consulted at all. This tightens security rather than
+     loosening it: with a declaration in place, a spoofed `Host` header can no
+     longer steer an OAuth redirect, which is the guarantee `trustHost: true`
+     always needed the proxy in front to provide.
+  2. Otherwise `x-forwarded-host ?? host` — the same promise `trustHost: true`
+     is, and what keeps a phone opening `http://192.168.1.32:3000` from being
+     handed links that resolve to itself. The scheme is read from
+     `x-forwarded-proto` or the request's own scheme and never guessed, so
+     plain HTTP keeps non-`Secure` cookies.
+
+  A `Host` header that is absent or malformed leaves the request alone.
+- **`hostname` and `port` are set separately, never `host`.** `URL#host` does
+  not clear an existing port — host parsing starts from the URL's *current*
+  port — so `url.host = "auroramuzik.dpdns.org"` on a request Next built for
+  `next start -p 24584` yields `https://auroramuzik.dpdns.org:24584/...`. That
+  was a defect in this application, not only a tunnel misconfiguration: no
+  proxy configuration avoids it, and it put the internal origin's port into
+  Google's `redirect_uri`, killing every sign-in with
+  `redirect_uri_mismatch`. Setting `hostname` and `port` separately is the only
+  way to say "this origin has no port", which is what a public origin means.
+  No string surgery achieves it anywhere — no `.replace(":24584", "")`, no
+  port-stripping regex — because that would work only for the port that happens
+  to be wrong today and would break a legitimate
+  `http://192.168.1.32:3000` LAN origin.
 - Language preference (`src/lib/dal/locale.ts`): `getUserLocale` /
   `setUserLocale` on the nullable `User.locale` column — not a dedicated
   table. Null means "no explicit preference" (falls back to cookie, then

@@ -84,15 +84,27 @@ by automated gates. It is a statement of what holds, not a wishlist.
 
 - Auth.js with JWT sessions; secure `HttpOnly`/`SameSite=Lax` cookies via
   Auth.js defaults (`__Secure-` prefix in production). No custom cookie or
-  session code. `trustHost: true` assumes the deployment sanitizes the Host
-  header upstream (standard for Next + Auth.js behind a proxy).
-- `/api/auth/*` is re-anchored to the host the browser used
-  (`toBrowserOrigin()` in `src/app/api/auth/[...nextauth]/route.ts`), because
-  Next 16 dev builds `request.url` from `opts.hostname || "localhost"` rather
-  than from the `Host` header. The rewrite touches the origin only — scheme
-  comes from `x-forwarded-proto` or the request itself and is never guessed,
-  so a plain-HTTP origin still gets non-`Secure` cookies. No cookie attribute,
-  safe origin, or redirect target is relaxed to make LAN sign-in work.
+  session code.
+- `/api/auth/*` is re-anchored to the origin the browser used
+  (`toBrowserOrigin()` in `src/app/api/auth/[...nextauth]/route.ts`, over
+  `resolveBrowserOrigin()` in `src/lib/config/public-origin.ts`), because
+  Next builds `request.url` from the hostname and port the server was booted
+  with rather than from the `Host` header. Two sources, in order:
+  - **`AURORA_PUBLIC_URL`**, when the deployment declares one, is
+    authoritative for host and scheme and the headers are not read at all.
+    This is the security-relevant half: with a declaration in place, no
+    inbound header can steer an OAuth redirect, so `trustHost: true` rests on
+    configuration rather than on the assumption that the proxy in front sets
+    `Host` correctly. Validated at boot and normalized to a bare origin, so a
+    typo fails the deploy instead of the first sign-in.
+  - Otherwise `x-forwarded-host ?? host`, which is the `trustHost: true`
+    promise. A `Host` header that is absent or malformed is refused and the
+    request is forwarded untouched.
+
+  The rewrite touches the origin only — the scheme comes from
+  `x-forwarded-proto` or the request itself and is never guessed, so a
+  plain-HTTP origin still gets non-`Secure` cookies. No cookie attribute, safe
+  origin, or redirect target is relaxed to make LAN sign-in work.
 - Mutations require a session user; DAL rechecks resource ownership
   (`AuthorizationError`); sign-out redirects to the fixed `/` target
   (no open redirects anywhere — verified by search).
