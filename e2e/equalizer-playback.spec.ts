@@ -25,6 +25,21 @@ import {
  * asserts at each step that the element, the position, the volume, the duration
  * and the graph are all exactly where they were.
  *
+ * WHAT IT NOW ASSERTS, and why the answer is "nothing is built". This spec used
+ * to require `contexts === 1` and `sourceCalls === 1`, and passed — on a graph
+ * that output silence. The provider's stream is cross-origin and serves no
+ * `Access-Control-Allow-Origin`, so a `MediaElementAudioSourceNode` over it
+ * yields zeroes by specification, and Chrome said so in the console on every
+ * run. The number was recorded as an artifact because neither `> 0` nor `= 0`
+ * was an honest assertion.
+ *
+ * So the provider's own stream is now the REFUSAL case: the graph declines
+ * before taking the one-way door, the interface says the stream rather than the
+ * browser is at fault, the playhead keeps moving, and Chrome's sentence about
+ * zeroes never appears. The positive case — a graph that really is built and
+ * really does process audio — is `equalizer-audible.spec.ts`, which serves a
+ * CORS-clean response so the browser is allowed to answer.
+ *
  * Like `live-playback.spec.ts` this is opt-in: it needs the network and a
  * provider. Set `AURORA_E2E_LIVE_PLAYBACK=1`.
  */
@@ -142,25 +157,32 @@ test.describe("equalizer during real playback", () => {
       "true",
     );
 
-    const engaged = await eqCounters(page);
-    expect(engaged.contexts).toBe(1);
-    expect(engaged.sourceCalls).toBe(1);
-    expect(engaged.distinctElements).toBe(1);
-    expect(engaged.errors).toEqual([]);
-    await expect(page.getByText(/equalizer is unavailable/i)).toHaveCount(0);
-
-    // The graph is not merely wired: it is built, running, and error-free.
+    // The graph must NOT be built here, and the reason is the whole point of
+    // this spec having been rewritten.
     //
-    // What comes OUT of it is measured here too, and deliberately not asserted
-    // on. `measureGraphRms` returns exactly 0 on this media path today, and
-    // Chrome says why in the console: "MediaElementAudioSource outputs zeroes
-    // due to CORS access restrictions". The provider's stream carries no
-    // `Access-Control-Allow-Origin`, so the browser refuses to let Web Audio
-    // read the element at all. Asserting `> 0` would fail for a defect in media
-    // delivery that no change to EQ mode switching can reach; asserting `= 0`
-    // would bless it. So the number is recorded on the test as an artifact
-    // instead, and `ARCHITECTURE.md` §33.8 carries the full finding.
-    readings.push(`afterEngage.preamp=${await measureGraphRms(page, "preamp")}`);
+    // It used to assert `contexts === 1` and `sourceCalls === 1`, then record
+    // `measureGraphRms` as an artifact because the number was exactly 0. That
+    // was a graph which was structurally perfect, running, and completely
+    // silent: the provider's stream is cross-origin and carries no
+    // `Access-Control-Allow-Origin`, so `MediaElementAudioSourceNode` outputs
+    // zeroes by specification. The old assertions passed on the defect.
+    //
+    // So the contract inverted. A source the browser is not allowed to read is
+    // now refused BEFORE the one-way door, and the two halves that follow are
+    // what a listener actually gets: a notice that names the stream, and their
+    // music, still going.
+    const engaged = await eqCounters(page);
+    expect(engaged.contexts).toBe(0);
+    expect(engaged.sourceCalls).toBe(0);
+    expect(engaged.distinctElements).toBe(0);
+    expect(engaged.errors).toEqual([]);
+
+    await expect(page.getByText(/this stream cannot be read/i)).toBeVisible();
+    // The browser is not the problem, and saying so would send a listener to
+    // update a browser that is working exactly as specified.
+    await expect(
+      page.getByText(/this browser cannot process audio/i),
+    ).toHaveCount(0);
 
     // --- 4. The full mode sequence, through the UI --------------------------
     watchingResolver = true;
@@ -196,12 +218,14 @@ test.describe("equalizer during real playback", () => {
     watchingResolver = false;
 
     // --- 5. The pipeline did not move ---------------------------------------
+    // Every one of those switches is a configuration change, and every one is
+    // pushed at the graph. None of them may open the door either.
     const after = await eqCounters(page);
-    expect(after.contexts).toBe(1);
-    expect(after.sourceCalls).toBe(1);
-    expect(after.distinctElements).toBe(1);
+    expect(after.contexts).toBe(0);
+    expect(after.sourceCalls).toBe(0);
+    expect(after.distinctElements).toBe(0);
     expect(after.errors).toEqual([]);
-    await expect(page.getByText(/equalizer is unavailable/i)).toHaveCount(0);
+    await expect(page.getByText(/this stream cannot be read/i)).toBeVisible();
 
     // --- 6. The listener's state did not move -------------------------------
     expect(await seekDuration(page)).toBe(duration);
@@ -211,18 +235,29 @@ test.describe("equalizer during real playback", () => {
     // No track was resolved, re-resolved or reloaded to switch a mode.
     expect(resolverCalls).toBe(0);
 
-    // Measured at both ends of the chain, and recorded rather than asserted —
-    // see the note where the first reading was taken.
+    // There is no graph to measure, and that is the measurement: `-1` is what
+    // `measureGraphRms` returns when the node it would tap was never created.
+    // Recording it keeps the contrast with the old run — where the same call
+    // returned a real number that meant silence — legible in the artifact.
+    readings.push(`afterEngage.preamp=${await measureGraphRms(page, "preamp")}`);
     readings.push(`afterSwitch.preamp=${await measureGraphRms(page, "preamp")}`);
-    readings.push(`afterSwitch.source=${await measureGraphRms(page, "source")}`);
 
     // --- 7. And the track is still going ------------------------------------
     const tail = await seekValue(page);
     await advances(page, tail);
+
+    // The assertion this spec was rewritten for. Chrome printed this sentence
+    // on every previous run, and it is only reachable through an element that
+    // has been re-homed into a graph it is not allowed to feed. With the door
+    // shut, the browser never has cause to say it.
+    const zeroing = consoleLines.filter((line) => /outputs zeroes/i.test(line));
+    expect(zeroing).toEqual([]);
+
     // No FAILURE notice anywhere. A bare `toHaveCount(0)` on `role="status"`
     // would be wrong here rather than strict: the EQ panel's save status and
     // the install affordance both live in live regions by design, so the
-    // assertion has to be about what is *in* them.
+    // assertion has to be about what is *in* them. The equalizer's own notice
+    // is a stream notice, which is why the filter does not exclude it.
     await expect(
       page
         .getByRole("status")
@@ -230,15 +265,16 @@ test.describe("equalizer during real playback", () => {
     ).toHaveCount(0);
 
     // Kept with the run so the finding travels with the artifact instead of
-    // living only in a report: the measured signal, and Chrome's own sentence
-    // about why it is what it is. URLs are already redacted by `redactSecrets`.
+    // living only in a report. URLs are already redacted by `redactSecrets`.
     await testInfo.attach("eq-signal-rms.txt", {
       body: [
+        "source: the provider's cross-origin stream carries no",
+        "Access-Control-Allow-Origin, so Web Audio may not read it.",
+        "The graph declines before the one-way door; the readings below are -1",
+        "because the node they would have tapped was never created.",
         ...readings,
         "",
-        ...consoleLines.filter((line) =>
-          /outputs zeroes|blocked by CORS policy/i.test(line),
-        ),
+        ...zeroing,
       ].join("\n"),
       contentType: "text/plain",
     });

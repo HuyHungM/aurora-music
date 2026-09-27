@@ -5,6 +5,8 @@ import {
   requestIdFromHeaders,
 } from "@/lib/api/request-id";
 import { handlers } from "@/lib/auth";
+import { getEnv } from "@/lib/config/env";
+import { resolveBrowserOrigin } from "@/lib/config/public-origin";
 
 /**
  * Re-issue the request on the origin the browser actually used.
@@ -13,48 +15,47 @@ import { handlers } from "@/lib/auth";
  * `redirect_uri`, the `action` of the sign-in forms it renders, the default
  * `callbackUrl`, the base it validates post-sign-in redirects against, and the
  * protocol that decides whether its session cookies are `Secure`. Next.js
- * derives `request.url` from the hostname the dev server was booted with
- * (`initURL` is built from `opts.hostname || "localhost"`), NOT from the
- * `Host` header - so from `http://<lan-ip>:3000` Auth.js believes it is
- * `http://localhost:3000` and hands the browser links to a host that does not
- * exist on the phone asking for them. The app's own UI never reads those
+ * derives `request.url` from the hostname and port the server was booted with,
+ * NOT from the `Host` header - so from `http://<lan-ip>:3000` Auth.js believes
+ * it is `http://localhost:3000` and hands the browser links to a host that does
+ * not exist on the phone asking for them. The app's own UI never reads those
  * URLs (it posts to same-origin relative paths), but Auth.js's built-in
  * `/api/auth/signin` page does, and so does every post-authentication
  * redirect.
  *
- * `trustHost: true` in `createAuthOptions` is exactly the promise Auth.js
- * asks for before it relies on request headers, so honouring them here is the
- * documented configuration rather than a workaround. Precedence mirrors
- * Auth.js's own `createActionURL`: `x-forwarded-host`/`x-forwarded-proto`
- * (which Next fills in from `Host`) win, because behind a proxy they are the
- * public values. The protocol is deliberately NOT guessed: only an explicit
- * forwarded protocol or the request's own scheme is used, so a plain-HTTP LAN
- * origin stays plain HTTP and `Secure` cookies keep their meaning.
+ * There are two sources for that origin, and the order matters:
  *
- * When the origins already agree the original request is forwarded untouched,
- * which is every localhost request and every production request behind a proxy
- * that sets `Host` correctly.
+ * - `AURORA_PUBLIC_URL`, when the deployment declares one. It is authoritative
+ *   for host AND scheme, and the request headers are not consulted at all. A
+ *   reverse proxy that appends the internal origin's port to the public
+ *   hostname would otherwise rewrite the OAuth `redirect_uri` to an address
+ *   Google has never heard of and every sign-in would fail with
+ *   `redirect_uri_mismatch` - the application cannot detect that from the
+ *   header alone, because the header is exactly what is wrong.
+ * - Otherwise `x-forwarded-host` / `host`, which is what `trustHost: true` in
+ *   `createAuthOptions` is the documented promise for, and what keeps LAN and
+ *   localhost sign-in working. The scheme is then read from
+ *   `x-forwarded-proto` or the request's own scheme and never guessed, so a
+ *   plain-HTTP LAN origin stays plain HTTP and `Secure` cookies keep their
+ *   meaning.
+ *
+ * `resolveBrowserOrigin()` owns that decision and its reasoning; this function
+ * is only the adapter that rebuilds a `NextRequest` from its answer. When the
+ * origins already agree it is forwarded untouched, which is every localhost
+ * request and every production request whose header is already correct.
  */
 function toBrowserOrigin(request: NextRequest): NextRequest {
-  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
-  if (!host) {
+  const target = resolveBrowserOrigin({
+    requestUrl: request.url,
+    headers: request.headers,
+    configuredOrigin: getEnv().AURORA_PUBLIC_URL,
+  });
+  if (!target) {
     return request;
   }
-  const current = new URL(request.url);
-  const forwardedProtocol = request.headers
-    .get("x-forwarded-proto")
-    ?.split(",")[0]
-    ?.trim();
-  const protocol = forwardedProtocol || current.protocol.replace(/:$/, "");
-  if (current.host === host && current.protocol === `${protocol}:`) {
-    return request;
-  }
-  const url = new URL(current);
-  url.host = host;
-  url.protocol = `${protocol}:`;
   // `NextRequest` re-applies method, headers and body (and the `duplex` flag a
   // streamed body needs), so a sign-in POST body survives the rewrite.
-  return new NextRequest(url, request);
+  return new NextRequest(target, request);
 }
 
 /**

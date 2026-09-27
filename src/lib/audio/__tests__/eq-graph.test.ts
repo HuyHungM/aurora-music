@@ -43,15 +43,26 @@ import {
    through the store, into an `AudioParam` - rather than half of it.
    ========================================================================== */
 
-import { FakeContext, fakeAudioElement } from "./fake-web-audio";
-
-const element = fakeAudioElement();
+import {
+  FakeContext,
+  fakeAudioElement,
+  FAKE_SOURCE_URL,
+  FAKE_ORIGIN,
+  SAME_ORIGIN_SOURCE_URL,
+  type FakeMediaElement,
+} from "./fake-web-audio";
 
 function harness(
   options: {
     element?: unknown | null;
     sourceThrows?: boolean;
     resumeTimeoutMs?: number;
+    /**
+     * The document origin, which in a browser is `location.origin` and here has
+     * to be supplied: without one every source reads as cross-origin, which is
+     * the cautious answer and makes the same-origin case untestable.
+     */
+    origin?: string;
   } = {},
 ): {
   context: FakeContext;
@@ -59,6 +70,21 @@ function harness(
   gesture: () => void;
   graph: EqGraph;
   reasons: string[];
+  /** URLs reported by the post-engagement audit. */
+  unreadable: string[];
+  /** The harness's own element, so a test can change what it is playing. */
+  fakeElement: FakeMediaElement;
+  /** Points the element at a new source WITHOUT firing the event. */
+  setSource: (url: string) => void;
+  /** Sets (or clears) the element's CORS opt-in. */
+  setCors: (mode: string | null) => void;
+  /** Sets the element's `readyState`, as a load progressing would. */
+  setReadyState: (state: number) => void;
+  /** Fails the element's load, as a failed CORS check would. */
+  failLoad: () => void;
+  /** Fires the element's source-change event, as a browser would. */
+  sourceChanged: () => void;
+  sourceListeners: () => number;
 } {
   const reasons: string[] = [];
   const context = new FakeContext();
@@ -73,12 +99,27 @@ function harness(
   // `document` here to dispatch on, and a retry path that only ever worked
   // against a real DOM would be the one part of the fix with no coverage.
   let gestureHandler: (() => void) | null = null;
+  // The same reasoning for the element's own source events, which is the retry
+  // trigger for a deferred attempt and the trigger for the post-engagement
+  // audit. Counted, because a listener that is subscribed twice is a bug the
+  // assertions below would otherwise be blind to.
+  let sourceHandler: (() => void) | null = null;
+  let sourceListenerCount = 0;
+  const unreadable: string[] = [];
+  const fakeElement = fakeAudioElement();
   const graph = new EqGraph({
     createContext: () => {
       created += 1;
       return context;
     },
-    getElement: () => ("element" in options ? options.element : element),
+    getElement: () => ("element" in options ? options.element : fakeElement),
+    // Absent by DEFAULT, on purpose: with no origin every source is cross-origin,
+    // which is the state a provider's stream is actually in and therefore the
+    // one the refusal tests should be written against. The same-origin case opts
+    // in explicitly.
+    ...(options.origin === undefined
+      ? {}
+      : { documentOrigin: () => options.origin as string }),
     onUnsupported: (reason) => reasons.push(reason),
     resumeTimeoutMs: options.resumeTimeoutMs,
     onUserGesture: (handler) => {
@@ -89,6 +130,17 @@ function harness(
         }
       };
     },
+    onSourceChange: (handler) => {
+      sourceHandler = handler;
+      sourceListenerCount += 1;
+      return () => {
+        if (sourceHandler === handler) {
+          sourceHandler = null;
+        }
+        sourceListenerCount -= 1;
+      };
+    },
+    onSourceUnreadable: (url) => unreadable.push(url),
   });
   const gesture = (): void => {
     const handler = gestureHandler;
@@ -97,7 +149,34 @@ function harness(
     gestureHandler = null;
     handler?.();
   };
-  return { context, contextsCreated: () => created, gesture, graph, reasons };
+  const setSource = (url: string): void => {
+    fakeElement.currentSrc = url;
+    fakeElement.src = url;
+  };
+  const sourceChanged = (): void => {
+    sourceHandler?.();
+  };
+  return {
+    context,
+    contextsCreated: () => created,
+    gesture,
+    graph,
+    reasons,
+    unreadable,
+    fakeElement,
+    setSource,
+    setCors: (mode) => {
+      fakeElement.crossOrigin = mode;
+    },
+    setReadyState: (state) => {
+      fakeElement.readyState = state;
+    },
+    failLoad: () => {
+      fakeElement.error = { code: 4 };
+    },
+    sourceChanged,
+    sourceListeners: () => sourceListenerCount,
+  };
 }
 
 /** Polls a condition set by asynchronous work started outside `await`. */
@@ -152,9 +231,9 @@ describe("engaging the graph", () => {
 
   it("re-homes the canonical element, and only that element", async () => {
     // §26. The graph must never create or seek an audio element of its own.
-    const { graph, context } = harness();
+    const { graph, context, fakeElement } = harness();
     await graph.engage(vShapeState);
-    expect(context.sourcedElement).toBe(element);
+    expect(context.sourcedElement).toBe(fakeElement);
     expect(context.sourceCalls).toBe(1);
   });
 
@@ -579,10 +658,11 @@ describe("the module singleton", () => {
   it("uses the registered resolver once one exists", async () => {
     resetEqGraphForTests();
     const context = new FakeContext();
-    setEqElementResolver(() => element);
-    const graph = getEqGraph({ createContext: () => context, getElement: () => element });
+    const resolved = fakeAudioElement();
+    setEqElementResolver(() => resolved);
+    const graph = getEqGraph({ createContext: () => context, getElement: () => resolved });
     await graph.engage(vShapeState);
-    expect(context.sourcedElement).toBe(element);
+    expect(context.sourcedElement).toBe(resolved);
   });
 
   it("does not create a graph that survives being reset", () => {
@@ -590,6 +670,456 @@ describe("the module singleton", () => {
     resetEqGraphForTests();
     const second = getEqGraph();
     expect(second).not.toBe(first);
+  });
+});
+
+/* ==========================================================================
+   CAN WEB AUDIO READ THIS SOURCE? - THE STEP THAT KEEPS THE MUSIC PLAYABLE
+   ========================================================================== */
+
+describe("the one-way door is not opened on a source Web Audio cannot read", () => {
+  /**
+   * The defect this whole block exists for, stated as a test: a graph that is
+   * perfect in every observable respect and outputs nothing.
+   *
+   * `createMediaElementSource` on a cross-origin element whose response has no
+   * `Access-Control-Allow-Origin` re-homes the element into a graph that
+   * produces zeroes BY SPECIFICATION. The element keeps playing, `volume`
+   * stays 1, `currentTime` keeps advancing, the context is `running`, the ten
+   * filters hold exactly the right gains - and the listener hears nothing. So
+   * every one of those healthy observations is compatible with the failure,
+   * and the only assertion that can catch it is that the door was never opened.
+   *
+   * THE QUESTION IS ANSWERED LOCALLY, from the resource's origin and the
+   * element's own CORS state, and these tests are written as the media elements
+   * the specification describes rather than as a stub for a probe - because
+   * there is no probe any more, and a suite that injects one would go on
+   * testing a question the product no longer asks.
+   */
+
+  it("declines, and never re-homes the element, on a cross-origin stream with no CORS opt-in", async () => {
+    // THE REAL CASE. This is a provider's stream today: cross-origin, and the
+    // element never asked for it in CORS mode, so a source node over it is fed
+    // zeroes by specification no matter what the server sent.
+    const h = harness();
+    h.setCors(null);
+
+    expect(await h.graph.engage(vShapeState)).toBe(false);
+
+    // The three that matter, and the first two are the whole point: the door
+    // was not opened, and nothing was allocated to open it with.
+    expect(h.context.sourceCalls).toBe(0);
+    expect(h.contextsCreated()).toBe(0);
+    // The element is still the listener's own, playing straight to the speakers.
+    expect(h.fakeElement.volume).toBe(0.75);
+    expect(h.fakeElement.muted).toBe(false);
+    expect(h.reasons).toEqual(["cors-tainted"]);
+    expect(h.graph.isEngaged).toBe(false);
+    // Not a deferral either: a source WAS available and was refused.
+    expect(h.graph.isAwaitingSource).toBe(false);
+    expect(h.graph.unsupportedReason).toBe("cors-tainted");
+  });
+
+  it("asks the network nothing at all, because the answer is not the network's", async () => {
+    // The regression that made the earlier network probe wrong, pinned so it
+    // cannot come back. Aurora's CSP is `connect-src 'self' ws: wss:`, so a
+    // `mode: "cors"` fetch of a provider's stream is blocked by the PAGE's
+    // policy before it leaves the browser - a `TypeError` indistinguishable
+    // from a CORS refusal, and a refusal verdict for a source Web Audio could
+    // read perfectly well. A decision that inherits the app's policy is not a
+    // measurement of the media.
+    const asked: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      asked.push(String(input));
+      throw new Error("the graph asked the network a question about the media");
+    }) as typeof globalThis.fetch;
+    try {
+      const h = harness();
+      h.setCors(null);
+      expect(await h.graph.engage(vShapeState)).toBe(false);
+      expect(h.reasons).toEqual(["cors-tainted"]);
+
+      const readable = harness();
+      expect(await readable.graph.engage(vShapeState)).toBe(true);
+      expect(readable.context.sourceCalls).toBe(1);
+    } finally {
+      globalThis.fetch = original;
+    }
+    expect(asked).toEqual([]);
+  });
+
+  it("engages on a same-origin source without any CORS opt-in at all", async () => {
+    // A same-origin resource is never subject to a CORS check, so there is
+    // nothing to opt into and nothing to wait for. The equalizer is a
+    // capability, not a switch, and this is the half of that which must keep
+    // working: media delivery that Web Audio may read, engaged.
+    const h = harness({ origin: FAKE_ORIGIN });
+    h.setSource(SAME_ORIGIN_SOURCE_URL);
+    h.setCors(null);
+
+    expect(await h.graph.engage(vShapeState)).toBe(true);
+    expect(h.context.sourceCalls).toBe(1);
+    expect(h.graph.isEngaged).toBe(true);
+    expect(h.graph.unsupportedReason).toBeNull();
+  });
+
+  it("engages on a cross-origin stream the element loaded in CORS mode", async () => {
+    // The other half: a CDN that serves `Access-Control-Allow-Origin` and an
+    // element that asked for it. The element's own `readyState` is the evidence
+    // that its check passed, so the equalizer works here too.
+    const h = harness();
+    h.setCors("anonymous");
+    h.setReadyState(4);
+
+    expect(await h.graph.engage(vShapeState)).toBe(true);
+    expect(h.context.sourceCalls).toBe(1);
+    // 62 Hz is the loudest band in the shipped curve, so it is the one worth
+    // naming: a value that is right proves the model's own numbers reached the
+    // graph rather than some other set of plausible ones.
+    expect(h.context.filters[1]?.gain.value).toBeCloseTo(3, 5);
+  });
+
+  it("declines when the element opted into CORS and the check failed", async () => {
+    // The element asked properly and the server said no. Its `error` is the
+    // only report of that, and believing the ask rather than the outcome would
+    // open the door on the exact source this whole block exists to protect.
+    const h = harness();
+    h.setCors("use-credentials");
+    h.setReadyState(0);
+    h.failLoad();
+
+    expect(await h.graph.engage(vShapeState)).toBe(false);
+    expect(h.context.sourceCalls).toBe(0);
+    expect(h.reasons).toEqual(["cors-tainted"]);
+  });
+
+  it("WAITS, rather than declines, while the element's CORS check has not reported", async () => {
+    // The third answer, and the reason it exists. The element opted in and the
+    // check has neither passed nor failed yet, so `readyState` is
+    // `HAVE_NOTHING`. That is not a refusal, it is an unanswered question - and
+    // a decline is permanent by design, so answering it wrongly here would be
+    // the graph closing its own one-way door on a source that was about to work.
+    const h = harness();
+    h.setCors("anonymous");
+    h.setReadyState(0);
+
+    expect(await h.graph.engage(vShapeState)).toBe(false);
+    expect(h.graph.isAwaitingSource).toBe(true);
+    expect(h.graph.unsupportedReason).toBeNull();
+    expect(h.reasons).toEqual([]);
+    expect(h.contextsCreated()).toBe(0);
+    expect(h.context.sourceCalls).toBe(0);
+    // And it is still listening for the report rather than having given up.
+    expect(h.sourceListeners()).toBe(1);
+
+    // The check passes. The very same URL is no longer refused, which is the
+    // whole reason a verdict is never cached as "not yet".
+    h.setReadyState(1);
+    h.sourceChanged();
+    await until(() => h.graph.isEngaged);
+    expect(h.context.sourceCalls).toBe(1);
+  });
+
+  it("treats a source it cannot even parse as unreadable, rather than guessing", async () => {
+    // Fail closed. The two available answers to "what does this mean" are not
+    // equivalent, and the wrong one is irreversible.
+    const h = harness();
+    h.setSource("::::not a url");
+
+    expect(await h.graph.engage(vShapeState)).toBe(false);
+    expect(h.context.sourceCalls).toBe(0);
+    expect(h.reasons).toEqual(["cors-tainted"]);
+  });
+
+  it("engages, exactly once, however many configuration changes arrive", async () => {
+    // The other half of the first suite's "declines" test: a gate that is not a
+    // switch that quietly disabled the equalizer.
+    const h = harness();
+    expect(await h.graph.engage(vShapeState)).toBe(true);
+    for (let i = 0; i < 5; i += 1) {
+      h.graph.apply(effectiveGraphState({ ...selectPreset("flat"), enabled: true }));
+      await h.graph.engage(vShapeState);
+    }
+    expect(h.context.sourceCalls).toBe(1);
+    expect(h.contextsCreated()).toBe(1);
+  });
+});
+
+describe("an equalizer switched on before anything is playing", () => {
+  it("waits for a source rather than declining, and allocates nothing", async () => {
+    // The ordinary case of a listener who opens Settings and switches the
+    // equalizer on before pressing play. Declining here would be both wrong and
+    // self-defeating: `failure` is permanent, so the graph's only chance would
+    // be spent on a page that had nothing to play yet.
+    const h = harness();
+    h.setSource("");
+    h.fakeElement.src = "";
+
+    expect(await h.graph.engage(vShapeState)).toBe(false);
+
+    expect(h.graph.isAwaitingSource).toBe(true);
+    // Crucially NOT a failure: the interface must not show an error for a
+    // healthy equalizer that has nothing to do yet.
+    expect(h.graph.unsupportedReason).toBeNull();
+    expect(h.reasons).toEqual([]);
+    expect(h.contextsCreated()).toBe(0);
+    expect(h.context.sourceCalls).toBe(0);
+    // And it is listening for the source rather than giving up.
+    expect(h.sourceListeners()).toBe(1);
+  });
+
+  it("engages on the source event once a readable source arrives", async () => {
+    const h = harness();
+    h.setSource("");
+    h.fakeElement.src = "";
+    await h.graph.engage(vShapeState);
+    expect(h.graph.isEngaged).toBe(false);
+
+    h.setSource(FAKE_SOURCE_URL);
+    h.sourceChanged();
+    await until(() => h.graph.isEngaged);
+
+    expect(h.context.sourceCalls).toBe(1);
+    expect(h.contextsCreated()).toBe(1);
+  });
+
+  it("re-subscribes after a retry that is still not ready", async () => {
+    // The retry is one-shot, exactly like the gesture retry, so a listener that
+    // detached and did not re-attach would leave the graph permanently deaf to
+    // the source it is waiting for - the quiet version of this bug.
+    const h = harness();
+    h.setSource("");
+    h.fakeElement.src = "";
+    await h.graph.engage(vShapeState);
+
+    // An event that still finds no source: one attempt, and a fresh listener.
+    h.sourceChanged();
+    await until(() => h.sourceListeners() === 1);
+    expect(h.graph.isAwaitingSource).toBe(true);
+    expect(h.graph.isEngaged).toBe(false);
+
+    h.setSource(FAKE_SOURCE_URL);
+    h.sourceChanged();
+    await until(() => h.graph.isEngaged);
+    expect(h.context.sourceCalls).toBe(1);
+  });
+
+  it("never subscribes twice to the same element", async () => {
+    const h = harness();
+    h.setSource("");
+    h.fakeElement.src = "";
+    for (let i = 0; i < 4; i += 1) {
+      await h.graph.engage(vShapeState);
+    }
+    expect(h.sourceListeners()).toBe(1);
+  });
+});
+
+describe("a source that arrives after the door is open", () => {
+  /**
+   * A second stream that arrives after the graph is already engaged, and that
+   * Web Audio may NOT read. The way to produce that with the real rules is not
+   * a different URL alone - a cross-origin URL is refused the same way every
+   * time - but a different CORS STATE, which is exactly what a change of media
+   * delivery or of the element's own attributes looks like.
+   */
+  const NEXT = "https://elsewhere.example.test/next-track";
+
+  it("reports it, and rebuilds nothing", async () => {
+    // The one state the pre-engagement gate cannot prevent: the element is
+    // already re-homed, and `createMediaElementSource` has no inverse. So the
+    // honest response is to stop claiming success. What it must NOT do is tear
+    // anything down, because a torn-down graph leaves the element re-homed into
+    // a closed context - the same silence with less information.
+    const h = harness();
+    await h.graph.engage(vShapeState);
+    expect(h.graph.isEngaged).toBe(true);
+
+    h.setSource(NEXT);
+    h.setCors(null);
+    h.sourceChanged();
+
+    expect(h.unreadable).toEqual([NEXT]);
+    expect(h.graph.sourceUnreadableReason).toBe("cors-tainted");
+    // Still engaged, still ONE context, ONE re-homing, nothing closed.
+    expect(h.graph.isEngaged).toBe(true);
+    expect(h.context.sourceCalls).toBe(1);
+    expect(h.contextsCreated()).toBe(1);
+    expect(h.context.closeCalls).toBe(0);
+    expect(h.context.filters.every((f) => f.disconnectCount === 0)).toBe(true);
+    expect(h.context.gains.every((g) => g.disconnectCount === 0)).toBe(true);
+  });
+
+  it("keeps reporting it as a source problem, not as a browser problem", async () => {
+    // The graph is UP. An interface that said "unsupported" here would be
+    // describing a state that does not exist, so the reason is carried
+    // separately and the store is expected to keep `engaged` true.
+    const h = harness();
+    await h.graph.engage(vShapeState);
+    h.setSource(NEXT);
+    h.setCors(null);
+    h.sourceChanged();
+
+    expect(h.graph.unsupportedReason).toBeNull();
+    expect(h.graph.sourceUnreadableReason).toBe("cors-tainted");
+  });
+
+  it("says it once per source, not once per event", async () => {
+    // `emptied` and `loadstart` both fire for one track change, and a
+    // `timeupdate`-shaped event storm would make this a log flood.
+    const h = harness();
+    await h.graph.engage(vShapeState);
+    h.setSource(NEXT);
+    h.setCors(null);
+    h.sourceChanged();
+    expect(h.unreadable).toHaveLength(1);
+
+    h.sourceChanged();
+    h.sourceChanged();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(h.unreadable).toHaveLength(1);
+  });
+
+  it("says nothing at all about a source whose CORS check has not reported", async () => {
+    // `not-yet` must not reach the listener as a verdict. Announcing a stream
+    // as lost that is one `loadedmetadata` event from being perfectly
+    // processable would be a false alarm, and a notice that appears and then has
+    // to retract itself is worse than no notice.
+    const h = harness();
+    await h.graph.engage(vShapeState);
+    h.setSource(NEXT);
+    h.setCors("anonymous");
+    h.setReadyState(0);
+    h.sourceChanged();
+
+    expect(h.unreadable).toEqual([]);
+    expect(h.graph.sourceUnreadableReason).toBeNull();
+  });
+
+  it("clears the report when a readable source comes back", async () => {
+    const h = harness();
+    await h.graph.engage(vShapeState);
+
+    h.setSource("https://elsewhere.example.test/bad");
+    h.setCors(null);
+    h.sourceChanged();
+    expect(h.graph.sourceUnreadableReason).toBe("cors-tainted");
+
+    h.setSource(NEXT);
+    h.setCors("anonymous");
+    h.setReadyState(4);
+    h.sourceChanged();
+    expect(h.graph.sourceUnreadableReason).toBeNull();
+    expect(h.graph.isEngaged).toBe(true);
+  });
+
+  it("treats an emptied element as nothing to report", async () => {
+    // `PlayerEngine` sets `src = ""` when it stops. That is a player that is
+    // not playing, not a stream the equalizer failed to read.
+    const h = harness();
+    await h.graph.engage(vShapeState);
+    h.setSource(NEXT);
+    h.setCors(null);
+    h.sourceChanged();
+    expect(h.unreadable).toHaveLength(1);
+
+    h.setSource("");
+    h.fakeElement.src = "";
+    h.sourceChanged();
+    expect(h.graph.sourceUnreadableReason).toBeNull();
+    expect(h.unreadable).toHaveLength(1);
+  });
+
+  it("stops listening once disposed", async () => {
+    const h = harness();
+    await h.graph.engage(vShapeState);
+    expect(h.sourceListeners()).toBe(1);
+    h.graph.dispose();
+    expect(h.sourceListeners()).toBe(0);
+  });
+});
+
+describe("the listener's own volume is not the graph's to change", () => {
+  it("never writes to the element it was handed, through any mode", async () => {
+    // §11 of the bug report, as an assertion rather than as a review note. The
+    // graph receives an `unknown` and the ONLY thing it may do with it is hand
+    // it to `createMediaElementSource`. A preamp belongs in the graph's own
+    // GainNode; the moment one of them is written to `element.volume` the
+    // listener's volume stops being theirs.
+    const h = harness();
+    await h.graph.engage(vShapeState);
+    expect(h.fakeElement.volume).toBe(0.75);
+
+    h.graph.apply(vShapeState);
+    expect(h.fakeElement.volume).toBe(0.75);
+
+    h.graph.bypass();
+    expect(h.fakeElement.volume).toBe(0.75);
+
+    h.graph.apply(effectiveGraphState({ ...selectPreset("aurora-v"), enabled: true }));
+    expect(h.fakeElement.volume).toBe(0.75);
+    expect(h.fakeElement.muted).toBe(false);
+  });
+
+  it("composes headroom into the graph's own gain, leaving volume alone", async () => {
+    const h = harness();
+    await h.graph.engage(vShapeState);
+
+    // The preamp is a real linear gain on the graph's own node: 0 dB is exactly
+    // 1, and a -6 dB preamp is 0.501, never -6 and never 1e-6.
+    const preamp = h.context.gains[0]?.gain;
+    expect(preamp?.value).toBeGreaterThan(0);
+    expect(Number.isFinite(preamp?.value ?? Number.NaN)).toBe(true);
+
+    h.graph.apply({
+      bands: vShapeState.bands,
+      preampDb: -6,
+    });
+    expect(preamp?.value).toBeCloseTo(0.5012, 3);
+    expect(h.fakeElement.volume).toBe(0.75);
+  });
+});
+
+describe("Flat is an identity, and the full switching cycle returns to it", () => {
+  it("goes Flat → V-Shape → Flat and lands on unity again", async () => {
+    const h = harness();
+    await h.graph.engage(effectiveGraphState({ ...selectPreset("flat"), enabled: true }));
+    const preamp = h.context.gains[0]?.gain;
+    expect(preamp?.value).toBe(1);
+    expect(h.context.filters.map((f) => f.gain.value)).toEqual(
+      Array.from({ length: 10 }, () => 0),
+    );
+
+    await h.graph.engage(vShapeState);
+    expect(h.context.filters[1]?.gain.value).toBeCloseTo(3, 5);
+    expect(preamp?.value).not.toBe(1);
+
+    await h.graph.engage(effectiveGraphState({ ...selectPreset("flat"), enabled: true }));
+    expect(h.context.filters.map((f) => f.gain.value)).toEqual(
+      Array.from({ length: 10 }, () => 0),
+    );
+    expect(preamp?.value).toBe(1);
+    // One graph throughout, which is what makes the round trip mean anything.
+    expect(h.context.sourceCalls).toBe(1);
+    expect(h.contextsCreated()).toBe(1);
+  });
+
+  it("goes V-Shape → Bypass → V-Shape and comes back with the curve intact", async () => {
+    const h = harness();
+    await h.graph.engage(vShapeState);
+    const boosted = h.context.filters[1]?.gain.value ?? 0;
+
+    h.graph.bypass();
+    expect(h.context.filters[1]?.gain.value).toBe(0);
+    expect(h.context.gains[0]?.gain.value).toBe(1);
+    // Bypass is unity through the live graph, so nothing was disconnected.
+    expect(h.context.filters.every((f) => f.disconnectCount === 0)).toBe(true);
+    expect(h.context.gains.every((g) => g.disconnectCount === 0)).toBe(true);
+
+    h.graph.apply(vShapeState);
+    expect(h.context.filters[1]?.gain.value).toBeCloseTo(boosted, 5);
+    expect(h.context.sourceCalls).toBe(1);
   });
 });
 

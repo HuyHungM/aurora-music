@@ -35,7 +35,7 @@ import {
   type EQConfig,
 } from "@/lib/audio/eq";
 import { resetEqGraphForTests, getEqGraph } from "@/lib/audio/eq-graph";
-import { FakeContext, fakeAudioElement } from "./fake-web-audio";
+import { FakeContext, fakeAudioElement, taintedAudioElement } from "./fake-web-audio";
 
 /** A configuration with the equalizer on, so graph engagement is possible. */
 function on(config: EQConfig): EQConfig {
@@ -566,5 +566,84 @@ describe("the store reaches the audio graph (the mode-switch chain)", () => {
     expect(context.filters[0]!.gain.value).toBe(4);
     expect(context.filters[1]!.gain.value).toBe(-3);
     expect(context.gains[0]!.gain.value).toBeCloseTo(10 ** (-6 / 20), 6);
+  });
+});
+
+/* ==========================================================================
+   A STREAM THE EQUALIZER CANNOT READ
+
+   The interface half of the source gate. The graph proves it does not open the
+   one-way door; this block proves that a listener whose music is still playing
+   is told WHY, and that the deferral - the ordinary state before anything is
+   playing - is not dressed up as a failure.
+
+   The stream is refused by its own CORS state rather than by an injected
+   verdict, because that is how a real one is refused: a provider's stream is
+   cross-origin and the element never asked for it in CORS mode.
+   ========================================================================== */
+
+describe("a source the equalizer cannot read", () => {
+  let context: FakeContext;
+
+  beforeEach(() => {
+    resetEqGraphForTests();
+    context = new FakeContext();
+    getEqGraph({
+      createContext: () => context,
+      getElement: () => taintedAudioElement(),
+    });
+    eqActions.reset();
+    eqActions.setEngaged(false, null);
+  });
+
+  it("reports the source as the reason, and leaves the element alone", async () => {
+    eqActions.choosePreset("aurora-v");
+    await settled();
+
+    const state = getEqState();
+    expect(state.engaged).toBe(false);
+    // The reason is about the STREAM. `no-web-audio` here would put a
+    // "this browser cannot process audio" notice in front of a listener whose
+    // browser is working exactly as specified.
+    expect(state.unsupportedReason).toBe("cors-tainted");
+    // The whole point: whatever is playing keeps playing, untouched.
+    expect(context.sourceCalls).toBe(0);
+    expect(context.sourcedElement).toBeNull();
+    expect(context.closeCalls).toBe(0);
+  });
+
+  it("keeps the configuration, so the switch is still where they left it", async () => {
+    // A decline is about the audio path, not about the listener's choice. Wiping
+    // the curve would mean the notice cost them their settings as well.
+    eqActions.choosePreset("aurora-v");
+    await settled();
+    eqActions.setBandGain(3, 4);
+    await settled();
+
+    const state = getEqState();
+    expect(state.config.enabled).toBe(true);
+    expect(state.config.presetId).toBe("custom");
+    expect(state.config.bands[3]!.gain).toBe(4);
+    expect(state.unsupportedReason).toBe("cors-tainted");
+  });
+
+  it("never reports the equalizer unavailable while it waits for a source", async () => {
+    // The mirror of the gesture case, and the same reasoning: an equalizer
+    // switched on before pressing play is not broken, and a notice here would
+    // be the interface reporting a failure for a page that has not started.
+    resetEqGraphForTests();
+    const waiting = new FakeContext();
+    getEqGraph({
+      createContext: () => waiting,
+      getElement: () => fakeAudioElement(""),
+    });
+
+    eqActions.choosePreset("aurora-v");
+    await settled();
+
+    const state = getEqState();
+    expect(state.engaged).toBe(false);
+    expect(state.unsupportedReason).toBeNull();
+    expect(waiting.sourceCalls).toBe(0);
   });
 });

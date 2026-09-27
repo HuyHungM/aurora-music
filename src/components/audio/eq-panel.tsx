@@ -83,8 +83,16 @@ export function EqPanel() {
           // §33: the equalizer is not a prerequisite for playback, and this says
           // so in the same breath as the failure. A notice reporting only the
           // problem would read as "music is broken".
+          //
+          // WHICH notice, though, because the reasons are not the same kind of
+          // fact. `cors-tainted` is about this STREAM rather than about this
+          // browser, and a listener whose browser is fine deserves to be told
+          // that: "this browser cannot process audio" would be a confident and
+          // untrue answer to a question they did not ask.
           <p role="status" aria-live="polite" className="t-caption max-w-prose text-warning">
-            {t("eq.unsupported")}
+            {unsupportedReason === "cors-tainted"
+              ? t("eq.unsupportedSource")
+              : t("eq.unsupported")}
           </p>
         ) : null}
         <AdvancedDisclosure open={advancedOpen} onToggle={setAdvancedOpen} />

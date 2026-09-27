@@ -1,5 +1,34 @@
 import { z } from "zod";
 import { ConfigError } from "@/lib/errors";
+import { parsePublicOrigin, PUBLIC_ORIGIN_ERROR } from "@/lib/config/public-origin";
+
+/**
+ * The deployment's public origin, normalized to a bare `URL#origin` string.
+ *
+ * Declared rather than derived, because the public origin is a fact about the
+ * deployment that the application cannot observe: Next.js builds `request.url`
+ * from the port the process was booted with, and every proxy header that could
+ * stand in for the public hostname is a header a misconfigured proxy gets
+ * wrong. See `public-origin.ts` for the failure this prevents.
+ *
+ * Validation runs at the domain boundary, so a typo fails the boot with a
+ * named rule instead of failing the first sign-in with `redirect_uri_mismatch`.
+ * The `.transform` normalizes once, at parse time, which is what lets every
+ * consumer treat the value as an origin and lets the consistency check in
+ * `parseEnv` compare two spellings of the same origin.
+ */
+const publicOriginSchema = z
+  .string()
+  .trim()
+  .optional()
+  .superRefine((value, ctx) => {
+    if (value !== undefined && parsePublicOrigin(value) === null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: PUBLIC_ORIGIN_ERROR });
+    }
+  })
+  .transform((value) =>
+    value === undefined ? undefined : (parsePublicOrigin(value) as string),
+  );
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -14,6 +43,11 @@ const EnvSchema = z.object({
   AUTH_GOOGLE_SECRET: z.string().optional(),
   AUTH_GITHUB_ID: z.string().optional(),
   AUTH_GITHUB_SECRET: z.string().optional(),
+  // The public origin Auth.js builds every absolute URL from - the OAuth
+  // `redirect_uri` above all. Optional: absent, the auth route keeps deriving
+  // the origin from the request headers, which is what LAN and `localhost`
+  // development need. Set it in any deployment that has a public hostname.
+  AURORA_PUBLIC_URL: publicOriginSchema,
   // Server-only. Enables the YouTube metadata provider (search/lookup).
   // Absent key = YouTube provider stays unregistered; never NEXT_PUBLIC.
   YOUTUBE_API_KEY: z.string().optional(),
@@ -52,6 +86,7 @@ export const envVarRequirements = {
   AUTH_GOOGLE_SECRET: "optional",
   AUTH_GITHUB_ID: "optional",
   AUTH_GITHUB_SECRET: "optional",
+  AURORA_PUBLIC_URL: "optional",
   YOUTUBE_API_KEY: "optional",
   SPOTIFY_CLIENT_ID: "optional",
   SPOTIFY_CLIENT_SECRET: "optional",
@@ -101,6 +136,32 @@ export function parseEnv(
   }
 
   const config = result.data;
+
+  // Auth.js reads `AUTH_URL` (and its v4-compatible `NEXTAUTH_URL`) straight
+  // from `process.env`, bypassing this schema, and prefers it over the request
+  // headers for every URL it emits. So the two can disagree: an operator who
+  // sets `AURORA_PUBLIC_URL` correctly and leaves a stale `AUTH_URL` pointing
+  // at the internal origin gets a half-fixed deployment - the OAuth
+  // `redirect_uri` correct, the built-in sign-in page still pointing at
+  // `http://127.0.0.1:24584` - which is harder to diagnose than either value
+  // on its own. Fail at boot, and name both values.
+  //
+  // Only checked when both are present, and compared after normalization so
+  // `https://host` and `https://host/` are recognised as the same declaration
+  // rather than as a disagreement.
+  const declaredAuthUrl = source.AUTH_URL ?? source.NEXTAUTH_URL;
+  if (config.AURORA_PUBLIC_URL && declaredAuthUrl) {
+    const normalized = parsePublicOrigin(declaredAuthUrl);
+    if (normalized !== config.AURORA_PUBLIC_URL) {
+      throw new ConfigError(
+        "AURORA_PUBLIC_URL and AUTH_URL disagree; the deployment must declare one public origin",
+        [
+          `AURORA_PUBLIC_URL: ${config.AURORA_PUBLIC_URL}`,
+          `AUTH_URL: ${normalized ?? "not an origin (see AURORA_PUBLIC_URL rules)"}`,
+        ],
+      );
+    }
+  }
 
   if (config.NODE_ENV === "production") {
     // Trim-aware: AUTH_SECRET is trimmed by the schema, so a whitespace-only

@@ -652,6 +652,8 @@ const en: Messages = {
 
     unsupported:
       "This browser cannot process audio, so the equalizer is unavailable. Music still plays normally.",
+    unsupportedSource:
+      "This stream cannot be read by the audio processor, so the equalizer is not running on it. Music still plays normally.",
     unsupportedNoAudio:
       "This browser does not support audio processing, so the equalizer is unavailable. Music still plays normally.",
     saving: "Saving.",

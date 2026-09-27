@@ -595,23 +595,31 @@ are missing are recorded here rather than papered over.
   control that duplicates the panel would be a second place to keep in step for
   no gain. The option remains open, and adding it is a button plus a link — not a
   second state, because there is only one store.
-- **No CORS-clean media delivery, and no pre-engagement source probe.** A
-  provider stream is cross-origin and answers without
-  `Access-Control-Allow-Origin`, so the browser will not let Web Audio read the
-  element: `MediaElementAudioSourceNode` outputs digital silence while the
-  element plays normally. Measured in a real browser, with Chrome's own message —
-  see `ARCHITECTURE.md` §33.8. Two fixes exist and neither is built. A
-  same-origin relay of the stream is a proxy: an SSRF surface and a bandwidth
-  bill that belongs in `docs/security.md`, and not an equalizer change. A probe
-  of the element's source before `createMediaElementSource()` must be followed
-  by *deferring that one-way door until a source exists* — because the listener
-  who enables the equalizer before pressing play has no source to probe — plus a
-  graph→store path for a failure that lands after `engage()` has already
-  resolved. That is a re-architecture of the engagement lifecycle inside a phase
-  whose subject is mode switching, and the wrong place to introduce new races.
-  Until one of the two lands, the equalizer is structurally correct and
-  inaudible on provider streams, and `e2e/equalizer-playback.spec.ts` keeps the
-  measurement — and the browser's sentence about it — in every run.
+- **No CORS-clean media delivery.** A provider stream is cross-origin and answers
+  without `Access-Control-Allow-Origin`, so the browser will not let Web Audio
+  read the element: `MediaElementAudioSourceNode` outputs digital zeroes while
+  the element plays normally. Measured in a real browser, with Chrome's own
+  message — see `ARCHITECTURE.md` §33.8. What was done about it is the refusal:
+  the graph now asks `sourceVerdict()` before it takes the one-way door and
+  declines `cors-tainted` rather than engaging into silence, and the listener is
+  told the *stream* is the problem rather than their browser. The equalizer is
+  therefore **unavailable on provider streams today**, and the same code is
+  measurably audible (`e2e/equalizer-audible.spec.ts`) the moment media delivery
+  is something Web Audio may read. Closing that gap needs a media-delivery
+  change, and one option is deliberately not taken here: a same-origin relay of
+  the stream is a proxy — an SSRF surface and a bandwidth bill that belongs in
+  `docs/security.md`, and not an equalizer change.
+- **No pre-engagement *network* probe of the element's source.** An earlier
+  design did exactly that: a bounded ranged `mode: "cors"` `fetch()`, with the
+  verdict read from whether it resolved. It was measured wrong and removed. The
+  request is governed by the page's own CSP (`connect-src 'self' ws: wss:`), so
+  it is blocked *before leaving the browser* and its `TypeError` is
+  indistinguishable from a genuine CORS refusal — a decision that inherits the
+  application's policy is not a measurement of the media, and it would have
+  declined sources Web Audio reads perfectly well. `eq-graph.test.ts` stubs
+  `fetch` to throw and asserts the gate still decides correctly, so it cannot
+  come back. The gate is now spec-local: origin plus the element's own CORS
+  state, and a `not-yet` deferral for a check that has not reported.
 
 ## Phase 54 — mobile, tablet and foldable: what is deliberately absent
 

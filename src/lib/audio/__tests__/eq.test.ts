@@ -37,6 +37,7 @@ import {
   cloneBands,
   type EQBand,
   type EQConfig,
+  type EQPresetId,
 } from "@/lib/audio/eq";
 
 /** Aurora V-Shape as the addendum §5 specifies it, verbatim. */
@@ -480,9 +481,77 @@ describe("decibel conversion", () => {
     expect(dbToLinear(0)).toBe(1);
   });
 
+  it("maps a symmetric +/-6 dB to the figures a listener would recognise", () => {
+    // The numbers from the bug report, pinned because they are the ones a
+    // confused implementation gets wrong by a factor of twenty: writing
+    // `10 ** db` instead of `10 ** (db / 20)` turns a -6 dB preamp into 1e-6,
+    // which is indistinguishable from silence at the speakers.
+    expect(dbToLinear(3)).toBeCloseTo(1.4125, 4);
+    expect(dbToLinear(6)).toBeCloseTo(1.9953, 4);
+    expect(dbToLinear(-3)).toBeCloseTo(0.7079, 4);
+    expect(dbToLinear(-6)).toBeCloseTo(0.5012, 4);
+  });
+
   it("reports silence rather than throwing", () => {
     expect(linearToDb(0)).toBe(-Infinity);
     expect(linearToDb(-1)).toBe(-Infinity);
+  });
+});
+
+describe("the effective master gain can never be zero", () => {
+  /**
+   * The property the whole bug report is about, stated about the MODEL rather
+   * than about the browser: for every configuration the product can be put
+   * into, the linear gain that reaches the graph's GainNode is a finite number
+   * strictly greater than zero.
+   *
+   * Not "for the presets" - for the whole reachable set, including a
+   * hand-edited cookie, a maxed-out band and a deliberately hostile preamp.
+   */
+  const linearMasterGain = (config: EQConfig): number =>
+    dbToLinear(resolvePreampDb(config));
+
+  it("holds for every shipped preset", () => {
+    for (const id of Object.keys(EQ_PRESETS) as Array<Exclude<EQPresetId, "custom">>) {
+      const config = { ...selectPreset(id), enabled: true };
+      const gain = linearMasterGain(config);
+      expect(Number.isFinite(gain), id).toBe(true);
+      expect(gain, id).toBeGreaterThan(0);
+    }
+    // And a Custom curve, which is the one a listener can build into anything.
+    const custom = setBandGain(selectPreset("aurora-v"), 5, EQ_BAND_GAIN_MAX_DB);
+    expect(linearMasterGain({ ...custom, enabled: true })).toBeGreaterThan(0);
+  });
+
+  it("holds for the default, and for a deliberately hostile configuration", () => {
+    const hostile: EQConfig = {
+      ...DEFAULT_EQ,
+      enabled: true,
+      bands: DEFAULT_EQ.bands.map((band) => ({ ...band, gain: EQ_BAND_GAIN_MAX_DB })),
+      preampMode: "manual",
+      manualPreampDb: PREAMP_MIN_DB,
+    };
+    for (const config of [DEFAULT_EQ, hostile]) {
+      const gain = linearMasterGain(config);
+      expect(Number.isFinite(gain)).toBe(true);
+      expect(gain).toBeGreaterThan(0);
+    }
+    // The floor is attenuation, never silence: -12 dB is 0.2512.
+    expect(linearMasterGain(hostile)).toBeCloseTo(0.2512, 4);
+  });
+
+  it("survives a preamp that is not a number at all", () => {
+    for (const manualPreampDb of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const gain = linearMasterGain({ ...DEFAULT_EQ, enabled: true, preampMode: "manual", manualPreampDb });
+      expect(Number.isFinite(gain)).toBe(true);
+      // A preamp nobody can describe is unity, which is the model's own answer
+      // and the only one that neither amplifies nor mutes.
+      expect(gain).toBe(1);
+    }
+  });
+
+  it("is exactly unity for a flat curve, so Flat is an identity", () => {
+    expect(linearMasterGain({ ...selectPreset("flat"), enabled: true })).toBe(1);
   });
 });
 

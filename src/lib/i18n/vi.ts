@@ -657,6 +657,8 @@ const vi = {
 
     unsupported:
       "Trình duyệt này không xử lý được âm thanh, nên bộ cân bằng không khả dụng. Nhạc vẫn phát bình thường.",
+    unsupportedSource:
+      "Luồng phát này không đọc được bằng bộ xử lý âm thanh, nên bộ cân bằng không chạy trên luồng đó. Nhạc vẫn phát bình thường.",
     unsupportedNoAudio:
       "Trình duyệt này không hỗ trợ xử lý âm thanh, nên bộ cân bằng không khả dụng. Nhạc vẫn phát bình thường.",
     saving: "Đang lưu.",

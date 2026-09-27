@@ -42,7 +42,7 @@ import {
   type EQConfig,
   type EQPresetId,
 } from "./eq";
-import { getEqGraph, type EqUnsupportedReason } from "./eq-graph";
+import { getEqGraph, setEqSourceUnreadableListener, type EqUnsupportedReason } from "./eq-graph";
 
 export type EqSaveStatus = "idle" | "saving" | "saved" | "failed";
 
@@ -220,6 +220,8 @@ function logGraphHealth(graph: ReturnType<typeof getEqGraph>): void {
     filterCount: health.filterCount,
     preampConnected: health.preampConnected,
     awaitingGesture: health.awaitingGesture,
+    awaitingSource: health.awaitingSource,
+    sourceUnreadable: health.sourceUnreadable,
     failure: health.failure,
   });
 }
@@ -282,17 +284,25 @@ function push(): void {
       return;
     }
     if (ok) {
-      setState({ engaged: true, unsupportedReason: null });
+      // `sourceUnreadableReason` rather than a flat `null`: a graph that is up
+      // and applying a curve while the current stream cannot be read is still
+      // not doing what the interface is about to claim, and a successful
+      // engagement must not wipe that into silence of its own.
+      setState({
+        engaged: true,
+        unsupportedReason: graph.sourceUnreadableReason,
+      });
       if (modeChanged) {
         logGraphHealth(graph);
       }
       return;
     }
-    if (graph.isAwaitingGesture) {
+    if (graph.isAwaitingGesture || graph.isAwaitingSource) {
       // Not an error. The graph is waiting for the browser to allow a context
-      // to start, and it re-attempts on its own at the next gesture. Reporting
-      // this as "unsupported" would put an error message in front of a
-      // listener whose equalizer is perfectly healthy - and on a page load
+      // to start, or for the element to have a source worth inspecting, and it
+      // re-attempts on its own at the next gesture or the next source.
+      // Reporting this as "unsupported" would put an error message in front of
+      // a listener whose equalizer is perfectly healthy - and on a page load
       // where nothing can be playing anyway.
       setState({ engaged: false, unsupportedReason: null });
       return;
@@ -462,6 +472,27 @@ export const eqActions: EqActions = {
     setState({ engaged, unsupportedReason: reason });
   },
 };
+
+/**
+ * The graph's post-engagement audit, wired to this store's state.
+ *
+ * WHY IT IS REGISTERED RATHER THAN POLLED. A track change replaces the
+ * element's `src` without committing a single equalizer change, so there is no
+ * configuration event for this store to notice a new source on. The graph is
+ * the only party that hears the element's `loadstart`, and this is the one
+ * finding that arrives from there after the fact.
+ *
+ * WHY IT KEEPS `engaged` TRUE. The graph IS up and IS applying the curve. What
+ * it cannot do is process this particular stream, and the interface has to be
+ * able to say exactly that - not "the equalizer is unavailable", which would be
+ * a different and untrue claim about a running graph.
+ */
+setEqSourceUnreadableListener(() => {
+  if (!state.config.enabled || state.comparing) {
+    return;
+  }
+  eqActions.setEngaged(true, "cors-tainted");
+});
 
 /* ==========================================================================
    DERIVED HELPERS FOR THE INTERFACE

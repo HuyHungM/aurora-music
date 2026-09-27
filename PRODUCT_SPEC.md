@@ -1036,19 +1036,28 @@ tuned away, and automatic headroom (which measures the whole chain) offers
   or the graph cannot be built, or the audio element cannot be connected, the
   music plays exactly as it would with the equalizer off, and the interface says
   so in the same sentence as the failure.
-- **There is one condition that defeats that guarantee, and it lives in the
-  media path rather than in this feature.** A provider stream is cross-origin
-  and carries no CORS headers, and a browser refuses to let Web Audio read an
-  element loaded from such a source: the graph then receives digital silence
-  while the element itself plays normally. This was measured, not inferred —
-  Chromium, 2026-09-26, with the browser's own console message and a
-  `MEDIA_ERR_SRC_NOT_SUPPORTED` result for the `crossOrigin` workaround. It
-  means enabling the equalizer on a provider stream is currently the one known
-  way for this feature to cost a listener their sound. Closing it needs either
-  same-origin media delivery or a pre-engagement CORS probe with the element
-  handed over only after the source is known to be readable; neither is a mode
-  switching change and neither is built. Full evidence in `ARCHITECTURE.md`
-  §33.8, deliberate deferral in `docs/scope-boundaries.md`.
+- **The equalizer is never engaged onto a source the browser will not let Web
+  Audio read.** A provider stream is cross-origin and carries no CORS headers,
+  and a `MediaElementAudioSourceNode` over such a source is specified to output
+  zeroes while the element itself plays normally — the element stays
+  `paused: false` with `currentTime` advancing, the context is `running`, and the
+  listener hears nothing. That was measured in Chromium on 2026-09-26, with the
+  browser's own console message and a `MEDIA_ERR_SRC_NOT_SUPPORTED` result for
+  the `crossOrigin` workaround. So before the equalizer takes the element, it
+  asks whether Web Audio can read that source at all: same-origin and
+  `blob:`/`data:` sources, and cross-origin sources the element loaded with
+  `crossOrigin` set, are processed; a cross-origin source with no CORS opt-in is
+  **refused**, the element is never touched, the music plays, and the interface
+  says the *stream* is the problem rather than the listener's browser. The check
+  is local — origin and the element's own CORS state, no network request of its
+  own — and an element whose CORS check has not yet reported is **waited for**,
+  not refused, because that refusal would be permanent and the question is not.
+  **The consequence, stated plainly: on today's provider streams the equalizer
+  is unavailable, by design rather than by defect,** and the same code is
+  measurably audible the moment media delivery is something Web Audio may read.
+  Making provider streams readable is a media-delivery change, not a mode
+  switching one. Full evidence in `ARCHITECTURE.md` §33.8, deliberate deferral
+  in `docs/scope-boundaries.md`.
 - **Nothing about playback changes.** The equalizer has no playback controls: it
   cannot start, pause, skip, seek, replace a track or touch the queue. The curve
   is not part of the playback session, so clearing a restored session does not
@@ -1072,9 +1081,8 @@ tuned away, and automatic headroom (which measures the whole chain) offers
   has confirmed it is running; if the browser wants a user gesture first, the
   element keeps playing directly and the equalizer retries by itself at the next
   gesture. This is reported as a wait, not as an error, because it is not one.
-  That guarantee is about the context — the media-path condition above is a
-  different failure with a different owner, and it is named rather than folded
-  into this sentence.
+  Waiting for a source, or for the element's CORS check to report, is the same
+  kind of answer for the same reason.
 - **No clicks.** Every band and preamp change is smoothed over 30 ms rather than
   stepped.
 - **Persisted per account when signed in, per browser otherwise,** on the same

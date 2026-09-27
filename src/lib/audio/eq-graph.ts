@@ -38,17 +38,55 @@
  * That makes this a one-way door, and it means the order of operations is not
  * stylistic:
  *
- *   1. create the context            - inert
- *   2. build the ten filters         - inert, nothing is feeding them
- *   3. build the preamp and wire it   - inert
- *   4. connect the preamp to the destination
- *   5. ONLY NOW re-home the element
+ *   1. the element exists                                  - touches nothing
+ *   2. the browser has seen a user gesture                 - touches nothing
+ *   3. the element HAS a source, and that source is READABLE - touches nothing
+ *   4. create the context            - inert
+ *   5. build the ten filters         - inert, nothing is feeding them
+ *   6. build the preamp and wire it   - inert
+ *   7. connect the preamp to the destination
+ *   8. ONLY NOW re-home the element
  *
- * Every failure mode before step 5 leaves the element playing directly and
+ * Every failure mode before step 8 leaves the element playing directly and
  * untouched, which is the whole of addendum §33's "fail gracefully and keep
- * audio playback functional". If step 5 itself throws, the element is not
+ * audio playback functional". If step 8 itself throws, the element is not
  * re-homed (that is what throwing means here) and the inert chain is torn down.
- * There is no ordering in which this module can leave somebody with no sound.
+ *
+ * ---------------------------------------------------------------------------
+ * STEP 3 EXISTS BECAUSE "THE ELEMENT IS FINE" IS NOT "THE AUDIO WILL BE"
+ * ---------------------------------------------------------------------------
+ *
+ * The first seven steps make the graph structurally perfect and the listener
+ * completely silent. That is not a contradiction: it is what a
+ * `MediaElementAudioSourceNode` does when the element's current resource is
+ * cross-origin and the response carries no `Access-Control-Allow-Origin`. The
+ * spec says the node then outputs silence, browsers implement it, and Chrome
+ * says so in the console: "MediaElementAudioSource outputs zeroes due to CORS
+ * access restrictions". Measured on Aurora's own provider stream: a
+ * fully-built, `running`, fully-connected graph, ten filters at exactly the
+ * right gains, preamp at exactly the right linear value, the element still
+ * `paused:false` with `currentTime` advancing and `volume:1` - and an analyser
+ * reading exactly 0 at the source node and 0 at the preamp. Injecting a DC
+ * offset into the first filter came out the far end attenuated by precisely the
+ * configured headroom, which is what proved the chain was healthy and the
+ * SOURCE was the thing producing nothing.
+ *
+ * `crossOrigin = "anonymous"` is not the fix on its own: without an
+ * `Access-Control-Allow-Origin` header the element then fails to load at all
+ * (`MEDIA_ERR_SRC_NOT_SUPPORTED`), which is a worse outcome than silence. It is
+ * also not Aurora's to set — the attribute belongs to whoever owns media
+ * delivery, and setting it unconditionally here would break every stream that
+ * works today.
+ *
+ * So the graph asks the only question the specification lets it ask — CAN WEB
+ * AUDIO READ THIS SOURCE? — before it takes the door, and declines when the
+ * answer is no. That question is answerable without a network request, from the
+ * resource's origin and the element's own CORS state; {@link sourceVerdict} is
+ * the whole of it. Declining leaves the element playing directly, which is the
+ * one arrangement in which the listener still hears their music. The equalizer
+ * is not disabled by this: the same code engages, and is audible, the moment
+ * media delivery is something Web Audio may read — a same-origin resource, or a
+ * stream served with CORS headers from an element that opted in.
  *
  * THE COROLLARY, and the reason bypass is not a disconnect: once engaged, the
  * graph is permanent for the life of the page. Turning the EQ off sets every
@@ -164,12 +202,51 @@ export interface EqGraphDeps {
    * the graph never retries, which is a supported answer rather than a crash.
    */
   onUserGesture?: (handler: () => void) => () => void;
+  /**
+   * Subscribes to "the element's current source has changed", returning the
+   * function that unsubscribes.
+   *
+   * This is the retry trigger for the DEFERRED case (an equalizer switched on
+   * before anything is playing has no source to inspect, and must not open the
+   * door on a source it has not seen) and the trigger for the post-engagement
+   * audit (a source that arrives after the door is open, which cannot be undone
+   * and can only be reported).
+   *
+   * A dependency for the same reason `createContext` is: this module is tested
+   * in Node, where there is no element to attach anything to.
+   */
+  onSourceChange?: (handler: () => void) => () => void;
+  /**
+   * The document's origin, as a string, or `null` when there is none.
+   *
+   * Only ever consulted for a SOURCE that is not obviously readable, and only
+   * as a comparison: a source on this origin is readable by definition, because
+   * no CORS check is performed for a same-origin media request.
+   */
+  documentOrigin?: () => string | null;
+  /**
+   * Reported when a source that arrived AFTER the door was opened turns out to
+   * be unreadable. Never a reason to tear anything down - the door cannot be
+   * un-rung - so this exists to make an already-lost signal say so.
+   */
+  onSourceUnreadable?: (url: string) => void;
 }
 
 export type EqUnsupportedReason =
   | "no-web-audio"
   | "no-element"
-  | "no-source";
+  | "no-source"
+  /**
+   * The element's current source is cross-origin and does not allow Web Audio
+   * to read it, so re-homing the element would replace the music with silence.
+   *
+   * The one reason here that is not about the BROWSER. It is a property of the
+   * media delivery path, it is measured rather than assumed, and it is
+   * reported as such - "this stream cannot be processed" rather than "this
+   * browser cannot process audio", which would be a lie about a browser that is
+   * working exactly as specified.
+   */
+  | "cors-tainted";
 
 /* ==========================================================================
    THE GRAPH
@@ -244,6 +321,36 @@ export class EqGraph {
   private awaitingGesture = false;
   /** Detaches the one-shot gesture listeners. */
   private gestureDetach: (() => void) | null = null;
+  /**
+   * Set when there is no source to inspect yet, rather than when something is
+   * wrong. Same shape as `awaitingGesture` and for the same reason: an
+   * equalizer switched on before anything is playing is not a failure, and
+   * calling it one would put an error in front of a healthy interface.
+   */
+  private awaitingSource = false;
+  /** Detaches the element source-change subscription. */
+  private sourceDetach: (() => void) | null = null;
+  /**
+   * The last source verdict, for the last URL asked about.
+   *
+   * ONE entry, not a map. A track's readability is a property of that track's
+   * response, so re-asking is how a page accumulates a request per skip, and
+   * a session-long map would be a leak in a module with no cleanup story.
+   * Comparing URLs also keeps the post-engagement audit from re-probing the
+   * URL it just probed.
+   */
+  private probedUrl: string | null = null;
+  private probedReadable = false;
+  /** The document origin, or `null` when there is no document. */
+  private origin: string | null | undefined;
+  /**
+   * The URL that arrived after the door was opened and cannot be read.
+   *
+   * Not a `failure`: the graph is up, the curve is being applied, and the
+   * listener's volume is untouched. What is lost is the signal, so this is a
+   * reporting fact rather than a state the graph could recover from.
+   */
+  private unreadableSource: string | null = null;
   /** The last curve known to have been written successfully (§19 rollback). */
   private lastApplied: EqGraphState | null = null;
 
@@ -266,6 +373,25 @@ export class EqGraph {
     return this.awaitingGesture;
   }
 
+  /**
+   * True while the graph is waiting for the element to have a source it can
+   * inspect. `false` in every state that a caller should report as an error,
+   * for the same reason {@link isAwaitingGesture} is.
+   */
+  get isAwaitingSource(): boolean {
+    return this.awaitingSource;
+  }
+
+  /**
+   * The source that arrived after engagement and cannot be read, as a reason -
+   * or `null`. Reported separately from {@link unsupportedReason} because the
+   * graph is engaged while this is set, and an interface that said "unsupported"
+   * about a running graph would be describing a state that does not exist.
+   */
+  get sourceUnreadableReason(): EqUnsupportedReason | null {
+    return this.unreadableSource === null ? null : "cors-tainted";
+  }
+
   /** Why the EQ is not running, or `null` when it is (or has not tried). */
   get unsupportedReason(): EqUnsupportedReason | null {
     return this.failure;
@@ -282,6 +408,8 @@ export class EqGraph {
     filterCount: number;
     preampConnected: boolean;
     awaitingGesture: boolean;
+    awaitingSource: boolean;
+    sourceUnreadable: boolean;
     failure: EqUnsupportedReason | null;
   } {
     return {
@@ -290,6 +418,8 @@ export class EqGraph {
       filterCount: this.filters.length,
       preampConnected: this.preamp !== null,
       awaitingGesture: this.awaitingGesture,
+      awaitingSource: this.awaitingSource,
+      sourceUnreadable: this.unreadableSource !== null,
       failure: this.failure,
     };
   }
@@ -412,6 +542,35 @@ export class EqGraph {
       return this.awaitGesture("no user activation yet");
     }
 
+    // --- IS THERE ANYTHING TO RE-HOME, AND MAY WEB AUDIO READ IT? ---------
+    //
+    // Both answers leave the element playing directly, and both are asked
+    // BEFORE the context exists, so a source that cannot be used costs one
+    // comparison rather than a context, a clock and a ten-filter chain.
+    //
+    // "No source yet" is a deferral rather than a decline because it is the
+    // ordinary state of a listener who switches the equalizer on before
+    // pressing play. Declining there would be both wrong and self-defeating:
+    // the failure is permanent by design, so the very first engagement would
+    // burn the graph's only chance on a page that had nothing to play yet.
+    // `not-yet` is deferred for the same reason: the CORS check has not
+    // reported yet, and a decline now would be a permanent one.
+    const sourceUrl = elementSourceUrl(element);
+    if (sourceUrl === null) {
+      return this.awaitSource("the element has no source yet");
+    }
+    const verdict = sourceVerdict(sourceUrl, element, this.documentOrigin());
+    if (verdict === "not-yet") {
+      return this.awaitSource("the element's CORS check has not reported yet");
+    }
+    if (verdict === "unreadable") {
+      // THE ANSWER THAT PROTECTS THE MUSIC. The element was NOT touched, so it
+      // is still playing straight to the speakers, and the interface is told
+      // why the equalizer is not running - in the same breath as the fact that
+      // the music is.
+      return this.decline("cors-tainted");
+    }
+
     const safeState = sanitizeGraphState(state, true);
 
     let context: EqAudioContext;
@@ -511,7 +670,13 @@ export class EqGraph {
     this.source = source;
     this.engaged = true;
     this.awaitingGesture = false;
+    this.awaitingSource = false;
     this.lastApplied = safeState;
+    // From here the element can be handed a DIFFERENT source - a track change
+    // sets `src` on the same element - and that new source is a source this
+    // graph never inspected. The door cannot be closed again, so the honest
+    // response is to notice and say so rather than to keep claiming success.
+    this.watchSource();
     logger.info("Equalizer engaged", {
       event: "eq_audio_context_state",
       audioContextState: context.state,
@@ -580,6 +745,191 @@ export class EqGraph {
   private clearGestureRetry(): void {
     const detach = this.gestureDetach;
     this.gestureDetach = null;
+    detach?.();
+  }
+
+  /**
+   * Deliberate, retryable stop: there is no source to inspect yet. NOT a
+   * `failure` - see `awaitingSource`.
+   */
+  private awaitSource(why: string): false {
+    this.awaitingSource = true;
+    this.watchSource();
+    logger.info("Equalizer waiting for a source it can read", {
+      event: "eq_audio_context_state",
+      audioContextState: "none",
+      engaged: false,
+      awaitingSource: true,
+      failureStage: why,
+    });
+    return false;
+  }
+
+  /**
+   * Asks whether Web Audio may read `url`, and remembers the answer per URL.
+   *
+   * The decision itself is {@link sourceVerdict} — synchronous, networkless and
+   * a pure function of facts the element already exposes. What this method adds
+   * is the CACHE and the LOGGING, both of which exist for the same reason: an
+   * audit that re-asked the network on every media event would be a page that
+   * cannot play a track. The cache is ONE entry rather than a map, so a
+   * long-lived session cannot accumulate a request - or a string - per skip.
+   *
+   * The verdict is cached, but the element's own state is NOT: the whole point
+   * of the `not-yet` answer is that the same URL can move from "not yet" to a
+   * definite one, so a cached `not-yet` is never served again.
+   */
+  private verdictFor(url: string): SourceVerdict {
+    if (this.probedUrl !== url) {
+      this.probedUrl = url;
+      this.probedReadable = false;
+    }
+    const element = this.deps.getElement();
+    const verdict = sourceVerdict(url, element, this.documentOrigin());
+    if (verdict === "readable") {
+      this.probedReadable = true;
+    }
+    if (!this.probedReadable && verdict === "unreadable") {
+      logger.warn("Equalizer source cannot be read by Web Audio", {
+        event: "eq_source_unreadable",
+        // The HOST, not the URL: this is a network log and a stream URL is a
+        // bearer token for the listener's media.
+        sourceHost: hostOf(url),
+        engaged: this.engaged,
+        audioContextState: this.context?.state ?? "none",
+      });
+    }
+    return verdict;
+  }
+
+  /**
+   * The document's origin, read once and cached.
+   *
+   * A DEPENDENCY rather than a global read, for the same reason
+   * `createContext` and `getElement` are: this module is tested in Node, where
+   * there is no document and therefore no origin to compare a source against.
+   * Answering `null` — which makes every URL cross-origin, and therefore
+   * cautious — is the right production behaviour when the dep is absent, and
+   * the wrong test behaviour, so the tests supply the origin explicitly instead
+   * of the module reaching for a global that only exists in a browser.
+   */
+  private documentOrigin(): string | null {
+    if (this.origin === undefined) {
+      this.origin = this.deps.documentOrigin?.() ?? null;
+    }
+    return this.origin;
+  }
+
+  /**
+   * One subscription, serving two purposes, because both are about the same
+   * event and a second listener on one element is a second thing to leak.
+   *
+   * Before engagement it is the retry for a deferred attempt; after it, it is
+   * the audit. `dispose()` detaches it, which is the only place a listener
+   * could otherwise outlive the graph.
+   */
+  private watchSource(): void {
+    if (this.sourceDetach || this.disposed) {
+      return;
+    }
+    const subscribe = this.deps.onSourceChange;
+    if (!subscribe) {
+      return;
+    }
+    this.sourceDetach = subscribe(() => {
+      this.onSourceChanged();
+    });
+  }
+
+  private onSourceChanged(): void {
+    if (this.disposed) {
+      return;
+    }
+    if (this.engaged) {
+      this.auditSource();
+      return;
+    }
+    if (!this.awaitingSource) {
+      return;
+    }
+    // One-shot, exactly like the gesture retry: the deferred attempt gets
+    // exactly one more chance per event, and if it needs to wait again it
+    // subscribes again. A listener that re-engages on every event of a busy
+    // page would be an unbounded retry loop wearing a listener's clothes.
+    this.clearSourceRetry();
+    if (this.requested) {
+      void this.engage(this.requested);
+    }
+  }
+
+  /**
+   * The post-engagement audit, and the limit of what can honestly be done
+   * about a source that arrives after the door.
+   *
+   * The door cannot be closed, so an unreadable source here cannot be repaired
+   * - there is no second element to move the music onto and no way to return
+   * this one to direct output. What CAN be done is to stop claiming success:
+   * the fact is recorded, reported once, and put in front of the listener.
+   *
+   * This is deliberately a report and not a teardown. Tearing the graph down
+   * here would leave the element re-homed into a closed context, which is the
+   * same silence with less information.
+   */
+  private auditSource(): void {
+    const element = this.deps.getElement();
+    const url = elementSourceUrl(element);
+    if (url === null) {
+      // The element was emptied, which `PlayerEngine` does when it stops. There
+      // is nothing to be wrong about until a source arrives.
+      if (this.unreadableSource !== null) {
+        this.unreadableSource = null;
+      }
+      return;
+    }
+    // Three answers, kept as three. Collapsing `not-yet` into "unreadable"
+    // here is the bug this call site is written to avoid: it would put a "this
+    // stream cannot be read" notice in front of a listener whose next track
+    // reports on its CORS check one event from now, and a notice that has to
+    // retract itself is worse than no notice at all.
+    const verdict = this.verdictFor(url);
+    if (verdict === "not-yet") {
+      return;
+    }
+    const readable = verdict === "readable";
+    const previous = this.unreadableSource;
+    if (readable) {
+      this.unreadableSource = null;
+      if (previous !== null) {
+        logger.info("Equalizer source is readable again", {
+          event: "eq_source_readable",
+          sourceHost: hostOf(url),
+          engaged: true,
+          audioContextState: this.context?.state ?? "none",
+        });
+      }
+      return;
+    }
+    // `not-yet` is deliberately NOT a report. A source whose CORS check has not
+    // reported yet is a source nobody knows anything about, and announcing it
+    // as lost would put a "this stream cannot be read" notice in front of a
+    // listener whose track is about to become perfectly processable.
+    if (previous === url) {
+      return;
+    }
+    this.unreadableSource = url;
+    logger.warn("Equalizer lost the signal on a source it cannot read", {
+      event: "eq_source_unreadable_after_engage",
+      sourceHost: hostOf(url),
+      engaged: true,
+      audioContextState: this.context?.state ?? "none",
+      filterCount: this.filters.length,
+    });
+    this.deps.onSourceUnreadable?.(url);
+  }
+
+  private clearSourceRetry(): void {
+    const detach = this.sourceDetach;
+    this.sourceDetach = null;
     detach?.();
   }
 
@@ -710,7 +1060,10 @@ export class EqGraph {
     this.disposed = true;
     this.engaged = false;
     this.awaitingGesture = false;
+    this.awaitingSource = false;
+    this.unreadableSource = null;
     this.clearGestureRetry();
+    this.clearSourceRetry();
     this.requested = null;
     this.lastApplied = null;
     safeDisconnectOne(this.source);
@@ -728,6 +1081,12 @@ export class EqGraph {
 
   private decline(reason: EqUnsupportedReason): false {
     this.failure = reason;
+    // A decline is final, so nothing is left waiting for an event that would
+    // only be declined again.
+    this.awaitingSource = false;
+    this.awaitingGesture = false;
+    this.clearGestureRetry();
+    this.clearSourceRetry();
     logger.warn("Equalizer cannot engage", {
       event: "eq_audio_context_state",
       audioContextState: this.context?.state ?? "none",
@@ -963,6 +1322,127 @@ function safeDisconnectOne(node: EqNode | null): void {
   }
 }
 
+/**
+ * The element's current source URL, or `null` when it has none.
+ *
+ * `currentSrc` is the resolved URL and is the honest answer; `src` is the
+ * attribute, which may be a relative path the element has not resolved yet, and
+ * is read only as a fallback for a test double that models a source without
+ * modelling `currentSrc`.
+ *
+ * An element is read structurally and never cast to `HTMLAudioElement`: the
+ * resolver's declared return type is `unknown` precisely because it can be a
+ * test double, and a double is not allowed to make this module throw.
+ */
+function elementSourceUrl(element: unknown): string | null {
+  if (typeof element !== "object" || element === null) {
+    return null;
+  }
+  const candidate = element as { currentSrc?: unknown; src?: unknown };
+  for (const value of [candidate.currentSrc, candidate.src]) {
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+/** A stream URL is a bearer token for the listener's media; logs get a host. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || "(no host)";
+  } catch {
+    return "(unparseable)";
+  }
+}
+
+/**
+ * What Web Audio can do with a source: `yes`, `no`, or `not yet`.
+ *
+ * THREE ANSWERS, NOT TWO, and the third is why this is a function of the
+ * ELEMENT and not only of the URL.
+ *
+ * `MediaElementAudioSourceNode` is specified to output zeroes when the media
+ * resource is cross-origin and the element did not make a CORS-mode request
+ * for it. That rule is decidable WITHOUT A NETWORK REQUEST, from two facts the
+ * element already exposes:
+ *
+ *   - the resource's origin, compared with the document's; and
+ *   - whether the element opted into CORS at all (`crossOrigin`).
+ *
+ * So a cross-origin source on an element with no `crossOrigin` is `no`, and
+ * deterministically so. There is nothing to test and nothing to wait for, and
+ * in particular nothing that could go wrong slowly.
+ *
+ * WHEN THE ANSWER IS `not yet`. An element that DID opt into CORS only knows
+ * whether its CORS check passed once the load has got far enough to report it,
+ * and until then `readyState` is `HAVE_NOTHING` — which means "no", but means
+ * it for a different reason: the question has not been asked yet. Reporting
+ * that as `no` would decline on a source that is about to be readable, and
+ * since a decline is permanent by design, that would be a self-inflicted
+ * one-way door of exactly the kind this file exists to avoid. So it is a third
+ * answer, and the caller treats it as a deferral.
+ *
+ * WHY NOT ASK THE NETWORK. An earlier version of this probe issued its own
+ * ranged, `mode: "cors"` `fetch` and read the answer from whether it resolved.
+ * That was measuring the wrong thing, and the mistake was caught by the test
+ * rather than by review: Aurora's CSP is `connect-src 'self' ws: wss:`, so the
+ * probe's own request was blocked by the page's policy before it left the
+ * browser — a `TypeError` that looks exactly like a CORS refusal, and that
+ * would have declined the equalizer for sources Web Audio could read perfectly
+ * well. A probe must not inherit the app's policy and call the result a fact
+ * about the media.
+ */
+type SourceVerdict = "readable" | "unreadable" | "not-yet";
+
+function sourceVerdict(
+  url: string,
+  element: unknown,
+  origin: string | null,
+): SourceVerdict {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, origin ?? undefined);
+  } catch {
+    // An unparseable source cannot be reasoned about, and the two available
+    // answers are not equivalent. Fail closed, as everywhere else here.
+    return "unreadable";
+  }
+
+  // Same-origin, or not a network fetch at all. `blob:` and `data:` are
+  // decoded by the element itself with no CORS check in the path, so there is
+  // no taint to inherit.
+  const scheme = parsed.protocol.replace(":", "");
+  if (scheme === "blob" || scheme === "data") {
+    return "readable";
+  }
+  if (origin !== null && parsed.origin === origin) {
+    return "readable";
+  }
+
+  // Cross-origin. The element must have asked for it in CORS mode, or the
+  // node will be fed zeroes no matter what the server said.
+  const media = element as {
+    crossOrigin?: unknown;
+    readyState?: unknown;
+    error?: unknown;
+  } | null;
+  const mode = typeof media?.crossOrigin === "string" ? media.crossOrigin : "";
+  if (mode !== "anonymous" && mode !== "use-credentials") {
+    return "unreadable";
+  }
+
+  // It DID opt in, so the CORS check has run or is about to. The element is
+  // the authority on the outcome: a failed check surfaces as a media error
+  // with nothing loaded, and there is no other way for a passed one to look.
+  const errored = media?.error !== null && media?.error !== undefined;
+  if (errored) {
+    return "unreadable";
+  }
+  const readyState = typeof media?.readyState === "number" ? media.readyState : 0;
+  return readyState > 0 ? "readable" : "not-yet";
+}
+
 /* ==========================================================================
    THE SINGLETON
    ========================================================================== */
@@ -1010,6 +1490,62 @@ function productionDeps(): EqGraphDeps {
       return new Ctor() as unknown as EqAudioContext;
     },
     getElement: () => getCanonicalMediaElement(),
+    documentOrigin: () => {
+      const view = (globalThis as { location?: { origin?: unknown } }).location;
+      return typeof view?.origin === "string" ? view.origin : null;
+    },
+    onSourceChange: (handler) => {
+      const element = getCanonicalMediaElement();
+      if (typeof element !== "object" || element === null) {
+        // No element to watch. A supported answer rather than a failure: the
+        // graph is not engaged, and an equalizer that cannot find the
+        // application's element declines before reaching this.
+        return () => undefined;
+      }
+      const target = element as {
+        addEventListener?: (type: string, listener: () => void) => void;
+        removeEventListener?: (type: string, listener: () => void) => void;
+      };
+      if (
+        typeof target.addEventListener !== "function" ||
+        typeof target.removeEventListener !== "function"
+      ) {
+        return () => undefined;
+      }
+      // Bound once, because the guard above narrows the PROPERTIES and
+      // TypeScript will not carry that narrowing into a closure - the disposer
+      // runs long after the guard, and re-checking there would be the honest way
+      // to say "nothing about this object can be trusted later".
+      const add = target.addEventListener.bind(target);
+      const remove = target.removeEventListener.bind(target);
+      // `loadstart` fires for every way a media element can be given a new
+      // resource - a changed `src`, a changed `<source>` child, or an explicit
+      // `load()` - and `emptied` covers the engine's own `src = ""` teardown.
+      //
+      // The middle three are for the OTHER direction: a source that opted into
+      // CORS is only decidable once the element has reported on its check, and
+      // those are the events on which that report changes. `error` is the
+      // failure case of the same question, and it is the one that turns a
+      // deferral into a decline.
+      const events = [
+        "loadstart",
+        "emptied",
+        "loadedmetadata",
+        "canplay",
+        "error",
+      ] as const;
+      for (const name of events) {
+        add(name, handler);
+      }
+      return () => {
+        for (const name of events) {
+          remove(name, handler);
+        }
+      };
+    },
+    onSourceUnreadable: (url) => {
+      sourceUnreadableListener?.(url);
+    },
     onUserGesture: (handler) => {
       if (typeof document === "undefined") {
         return () => undefined;
@@ -1056,6 +1592,23 @@ function getCanonicalMediaElement(): unknown {
  * the engine knows nothing about the EQ.
  */
 let elementResolver: (() => unknown) | null = null;
+
+/**
+ * Told when a source that arrived after engagement cannot be read.
+ *
+ * A REGISTRATION rather than a dependency, for the same reason the element
+ * resolver above is one: the graph must not know that a store exists. The
+ * store registers once at module load and the graph calls whoever is
+ * registered, so the dependency still points one way and the graph is still
+ * testable in Node with no store in sight.
+ */
+let sourceUnreadableListener: ((url: string) => void) | null = null;
+
+export function setEqSourceUnreadableListener(
+  listener: ((url: string) => void) | null,
+): void {
+  sourceUnreadableListener = listener;
+}
 
 export function setEqElementResolver(resolver: () => unknown): void {
   elementResolver = resolver;

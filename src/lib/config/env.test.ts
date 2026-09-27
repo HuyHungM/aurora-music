@@ -163,6 +163,106 @@ describe("parseEnv", () => {
   });
 });
 
+/**
+ * `AURORA_PUBLIC_URL` is the one variable that decides where Auth.js sends
+ * Google, and therefore whether sign-in works at all. It is validated at this
+ * boundary so a typo fails the boot with a named rule, rather than failing the
+ * first sign-in with `redirect_uri_mismatch` and no local explanation.
+ */
+describe("AURORA_PUBLIC_URL", () => {
+  it("is optional, and absent means the auth route keeps using the headers", () => {
+    const env = parseEnv({ DATABASE_URL: "file:./dev.db" });
+    expect(env.AURORA_PUBLIC_URL).toBeUndefined();
+  });
+
+  it("is classified as optional in the requirements registry", () => {
+    expect(envVarRequirements.AURORA_PUBLIC_URL).toBe("optional");
+  });
+
+  it("normalizes a declared origin to a bare origin string", () => {
+    const env = parseEnv({
+      DATABASE_URL: "file:./dev.db",
+      AURORA_PUBLIC_URL: "https://AuroraMuzik.DPDNS.org/\n",
+    });
+    expect(env.AURORA_PUBLIC_URL).toBe("https://auroramuzik.dpdns.org");
+  });
+
+  it("rejects a value that cannot serve as an origin", () => {
+    for (const value of [
+      "auroramuzik.dpdns.org",
+      "https://auroramuzik.dpdns.org/aurora",
+      "https://auroramuzik.dpdns.org?next=/admin",
+      "https://user:pass@auroramuzik.dpdns.org",
+      "ftp://auroramuzik.dpdns.org",
+    ]) {
+      expect(
+        () => parseEnv({ DATABASE_URL: "file:./dev.db", AURORA_PUBLIC_URL: value }),
+        value,
+      ).toThrow(ConfigError);
+    }
+  });
+
+  it("names the rule in the rejection", () => {
+    try {
+      parseEnv({ DATABASE_URL: "file:./dev.db", AURORA_PUBLIC_URL: "nope" });
+      throw new Error("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      if (error instanceof ConfigError) {
+        expect(error.details.join(" ")).toContain("AURORA_PUBLIC_URL");
+      }
+    }
+  });
+
+  /**
+   * Auth.js reads `AUTH_URL` from `process.env` itself, bypassing this
+   * schema, and prefers it over the request headers. Two variables that
+   * disagree therefore produce a half-fixed deployment - the OAuth flow right
+   * and the built-in sign-in page still pointing at the internal origin -
+   * which is harder to diagnose than either value alone.
+   */
+  it("fails closed when AUTH_URL disagrees with the declared origin", () => {
+    expect(() =>
+      parseEnv({
+        DATABASE_URL: "file:./dev.db",
+        AURORA_PUBLIC_URL: "https://auroramuzik.dpdns.org",
+        AUTH_URL: "http://127.0.0.1:24584",
+      }),
+    ).toThrow(ConfigError);
+  });
+
+  it("compares after normalization, so one origin in two spellings passes", () => {
+    const env = parseEnv({
+      DATABASE_URL: "file:./dev.db",
+      AURORA_PUBLIC_URL: "https://auroramuzik.dpdns.org",
+      AUTH_URL: "https://AuroraMuzik.DPDNS.org:443/",
+    });
+    expect(env.AURORA_PUBLIC_URL).toBe("https://auroramuzik.dpdns.org");
+  });
+
+  it("checks NEXTAUTH_URL too, since Auth.js accepts both", () => {
+    expect(() =>
+      parseEnv({
+        DATABASE_URL: "file:./dev.db",
+        AURORA_PUBLIC_URL: "https://auroramuzik.dpdns.org",
+        NEXTAUTH_URL: "http://zeus.hidencloud.com:24584",
+      }),
+    ).toThrow(ConfigError);
+  });
+
+  it("leaves an operator's AUTH_URL alone when no origin is declared", () => {
+    // Aurora must not become the thing that invents a public origin: an
+    // operator running behind their own proxy may set Auth.js's own variable
+    // deliberately, and that is a supported mechanism, not a conflict.
+    expect(
+      parseEnv({
+        DATABASE_URL: "file:./dev.db",
+        AUTH_URL: "https://aurora.example",
+      }).AURORA_PUBLIC_URL,
+    ).toBeUndefined();
+  });
+});
+
 describe("envVarRequirements", () => {
   it("classifies DATABASE_URL as required", () => {
     expect(envVarRequirements.DATABASE_URL).toBe("required");

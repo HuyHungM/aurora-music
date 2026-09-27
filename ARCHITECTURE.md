@@ -2047,20 +2047,33 @@ Tearing the graph down therefore does not restore direct playback — it produce
 That single fact dictates the whole order of operations, and every failure mode
 below it is a non-event by construction:
 
-1. create the `AudioContext`
-2. create the ten filters and chain them
-3. create the preamp gain and wire it to `destination`
-4. wire the last filter into the preamp
-5. **only now** call `createMediaElementSource(element)`
+1. resolve the element, and decline `no-element` if there is none
+2. **require a user activation**, or defer (`isAwaitingGesture`) — nothing below
+   can run without a started context, and deferring here allocates no context
+3. **ask whether Web Audio may read this source at all** — `sourceVerdict`, with
+   no source and an unreported CORS check both *deferring* and an unreadable
+   source *declining* as `cors-tainted` (§33.8)
+4. create the `AudioContext`
+5. create the ten filters and chain them
+6. create the preamp gain and wire it to `destination`
+7. wire the last filter into the preamp
+8. **only now** call `createMediaElementSource(element)`
 
-Every failure at steps 1–4 leaves the element playing directly and untouched,
+Every failure at steps 1–7 leaves the element playing directly and untouched,
 which is the entirety of §33's "fail gracefully and keep audio playback
-functional". If step 5 itself throws, the element is not re-homed — that is what
+functional". If step 8 itself throws, the element is not re-homed — that is what
 throwing means — and the inert chain is discarded. **There is no ordering in
-which this module can leave a listener with no sound.** Step 5 *completing* on a
+which this module can leave a listener with no sound.** Step 8 *completing* on a
 source the browser will not let Web Audio read is a different matter — not an
-ordering failure but a delivery one — and §33.8 measures it instead of assuming
-it.
+ordering failure but a delivery one — and that is what step 3 exists to refuse
+before the door is taken, and §33.8 measures for the case where the source
+arrives later.
+
+**Step 3 is before the context on purpose.** A source that cannot be used then
+costs one string comparison instead of a `AudioContext`, a monotonic clock, ten
+biquads and a gain node, all discarded. The audible cost of a decline is a
+notice; the cost of finding out afterwards is that the element has already been
+re-homed, and nothing in this feature can undo that.
 
 **The gate in front of step 5, added after the first implementation of this
 module shipped with the promise broken.** Steps 1–4 were never the risky part.
@@ -2281,17 +2294,29 @@ encodeEQ(config) ──▶ "aurora-eq" cookie      (immediate, always)
 ### 33.8 Degradation, and what is NOT covered
 
 `EqGraph.engage()` returns `false` — a **supported outcome**, not an error — for
-`no-element`, `no-web-audio` and `no-source`. In every case playback continues
+`no-element`, `no-web-audio` and `cors-tainted`. In every case playback continues
 untouched and the interface says the equalizer is unavailable *in the same breath
 as the failure*, because a notice reporting only the problem reads as "music is
 broken".
 
-A deferral is **not** in that list and is deliberately not reported as an
-unavailability: `isAwaitingGesture` is a fourth answer to `engage()`, meaning
-"the browser wants a gesture first, the graph is healthy, and it will retry by
-itself". `eq-store.push()` maps it to `unsupportedReason: null`. Reporting it as
-an error would put a failure notice in front of a listener whose equalizer is
-perfectly fine — on a page load where nothing can be playing anyway.
+`cors-tainted` gets its own notice text (`eq.unsupportedSource`) rather than
+sharing `eq.unsupported`. The two reasons are not the same kind of fact:
+`no-web-audio` is about the listener's browser, and "this browser cannot process
+audio" is an answer to a question nobody asked when the real cause is the
+provider's stream.
+
+Two **deferrals** are deliberately not in that list, because neither is a
+failure and reporting either as one would put an error notice in front of a
+listener whose equalizer is healthy:
+
+- `isAwaitingGesture` — "the browser wants a gesture first, the graph is fine,
+  and it will retry by itself".
+- `isAwaitingSource` — "there is nothing to re-home yet, or the element's CORS
+  check has not reported, and the graph is listening for the event that answers
+  it". This is the ordinary state of a listener who switches the equalizer on
+  before pressing play.
+
+`eq-store.push()` maps both to `unsupportedReason: null`.
 
 Parameter changes are smoothed: `cancelScheduledValues` →
 `setValueAtTime(current)` → `linearRampToValueAtTime(target, now + 0.03)`. The
@@ -2320,36 +2345,67 @@ smoothing only one of the two does not fix.
 
 Anything it had to touch is reported once as `eq_parameter_sanitized`.
 
-**The known unmitigated risk — measured, not hypothesised.** The stream URLs are
-cross-origin googlevideo and the element carries no `crossOrigin`. Per
-specification a `MediaElementAudioSourceNode` over a CORS-cross-origin resource
-whose response lacks CORS headers outputs **silence**, and on 2026-09-26 that was
-confirmed end to end in a real Chromium against a real provider stream. The
-element is healthy — `paused: false`, `readyState: 4`, `currentTime` advancing,
-`volume: 1`, `muted: false` — while an analyser tapped at the source node and at
-the preamp both read **exactly 0**; a `cors`-mode `fetch()` of the same URL
-fails with `TypeError: Failed to fetch`; and Chrome says so in the console:
-*"MediaElementAudioSource outputs zeroes due to CORS access restrictions."*
+**The silence, measured, and the gate that now stands in front of it.** The
+stream URLs are cross-origin googlevideo and the element carries no
+`crossOrigin`. Per specification a `MediaElementAudioSourceNode` over such a
+resource outputs **zeroes**, and on 2026-09-26 that was confirmed end to end in
+a real Chromium against a real provider stream. The element was healthy —
+`paused: false`, `readyState: 4`, `currentTime` advancing, `volume: 1`,
+`muted: false`, `AudioContext.state: "running"`, all ten filters `peaking` at
+exactly the configured gains, preamp at the right linear value — while an
+analyser tapped at the source node and at the preamp both read **exactly 0**.
+Chrome named the cause: *"MediaElementAudioSource outputs zeroes due to CORS
+access restrictions."*
+
+**The curve was never the cause.** Injecting 0.05 DC at the first filter and
+reading the preamp returned the configured attenuation of it, so the chain, the
+biquads and the headroom were all provably correct. Flat was equally silent, and
+so was V-Shape → Bypass → V-Shape, because Bypass leaves the door open. What
+made the music stop was *engaging the graph at all* on an unreadable source.
 
 The obvious fix was tested rather than assumed, and it does not work: setting
 `element.crossOrigin = "anonymous"` and reloading makes the browser log *"No
 'Access-Control-Allow-Origin' header is present on the requested resource"* and
-the element fail outright with `MEDIA_ERR_SRC_NOT_SUPPORTED` (errorCode 4,
-`NotSupportedError: Failed to load because no supported source was found`) —
-**strictly worse than the silence.** The attribute cannot be set.
+the element fail outright with `MEDIA_ERR_SRC_NOT_SUPPORTED` (errorCode 4) —
+**strictly worse than the silence.** The attribute cannot be set here; it
+belongs to whoever owns media delivery.
 
-**Consequence, stated plainly.** On this media delivery path the equalizer can
-be engaged, every mode switch is still structurally correct, and none of it is
-audible. Nothing in mode switching can change that: `createMediaElementSource()`
-is irreversible, so the only correct fix is to decline the one-way door until
-the element's source is known to be CORS-clean — a bounded probe before step 5
-— and that in turn requires the graph to defer re-homing until a source exists,
-plus a graph→store channel for a failure that arrives after `engage()` has
-already resolved. That is a media-delivery change wearing an equalizer costume;
-it is recorded in `docs/scope-boundaries.md` as deliberately not built here.
-This remains the one thing in this feature that could ship broken — only it is
-now proven instead of suspected, and `e2e/equalizer-playback.spec.ts` records
-the measurement and Chrome's sentence on every run.
+**So the graph answers the question before it takes the door, and the answer is
+local.** `sourceVerdict(url, element, origin)` in `eq-graph.ts` returns one of
+three values, and the third is the reason it is not a boolean:
+
+| verdict | when | what the graph does |
+| --- | --- | --- |
+| `readable` | same-origin; or `blob:`/`data:`; or a cross-origin source whose element set `crossOrigin` and has loaded (`readyState > 0`, no `error`) | engages |
+| `unreadable` | cross-origin with no CORS opt-in; or a failed check; or an unparseable URL | `decline("cors-tainted")` — the element is never touched |
+| `not-yet` | opted in, but the check has neither passed nor failed | defers, and listens for the event that reports |
+
+**It asks the network nothing.** An earlier version issued its own ranged,
+`mode: "cors"` `fetch()` and read the verdict from whether it resolved. That was
+measuring the wrong thing, and the test suite caught it rather than review:
+Aurora's CSP is `connect-src 'self' ws: wss:`, so the probe's own request was
+blocked **by the page's policy** before it left the browser — a `TypeError`
+indistinguishable from a CORS refusal, which would have declined the equalizer
+for sources Web Audio could read perfectly well. A probe that inherits the app's
+policy is not a measurement of the media. `eq-graph.test.ts` now stubs `fetch`
+to throw and asserts the gate still decides correctly, so this cannot return.
+
+**Consequence, stated plainly.** On this media delivery path the equalizer
+**declines**, the listener is told the *stream* is the problem rather than their
+browser, and their music plays. The same code engages — and is measurably
+audible — the moment media delivery is something Web Audio may read. That
+capability is a media-delivery change wearing an equalizer costume and is
+recorded in `docs/scope-boundaries.md` as deliberately not built here.
+
+**The limit of the gate, stated rather than hidden.** The verdict is asked before
+the door, so it is asked about the source the element has *at that moment*. A
+later `src` cannot be refused, only noticed: `onSourceChange` subscribes to
+`loadstart`/`emptied`/`loadedmetadata`/`canplay`/`error`, and a source that
+arrives unreadable is **reported** (`eq_source_unreadable_after_engage`, surfaced
+as the same stream notice) and never torn down — a teardown would leave the
+element re-homed into a closed context, which is the same silence with less
+information. This is unreachable while no Aurora source is CORS-readable; it is
+documented so that it is not a surprise if media delivery ever changes.
 
 ### 33.9 The mode model, one atomic apply, latest-wins
 

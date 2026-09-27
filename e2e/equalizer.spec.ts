@@ -13,7 +13,7 @@ const baseURL = env.E2E_BASE_URL ?? null;
  * necessarily drive a fake. That fake is good for the properties that are
  * about *structure* (does a preset change rebuild the graph, does a failure
  * ever touch the element, are parameters ramped rather than stepped), and it is
- * structurally incapable of answering the question that matters most here:
+ * structurally incapable of answering the two questions that matter most here:
  *
  *   **Does a real browser actually build this graph, and does it do so once?**
  *
@@ -24,10 +24,21 @@ const baseURL = env.E2E_BASE_URL ?? null;
  * instruments the two APIs that cannot be observed from the DOM:
  * `AudioContext` construction and `createMediaElementSource` calls.
  *
+ *   **And does it refuse to build one at all when the music would go quiet?**
+ *
+ * The element here has no `src`, which is exactly the state of a listener who
+ * opens Settings before pressing play. A graph opened now would be re-homing an
+ * element whose NEXT source nobody has looked at — and a source the browser is
+ * not allowed to read is a graph that outputs silence. So the contract this
+ * spec pins is the deferral: nothing is allocated, the door stays shut, and the
+ * interface reports nothing, because nothing is wrong.
+ *
+ * The other half — a graph that really does build, really does process audio,
+ * and really does change the sound — needs an element that is loading bytes
+ * from a source the browser may read. That is `equalizer-audible.spec.ts`.
+ *
  * Fully offline-safe: no playback is started, no track is resolved, no
- * credentials are needed. The graph engages on a media element with no `src`,
- * which is exactly what happens for a listener who switches the equalizer on
- * before playing anything.
+ * credentials are needed.
  */
 
 /** Open Settings and switch the equalizer on. */
@@ -69,47 +80,50 @@ test.describe("equalizer (Settings → Audio)", () => {
     expect(before.sourceCalls).toBe(0);
   });
 
-  test("a real browser builds the graph once, and reports no failure", async ({
+  test("does not open the one-way door while there is nothing to play", async ({
     page,
   }) => {
     await enableEQ(page);
 
-    // The sharpest assertion in the spec. If `engage()` had failed, the panel
-    // would be showing the "unavailable" notice, and the reason would be
-    // invisible to every other suite in the repository.
-    await expect(page.getByText(/equalizer is unavailable/i)).toHaveCount(0);
-
+    // The sharpest assertion in the spec, and it is a negative one. There is no
+    // source on the element, so there is nothing to have checked, so the graph
+    // has no business existing: no context, no filters, and above all no
+    // re-homing — because a re-homing now would be a bet on a source that has
+    // not been chosen yet, and the wrong bet is silence with no way back.
     const after = await eqCounters(page);
-    expect(after.contexts).toBe(1);
-    expect(after.sourceCalls).toBe(1);
+    expect(after.contexts).toBe(0);
+    expect(after.sourceCalls).toBe(0);
     expect(after.errors).toEqual([]);
+
+    // And it says nothing, because nothing is wrong. The graph is waiting for a
+    // source, not reporting a failure — a notice here would put an error in
+    // front of a listener whose equalizer is perfectly healthy.
+    await expect(page.getByText(/unavailable|cannot be read/i)).toHaveCount(0);
   });
 
-  test("cycling every preset never rebuilds the graph", async ({ page }) => {
+  test("waiting for a source is not waiting forever, and never allocates", async ({
+    page,
+  }) => {
     await enableEQ(page);
 
-    // The §32 failure this guards is a preset change that tears the graph down
-    // and rebuilds it. In a real browser that means a second irreversible
-    // re-homing of an element that has already been re-homed, which throws —
-    // and if it did not throw it would mean a second context and a second clock.
-    const before = await eqCounters(page);
-
-    for (const id of ["flat", "aurora-v", "custom", "aurora-v", "flat"] as const) {
+    // Preset changes while the graph is deferred must not turn a deferral into
+    // an engagement. Each of these is a configuration change, and the store
+    // pushes every one of them at the graph.
+    for (const id of ["flat", "aurora-v", "custom"] as const) {
       await page.getByTestId(`eq-preset-${id}`).click();
       await expect(page.getByTestId(`eq-preset-${id}`)).toBeChecked();
     }
+    await page.getByTestId("eq-advanced-toggle").click();
+    await page.getByTestId("eq-band-1000").fill("6");
 
     const after = await eqCounters(page);
-    expect(after.contexts).toBe(before.contexts);
-    expect(after.sourceCalls).toBe(before.sourceCalls);
-    // Identity, not just a count: every call was on the SAME element, so the
-    // engine's element was reused rather than a second one created.
-    expect(after.distinctElements).toBe(before.distinctElements);
+    expect(after.contexts).toBe(0);
+    expect(after.sourceCalls).toBe(0);
     expect(after.errors).toEqual([]);
-    await expect(page.getByText(/equalizer is unavailable/i)).toHaveCount(0);
+    await expect(page.getByText(/unavailable|cannot be read/i)).toHaveCount(0);
   });
 
-  test("a custom curve applies without rebuilding, and the preamp follows it", async ({
+  test("a custom curve applies to the configuration, and the preamp follows it", async ({
     page,
   }) => {
     await enableEQ(page);
@@ -124,21 +138,21 @@ test.describe("equalizer (Settings → Audio)", () => {
       "aria-checked",
       "true",
     );
-
+    // Which is not the same as a band reaching a filter: there is no filter,
+    // and that is the correct state for an element with no source.
     const after = await eqCounters(page);
-    expect(after.contexts).toBe(1);
-    expect(after.sourceCalls).toBe(1);
+    expect(after.contexts).toBe(0);
+    expect(after.sourceCalls).toBe(0);
     expect(after.errors).toEqual([]);
   });
 
-  test("bypass is unity, not a disconnect — the graph stays built", async ({
+  test("turning the equalizer off and on again never builds anything", async ({
     page,
   }) => {
     await enableEQ(page);
-    const engaged = await eqCounters(page);
-    expect(engaged.sourceCalls).toBe(1);
 
-    // The A/B hold is the only transient, and it must not be a teardown.
+    // The A/B hold is a transient, and the switch is a switch. Neither may
+    // allocate a context, and neither may report a failure.
     await page.getByTestId("eq-compare").dispatchEvent("pointerdown");
     await expect(page.getByTestId("eq-compare")).toHaveAttribute(
       "aria-pressed",
@@ -150,17 +164,20 @@ test.describe("equalizer (Settings → Audio)", () => {
       "false",
     );
 
-    // And the switch is not either: turning the equalizer off leaves the
-    // element inside a live, unity-gain graph rather than disconnecting it.
     await page.getByTestId("eq-switch").click();
     await expect(page.getByTestId("eq-switch")).toHaveAttribute(
       "aria-checked",
       "false",
     );
+    await page.getByTestId("eq-switch").click();
+    await expect(page.getByTestId("eq-switch")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
 
     const off = await eqCounters(page);
-    expect(off.contexts).toBe(1);
-    expect(off.sourceCalls).toBe(1);
+    expect(off.contexts).toBe(0);
+    expect(off.sourceCalls).toBe(0);
     expect(off.errors).toEqual([]);
   });
 
@@ -210,8 +227,8 @@ test.describe("equalizer (Settings → Audio)", () => {
       page.getByRole("main").getByRole("button", { name: /^(play|pause|next|previous|skip)$/i }),
     ).toHaveCount(0);
     const after = await eqCounters(page);
-    expect(after.contexts).toBe(1);
-    expect(after.sourceCalls).toBe(1);
+    expect(after.contexts).toBe(0);
+    expect(after.sourceCalls).toBe(0);
   });
 
   test("is keyboard operable end to end", async ({ page }) => {

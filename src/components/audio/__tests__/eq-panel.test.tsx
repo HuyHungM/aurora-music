@@ -488,6 +488,37 @@ describe("when Web Audio is unavailable", () => {
   });
 });
 
+describe("when the STREAM cannot be read, rather than the browser", () => {
+  it("blames the stream, and never the browser", () => {
+    // The distinction is the whole point of having a separate reason. A browser
+    // that is working exactly as specified must not be told it cannot process
+    // audio - that is a confident, untrue answer to a question the listener
+    // never asked, and it would send them to update a browser that is fine.
+    eqActions.setEngaged(false, "cors-tainted");
+    eqActions.setEnabled(true);
+
+    renderPanel();
+    const text = renderedText();
+    expect(text).toMatch(/this stream cannot be read/i);
+    expect(text).not.toMatch(/this browser cannot process audio/i);
+    // Still says the one thing that must be said either way.
+    expect(text).toMatch(/still plays normally/i);
+  });
+
+  it("keeps saying it while the graph is engaged on an unreadable source", async () => {
+    // The post-engagement audit keeps `engaged` true, because the graph IS up.
+    // The notice has to survive that, or the interface would claim success
+    // exactly when it has lost the signal.
+    eqActions.setEnabled(true);
+    eqActions.choosePreset("aurora-v");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    eqActions.setEngaged(true, "cors-tainted");
+
+    renderPanel();
+    expect(renderedText()).toMatch(/this stream cannot be read/i);
+  });
+});
+
 /* ==========================================================================
    LOCALIZATION (§44)
    ========================================================================== */
