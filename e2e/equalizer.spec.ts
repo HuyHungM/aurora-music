@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { env } from "node:process";
+import { eqCounters, instrumentEQ } from "./eq-instrument";
 
 /** Where the fixture serves the application; used for the locale cookie. */
 const baseURL = env.E2E_BASE_URL ?? null;
@@ -29,79 +30,6 @@ const baseURL = env.E2E_BASE_URL ?? null;
  * before playing anything.
  */
 
-/** Instrument the two irreversible APIs before any application code runs. */
-async function instrument(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    interface Counters {
-      contexts: number;
-      sourceCalls: number;
-      elements: unknown[];
-      errors: string[];
-    }
-    const counters: Counters = {
-      contexts: 0,
-      sourceCalls: 0,
-      elements: [],
-      errors: [],
-    };
-    (window as unknown as { __eq: Counters }).__eq = counters;
-
-    const Native = window.AudioContext;
-    if (Native) {
-      class CountingContext extends Native {
-        constructor(...args: ConstructorParameters<typeof Native>) {
-          super(...args);
-          counters.contexts += 1;
-        }
-        override createMediaElementSource(
-          element: HTMLMediaElement,
-        ): MediaElementAudioSourceNode {
-          counters.sourceCalls += 1;
-          counters.elements.push(element);
-          return super.createMediaElementSource(element);
-        }
-      }
-      window.AudioContext =
-        CountingContext as unknown as typeof window.AudioContext;
-    }
-
-    // A throw here is the failure the whole ordering exists to prevent, so it is
-    // recorded rather than merely logged: an exception that only appears in the
-    // console is easy to miss and fatal to the listener.
-    window.addEventListener("error", (event) => {
-      counters.errors.push(String(event.message));
-    });
-    window.addEventListener("unhandledrejection", (event) => {
-      counters.errors.push(String(event.reason));
-    });
-  });
-}
-
-/** The counters the init script installed. */
-async function counters(page: Page): Promise<{
-  contexts: number;
-  sourceCalls: number;
-  distinctElements: number;
-  errors: string[];
-}> {
-  return page.evaluate(() => {
-    const c = (window as unknown as {
-      __eq: {
-        contexts: number;
-        sourceCalls: number;
-        elements: unknown[];
-        errors: string[];
-      };
-    }).__eq;
-    return {
-      contexts: c.contexts,
-      sourceCalls: c.sourceCalls,
-      distinctElements: new Set(c.elements).size,
-      errors: c.errors,
-    };
-  });
-}
-
 /** Open Settings and switch the equalizer on. */
 async function enableEQ(page: Page): Promise<void> {
   await page.goto("/settings");
@@ -118,7 +46,7 @@ function declaredPreamp(page: Page) {
 
 test.describe("equalizer (Settings → Audio)", () => {
   test.beforeEach(async ({ page }) => {
-    await instrument(page);
+    await instrumentEQ(page);
   });
 
   test("Settings → Audio offers the equalizer, off by default", async ({
@@ -136,7 +64,7 @@ test.describe("equalizer (Settings → Audio)", () => {
     // Off means the graph is never built: enabling it is the moment the one-way
     // door is taken, and a page that has not been asked for a curve must not
     // have re-homed the audio element.
-    const before = await counters(page);
+    const before = await eqCounters(page);
     expect(before.contexts).toBe(0);
     expect(before.sourceCalls).toBe(0);
   });
@@ -151,7 +79,7 @@ test.describe("equalizer (Settings → Audio)", () => {
     // invisible to every other suite in the repository.
     await expect(page.getByText(/equalizer is unavailable/i)).toHaveCount(0);
 
-    const after = await counters(page);
+    const after = await eqCounters(page);
     expect(after.contexts).toBe(1);
     expect(after.sourceCalls).toBe(1);
     expect(after.errors).toEqual([]);
@@ -164,14 +92,14 @@ test.describe("equalizer (Settings → Audio)", () => {
     // and rebuilds it. In a real browser that means a second irreversible
     // re-homing of an element that has already been re-homed, which throws —
     // and if it did not throw it would mean a second context and a second clock.
-    const before = await counters(page);
+    const before = await eqCounters(page);
 
     for (const id of ["flat", "aurora-v", "custom", "aurora-v", "flat"] as const) {
       await page.getByTestId(`eq-preset-${id}`).click();
       await expect(page.getByTestId(`eq-preset-${id}`)).toBeChecked();
     }
 
-    const after = await counters(page);
+    const after = await eqCounters(page);
     expect(after.contexts).toBe(before.contexts);
     expect(after.sourceCalls).toBe(before.sourceCalls);
     // Identity, not just a count: every call was on the SAME element, so the
@@ -197,7 +125,7 @@ test.describe("equalizer (Settings → Audio)", () => {
       "true",
     );
 
-    const after = await counters(page);
+    const after = await eqCounters(page);
     expect(after.contexts).toBe(1);
     expect(after.sourceCalls).toBe(1);
     expect(after.errors).toEqual([]);
@@ -207,7 +135,7 @@ test.describe("equalizer (Settings → Audio)", () => {
     page,
   }) => {
     await enableEQ(page);
-    const engaged = await counters(page);
+    const engaged = await eqCounters(page);
     expect(engaged.sourceCalls).toBe(1);
 
     // The A/B hold is the only transient, and it must not be a teardown.
@@ -230,7 +158,7 @@ test.describe("equalizer (Settings → Audio)", () => {
       "false",
     );
 
-    const off = await counters(page);
+    const off = await eqCounters(page);
     expect(off.contexts).toBe(1);
     expect(off.sourceCalls).toBe(1);
     expect(off.errors).toEqual([]);
@@ -281,7 +209,7 @@ test.describe("equalizer (Settings → Audio)", () => {
     await expect(
       page.getByRole("main").getByRole("button", { name: /^(play|pause|next|previous|skip)$/i }),
     ).toHaveCount(0);
-    const after = await counters(page);
+    const after = await eqCounters(page);
     expect(after.contexts).toBe(1);
     expect(after.sourceCalls).toBe(1);
   });

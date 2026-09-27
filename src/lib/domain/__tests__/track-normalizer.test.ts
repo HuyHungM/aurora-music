@@ -154,6 +154,58 @@ describe("toTrackIdentity", () => {
   });
 });
 
+describe("generateIdentityId", () => {
+  const UUID_V4 =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  /** Runs `run` with `globalThis.crypto` replaced, then restores it exactly. */
+  function withCrypto<T>(stub: unknown, run: () => T): T {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      writable: true,
+      value: stub,
+    });
+    try {
+      return run();
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(globalThis, "crypto", descriptor);
+      } else {
+        delete (globalThis as { crypto?: Crypto }).crypto;
+      }
+    }
+  }
+
+  it("mints a UUIDv4 in a normal context", () => {
+    expect(generateIdentityId()).toMatch(UUID_V4);
+  });
+
+  it("keeps working where randomUUID does not exist", () => {
+    // The production case this guards: a plain-HTTP LAN origin is not a secure
+    // context, so browsers expose `getRandomValues` but not `randomUUID`.
+    // Playback, queue and dedupe all route through this id, so a throw here is
+    // a product-wide failure, not a local one.
+    const real = globalThis.crypto;
+    expect(typeof real?.randomUUID).toBe("function");
+
+    const id = withCrypto(
+      { getRandomValues: (bytes: Uint8Array) => real.getRandomValues(bytes) },
+      () => generateIdentityId(),
+    );
+
+    expect(id).toMatch(UUID_V4);
+  });
+
+  it("never throws when no Web Crypto is reachable", () => {
+    // A throw here is swallowed by every caller as "unavailable", which is
+    // exactly the silent failure mode the fallback chain removes.
+    const id = withCrypto(undefined, () => generateIdentityId());
+    expect(id).toMatch(UUID_V4);
+    expect(id).not.toBe(withCrypto(undefined, () => generateIdentityId()));
+  });
+});
+
 describe("artists", () => {
   it("keeps an explicitly supplied multi-artist list", () => {
     const identity = toTrackIdentity(spotifyTrack(), {

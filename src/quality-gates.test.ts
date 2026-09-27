@@ -672,6 +672,15 @@ describe("Phase 52 hardening gates", () => {
     // RULE 34. A route that builds its own response silently opts out of
     // correlation. The helper is the only sanctioned way to answer, so a bare
     // `NextResponse.json` in a route is the finding.
+    //
+    // There is exactly one other sanctioned shape: a route that forwards a
+    // response the framework constructs itself (Auth.js builds the sign-in
+    // HTML, the OAuth 302s and the provider JSON) cannot use `jsonResponse`,
+    // so it stamps `REQUEST_ID_RESPONSE_HEADER` directly. That constant comes
+    // from the one module that defines it, so accepting it here cannot drift
+    // into "any route may set a header" - and the auth route, which used to
+    // export `const { GET, POST }` and so was invisible to this scan, is now
+    // checked like every other route.
     const offenders: string[] = [];
     for (const file of trackedSourceFiles(/\.ts$/, "src/app/api")) {
       if (!isProductionSource(file)) {
@@ -685,7 +694,10 @@ describe("Phase 52 hardening gates", () => {
         offenders.push(file.slice(rootDir.length + 1).replace(/\\/g, "/"));
         continue;
       }
-      if (!content.includes("jsonResponse(")) {
+      if (
+        !content.includes("jsonResponse(") &&
+        !content.includes("REQUEST_ID_RESPONSE_HEADER")
+      ) {
         offenders.push(file.slice(rootDir.length + 1).replace(/\\/g, "/"));
       }
     }

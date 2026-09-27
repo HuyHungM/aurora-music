@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
 import type { Album, Artist, Track, SearchHistory } from "@/lib/domain";
 import { searchQuerySchema } from "@/lib/validation/schemas";
+import { classifySearchInput } from "@/lib/search/input";
+import type {
+  ResolveSearchLinkErrorCode,
+  ResolveSearchLinkPayload,
+} from "@/app/actions/resolve-search-link";
+import { resolveSearchLinkAction } from "@/app/actions/resolve-search-link";
 import { getPreferredProvider, getShellProviders } from "@/lib/providers/server";
 import { searchUnifiedTracksAction } from "@/app/actions/unified-search";
 import { getSessionUserId } from "@/lib/dal/session";
@@ -14,6 +20,7 @@ import { SearchDegradationNotice } from "./search-notice";
 import { TopResultCard } from "./top-result-card";
 import { SearchHistorySection } from "./search-history";
 import { RecordSearch } from "./record-search";
+import { LinkSearchResult } from "./link-result";
 import { identityToTrack } from "@/lib/music/identity-track";
 import { getRequestLocale } from "@/lib/i18n/server";
 import { getT } from "@/lib/i18n/translate";
@@ -31,9 +38,45 @@ export default async function SearchPage({
   const t = getT(locale);
   const { q } = await searchParams;
   const rawQuery = typeof q === "string" ? q : "";
-  const parsed = searchQuerySchema.safeParse({ query: rawQuery, limit: 20, offset: 0 });
-  const query = parsed.success ? parsed.data.query : "";
-  const isValidQuery = parsed.success && query.length > 0;
+
+  // Classify BEFORE validation and before any provider call.
+  //
+  // Two reasons this order matters:
+  //   1. `searchQuerySchema` caps the query at 200 characters, which is a
+  //      bound for prose. A pasted URL is not prose, and validating it as one
+  //      would reject a perfectly good link before it was ever looked at.
+  //   2. Detection is free (pure string work), so a link never costs a text
+  //      search. Aurora's search is submit-driven — typing issues no requests
+  //      at all — so the only request a paste can reach is the one this
+  //      classification routes it to.
+  const searchInput = classifySearchInput(rawQuery);
+  const isLinkInput = searchInput.kind !== "query";
+  /** The idle page (history / empty prompt) — never shown for a link. */
+  const showIdleState = !isLinkInput;
+
+  const parsed = isLinkInput
+    ? null
+    : searchQuerySchema.safeParse({ query: rawQuery, limit: 20, offset: 0 });
+  const query = parsed?.success ? parsed.data.query : "";
+  const isValidQuery = !isLinkInput && parsed?.success === true && query.length > 0;
+
+  let linkResult: ResolveSearchLinkPayload | null = null;
+  let linkError: string | null = null;
+  let linkUnsupported: "unsupported-host" | "malformed" | null = null;
+
+  if (searchInput.kind === "unsupported-url") {
+    linkUnsupported = searchInput.reason;
+  } else if (searchInput.kind === "source") {
+    // Warm the lazy provider registry before anything reads it; the same
+    // cold-process contract as the unified search below.
+    getShellProviders();
+    const resolved = await resolveSearchLinkAction(rawQuery);
+    if (resolved.ok) {
+      linkResult = resolved.result;
+    } else {
+      linkError = linkFailureMessage(resolved, t);
+    }
+  }
 
   let tracks: Track[] = [];
   let artists: Artist[] = [];
@@ -114,7 +157,7 @@ export default async function SearchPage({
   }
 
   let history: SearchHistory[] = [];
-  if (!isValidQuery) {
+  if (showIdleState && !isValidQuery) {
     const userId = await getSessionUserId();
     if (userId) {
       history = await listSearchHistory(userId, 8);
@@ -138,18 +181,34 @@ export default async function SearchPage({
         <h1 className="t-page-title sm:text-3xl">
           {isValidQuery ? (
             <>{t("search.resultsFor", { query })} </>
+          ) : linkResult ? (
+            <span className="block break-words">
+              {linkResult.resource.kind === "track"
+                ? linkResult.resource.track.title
+                : linkResult.resource.title}
+            </span>
+          ) : linkUnsupported ? (
+            <>{t("search.linkUnsupportedTitle")}</>
+          ) : linkError !== null ? (
+            <>{t("search.linkErrorTitle")}</>
           ) : (
             t("search.title")
           )}
         </h1>
-        {!isValidQuery ? (
+        {showIdleState && !isValidQuery ? (
           <p className="text-sm text-text-muted">{t("search.subtitle")}</p>
         ) : null}
       </div>
 
-      <SearchForm defaultValue={query} locale={locale} />
+      <SearchForm
+        defaultValue={isValidQuery ? query : isLinkInput ? rawQuery.trim() : ""}
+        locale={locale}
+      />
 
       {isValidQuery ? <RecordSearch query={query} /> : null}
+      {!isValidQuery && linkResult ? (
+        <RecordSearch query={linkResult.canonicalUrl} />
+      ) : null}
 
       {isValidQuery && !allFailed ? (
         <SearchDegradationNotice partial={tracksPartial} />
@@ -163,11 +222,28 @@ export default async function SearchPage({
         />
       ) : null}
 
-      {!isValidQuery && history.length > 0 ? (
+      {/* A pasted provider link renders its own body and never the text
+          search results: the classification above already decided which
+          one of the two this request is. */}
+      {linkResult ? <LinkSearchResult resource={linkResult.resource} /> : null}
+
+      {linkUnsupported ? (
+        <CategoryError
+          message={t(
+            linkUnsupported === "unsupported-host"
+              ? "search.linkUnsupported"
+              : "search.linkUnreadable",
+          )}
+        />
+      ) : null}
+
+      {linkError !== null ? <CategoryError message={linkError} /> : null}
+
+      {showIdleState && !isValidQuery && history.length > 0 ? (
         <SearchHistorySection history={history} />
       ) : null}
 
-      {!isValidQuery && history.length === 0 ? (
+      {showIdleState && !isValidQuery && history.length === 0 ? (
         <EmptyState
           icon={<MusicNoteIcon size={28} />}
           title={t("search.emptyTitle")}
@@ -258,4 +334,30 @@ function CategoryError({ message }: { message: string }) {
       <span>{message}</span>
     </div>
   );
+}
+
+/**
+ * A link failure to user-facing copy.
+ *
+ * Only a code comes back from the action, so this is the single place a
+ * provider's raw error text could have leaked — and it does not: every
+ * recognized code is localized here, and the fallback is the action's own
+ * neutral message (or the rate-limiter's truthful one), never a provider
+ * message naming an endpoint, a host or a status.
+ */
+function linkFailureMessage(
+  failure: { error: string; linkError?: ResolveSearchLinkErrorCode },
+  t: ReturnType<typeof getT>,
+): string {
+  switch (failure.linkError) {
+    case "not-found":
+      return t("search.linkNotFound");
+    case "unsupported":
+    case "unsupported-input":
+      return t("search.linkUnsupported");
+    case "unavailable":
+      return t("search.linkUnavailable");
+    default:
+      return failure.error;
+  }
 }

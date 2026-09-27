@@ -20,6 +20,7 @@
  * so none of them can reset it.
  */
 
+import { logger } from "@/lib/diagnostics/logger";
 import {
   DEFAULT_EQ,
   EQ_BAND_FREQUENCIES,
@@ -29,6 +30,7 @@ import {
   effectiveGraphState,
   headroomSaturated,
   isPresetApplied,
+  maxBandGainDb,
   presetPreampDb,
   quantizeBandGain,
   requiredPreampDb,
@@ -126,6 +128,33 @@ export function effectiveBands(
 }
 
 /**
+ * The mode currently in effect, in the four canonical names (§3).
+ *
+ * `flat` | `aurora-v` | `custom` are the shipped presets; `bypass` is what
+ * those three become when the equalizer is off or the listener is holding A/B.
+ *
+ * THIS IS THE ONE AUTHORITY FOR THAT LAST CASE, and it exists so the answer is
+ * derived once instead of re-invented. `effectivePreampDb`, `effectiveBands`
+ * and `push()` all encode "comparing or not enabled means neutral"; naming the
+ * result of that condition makes it a thing that can be logged, asserted and
+ * shown, rather than a rule each caller has to remember. Bypass is a derived
+ * state and never a stored one - there is no `bypass` flag to disagree with
+ * `enabled`, because it is computed from `enabled` at the moment it is asked
+ * for.
+ */
+export type EQMode = EQPresetId | "bypass";
+
+export function effectiveMode(
+  config: EQConfig = state.config,
+  comparing: boolean = state.comparing,
+): EQMode {
+  if (comparing || !config.enabled) {
+    return "bypass";
+  }
+  return config.presetId;
+}
+
+/**
  * The preamp a preset DECLARES, for display (§38).
  *
  * Separate from `effectivePreampDb` on purpose. With Aurora V-Shape selected
@@ -164,6 +193,38 @@ export function isHeadroomSaturated(): boolean {
    ========================================================================== */
 
 /**
+ * Monotonic id for `push()` (§18).
+ *
+ * `engage()` is a promise, and a slow attempt raised by an earlier
+ * configuration change must not be the one whose `.then` lands last. Without
+ * this a stale write could stamp `unsupportedReason` over a successful
+ * engagement, leaving the interface reporting an error for a graph that is in
+ * fact running - the "UI says one thing, audio says another" state §17
+ * forbids. The latest request always wins.
+ */
+let pushGeneration = 0;
+
+/**
+ * The mode logged last, so the health check runs on a MODE TRANSITION and not
+ * on every slider event (§23's "lightweight, not per animation frame").
+ */
+let lastPushedMode: EQMode | null = null;
+
+/** A cheap structural read of the graph, for diagnostics only (§23). */
+function logGraphHealth(graph: ReturnType<typeof getEqGraph>): void {
+  const health = graph.health();
+  logger.info("Equalizer graph health", {
+    event: "eq_audio_graph_health",
+    engaged: health.engaged,
+    audioContextState: health.contextState,
+    filterCount: health.filterCount,
+    preampConnected: health.preampConnected,
+    awaitingGesture: health.awaitingGesture,
+    failure: health.failure,
+  });
+}
+
+/**
  * Pushes the current configuration into the audio graph.
  *
  * Called after every committed change. It never rebuilds: the graph's `apply`
@@ -176,16 +237,64 @@ export function isHeadroomSaturated(): boolean {
  */
 function push(): void {
   const graph = getEqGraph();
+  const generation = (pushGeneration += 1);
+  const previousMode = lastPushedMode;
+  const mode = effectiveMode();
+  const modeChanged = mode !== previousMode;
+  lastPushedMode = mode;
+
   if (!state.config.enabled || state.comparing) {
     if (graph.isEngaged) {
+      // Neutral through the SAME nodes, never by disconnecting: tearing the
+      // path down would be silence, and silence is not bypass (§12).
       graph.bypass();
+      logger.info("Equalizer bypassed", {
+        event: "eq_bypass_changed",
+        mode,
+        previousMode,
+        bypass: true,
+        preamp: 0,
+        maxBandGain: 0,
+        audioContextState: graph.health().contextState,
+      });
+    }
+    if (modeChanged) {
+      logGraphHealth(graph);
     }
     return;
   }
+
   const state42 = effectiveGraphState(state.config);
+  if (modeChanged) {
+    logger.info("Equalizer mode change requested", {
+      event: "eq_mode_change_requested",
+      mode,
+      previousMode,
+      preamp: roundDb(effectivePreampDb(state.config)),
+      maxBandGain: roundDb(maxBandGainDb(state.config.bands)),
+      filterCount: graph.nodeCount,
+      audioContextState: graph.health().contextState,
+    });
+  }
+
   void graph.engage(state42).then((ok) => {
+    if (generation !== pushGeneration) {
+      return;
+    }
     if (ok) {
       setState({ engaged: true, unsupportedReason: null });
+      if (modeChanged) {
+        logGraphHealth(graph);
+      }
+      return;
+    }
+    if (graph.isAwaitingGesture) {
+      // Not an error. The graph is waiting for the browser to allow a context
+      // to start, and it re-attempts on its own at the next gesture. Reporting
+      // this as "unsupported" would put an error message in front of a
+      // listener whose equalizer is perfectly healthy - and on a page load
+      // where nothing can be playing anyway.
+      setState({ engaged: false, unsupportedReason: null });
       return;
     }
     setState({
@@ -193,6 +302,11 @@ function push(): void {
       unsupportedReason: graph.unsupportedReason,
     });
   });
+}
+
+/** Diagnostics are readable numbers on a log line, not 3.0000000000000004. */
+function roundDb(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 /* ==========================================================================
@@ -237,6 +351,7 @@ export const eqActions: EqActions = {
     if (isPresetApplied(state.config, presetId)) {
       return;
     }
+    const previousMode = state.config.presetId;
     // `selectPreset` replaces bands AND headroom together (§9): an old preset's
     // preamp must not survive the switch.
     const config = selectPreset(presetId);
@@ -244,6 +359,14 @@ export const eqActions: EqActions = {
       config,
       revision: state.revision + 1,
       saveStatus: "idle",
+    });
+    logger.info("Equalizer preset applied", {
+      event: "eq_preset_applied",
+      mode: effectiveMode(config, state.comparing),
+      previousMode,
+      preamp: roundDb(resolvePreampDb(config)),
+      maxBandGain: roundDb(maxBandGainDb(config.bands)),
+      filterCount: getEqGraph().nodeCount,
     });
     push();
   },

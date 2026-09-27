@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, lazy, useState, useEffect, useRef } from "react";
+import { Suspense, lazy, useState, useEffect, useRef, type CSSProperties, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { Track, Playlist } from "@/lib/domain";
 import { requestAuthPrompt } from "@/components/tracks/liked-tracks";
@@ -36,6 +36,8 @@ export function AddToPlaylistMenu({
   onClose,
   openUp = false,
   presenceProps,
+  placement,
+  surfaceRef,
 }: {
   track: Track;
   onClose: () => void;
@@ -49,6 +51,25 @@ export function AddToPlaylistMenu({
    * what any test that renders it directly will see.
    */
   presenceProps?: { "data-presence": "entering" | "entered" | "exiting"; inert: boolean };
+  /**
+   * Explicit offsets, supplied by a host that places the surface itself.
+   *
+   * The default is the `absolute right-0 top-full` shorthand, which is only
+   * correct when the picker's own trigger is its positioning context. The
+   * queue renders this picker inside the panel's menu layer - its rows live
+   * in a scroll container, and a surface that stays inside one gets cut off
+   * by it - so the panel measures the trigger and hands the offsets over
+   * instead. See `queue-panel.tsx`.
+   */
+  placement?: CSSProperties;
+  /**
+   * The surface element, for a host that has to measure it. The picker is
+   * the tallest thing that can appear in a menu slot - a header, a search
+   * box and a scrolling list - so a host that positions the surface itself
+   * cannot assume the room the shorter row menu needed. Omitted by hosts
+   * that anchor the picker to its own trigger, where CSS decides.
+   */
+  surfaceRef?: RefObject<HTMLDivElement | null>;
 }) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,7 +86,6 @@ export function AddToPlaylistMenu({
   const [filter, setFilter] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const { t } = useLocale();
-  const menuRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef<HTMLButtonElement[]>([]);
   // Owns the post-success auto-close timer so it can be cancelled on
   // unmount. Previously the handle was dropped, so unmounting inside the
@@ -290,13 +310,14 @@ export function AddToPlaylistMenu({
   return (
     <>
       <div
-        ref={menuRef}
+        ref={surfaceRef}
         role="menu"
         aria-label={t("playlist.addToPlaylistTitle")}
         {...presenceProps}
-        className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float absolute right-0 z-dropdown w-60 overflow-hidden rounded-lg border border-border-subtle ${
-          openUp ? "bottom-full mb-1" : "top-full mt-1"
+        className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float absolute z-dropdown w-60 overflow-hidden rounded-lg border border-border-subtle ${
+          placement ? "" : openUp ? "bottom-full mb-1" : "top-full mt-1"
         }`}
+        style={placement}
       >
         <div className="border-b border-border-subtle px-3 py-2 text-xs font-medium text-text-muted">
           {t("playlist.addToPlaylist")}

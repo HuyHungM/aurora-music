@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+import { getAllowedDevOrigins } from "./src/lib/config/dev-origins";
+
 /**
  * Security response headers (Phase 26).
  *
@@ -14,6 +16,13 @@ import type { NextConfig } from "next";
  * - Other artwork may arrive from provider/CDN hosts, so CSP keeps img-src broad.
  */
 const IS_DEVELOPMENT = process.env.NODE_ENV === "development";
+
+/**
+ * Dev-server host allowlist (see src/lib/config/dev-origins.ts). Empty unless
+ * `next dev` is running, so builds and tests see the exact config they saw
+ * before this option existed.
+ */
+const allowedDevOrigins = getAllowedDevOrigins();
 
 const SCRIPT_SRC = [
   "'self'",
@@ -51,6 +60,16 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  // Development only: allow this machine's real hostnames (loopback + the
+  // routable LAN/VPN interface addresses) to request dev-only resources.
+  // Without them Next 403s the HMR websocket and `/__nextjs_*` endpoints for
+  // every host other than `localhost`, which leaves the page as inert
+  // server HTML - nothing hydrates, so the app looks broken from a phone on
+  // the LAN (and even from `127.0.0.1`). See src/lib/config/dev-origins.ts.
+  // Empty outside `next dev`, so production config is unchanged; entries are
+  // exact hostnames, never "*".
+  ...(allowedDevOrigins.length > 0 ? { allowedDevOrigins } : {}),
+
   images: {
     remotePatterns: [
       {

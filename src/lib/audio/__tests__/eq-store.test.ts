@@ -25,6 +25,7 @@ import {
 import {
   AURORA_V_SHAPE,
   DEFAULT_PREAMP_DB,
+  FLAT_BANDS,
   SAFETY_MARGIN_DB,
   cloneBands,
   compositeMaxGainDb,
@@ -34,6 +35,7 @@ import {
   type EQConfig,
 } from "@/lib/audio/eq";
 import { resetEqGraphForTests, getEqGraph } from "@/lib/audio/eq-graph";
+import { FakeContext, fakeAudioElement } from "./fake-web-audio";
 
 /** A configuration with the equalizer on, so graph engagement is possible. */
 function on(config: EQConfig): EQConfig {
@@ -361,5 +363,208 @@ describe("hydration", () => {
     // A copy, not a reference: mutating the store must not reach back into
     // whatever the server passed, and vice versa.
     expect(config.bands).not.toBe(incoming.bands);
+  });
+});
+
+/* ==========================================================================
+   ACTION -> STORE -> GRAPH -> AudioParam
+
+   The chain the mode-switching defect broke. The model tests above prove the
+   store holds the right numbers; the graph tests prove `engage()` writes the
+   state it is given. This block proves the two are CONNECTED - that a preset
+   button ends up as a different number on the same ten filters, with no
+   rebuild, no second context and no re-homing of the element in between.
+
+   `push()` is the only bridge and it is deliberately fire-and-forget, so every
+   assertion waits a macrotask for the engagement to land.
+   ========================================================================== */
+
+/** Lets a microtask-queued graph engagement land. */
+async function settled(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("the store reaches the audio graph (the mode-switch chain)", () => {
+  let context: FakeContext;
+  let contextsCreated: number;
+
+  beforeEach(() => {
+    resetEqGraphForTests();
+    context = new FakeContext();
+    contextsCreated = 0;
+    // Prime the singleton with a graph that can actually engage. The store
+    // only ever calls `getEqGraph()`, so this is the production path with the
+    // Web Audio seam swapped for a recording fake.
+    getEqGraph({
+      createContext: () => {
+        contextsCreated += 1;
+        return context;
+      },
+      getElement: () => fakeAudioElement(),
+    });
+    eqActions.reset();
+    // `reset()` restores the configuration; it deliberately does not know
+    // whether a graph is currently running, because that is the graph's fact
+    // and not the store's. Start from the store's own clean slate anyway, so a
+    // previous test's `engaged` cannot leak into an assertion here.
+    eqActions.setEngaged(false, null);
+  });
+
+  it("reaches the filter parameters when a preset is chosen", async () => {
+    eqActions.choosePreset("flat");
+    await settled();
+
+    expect(getEqState().engaged).toBe(true);
+    expect(context.filters).toHaveLength(10);
+    expect(context.filters.map((f) => f.gain.value)).toEqual(
+      FLAT_BANDS.map((b) => b.gain),
+    );
+    // Flat's declared headroom is 0 dB, so the preamp is unity and not the
+    // V-Shape's -3.5 surviving the switch.
+    expect(context.gains[0]!.gain.value).toBeCloseTo(1, 6);
+  });
+
+  it("switches presets on the SAME nodes, without rebuilding anything", async () => {
+    // The central claim of this block. Before the fix, `engage()` returned as
+    // soon as the graph existed and dropped the state it was handed, so this
+    // sequence changed the interface and left the audio on the V-Shape.
+    eqActions.choosePreset("aurora-v");
+    await settled();
+    const filters = [...context.filters];
+    const source = context.sourcedElement;
+    expect(context.filters[0]!.gain.value).toBe(2.5);
+
+    eqActions.choosePreset("flat");
+    await settled();
+
+    expect(context.filters.map((f) => f.gain.value)).toEqual(
+      FLAT_BANDS.map((b) => b.gain),
+    );
+    // Same ten node objects, one context, one re-homing, nothing closed.
+    expect(context.filters).toHaveLength(10);
+    for (let i = 0; i < 10; i += 1) {
+      expect(context.filters[i]).toBe(filters[i]);
+    }
+    expect(contextsCreated).toBe(1);
+    expect(context.sourceCalls).toBe(1);
+    expect(context.sourcedElement).toBe(source);
+    expect(context.closeCalls).toBe(0);
+  });
+
+  it("carries the V-Shape's declared -3.5 dB into the preamp", async () => {
+    eqActions.choosePreset("aurora-v");
+    await settled();
+    expect(context.gains[0]!.gain.value).toBeCloseTo(10 ** (-3.5 / 20), 6);
+
+    eqActions.choosePreset("flat");
+    await settled();
+    expect(context.gains[0]!.gain.value).toBeCloseTo(1, 6);
+
+    eqActions.choosePreset("aurora-v");
+    await settled();
+    expect(context.gains[0]!.gain.value).toBeCloseTo(10 ** (-3.5 / 20), 6);
+    // Still one context after three switches (§26).
+    expect(contextsCreated).toBe(1);
+  });
+
+  it("bypasses through the same nodes and restores the curve on re-enable", async () => {
+    eqActions.choosePreset("aurora-v");
+    await settled();
+    expect(context.filters[0]!.gain.value).toBe(2.5);
+
+    eqActions.setEnabled(false);
+    await settled();
+    // Neutral, but written - not disconnected, not closed, not reset.
+    expect(context.filters.map((f) => f.gain.value)).toEqual(
+      FLAT_BANDS.map((b) => b.gain),
+    );
+    expect(context.gains[0]!.gain.value).toBeCloseTo(1, 6);
+    expect(context.closeCalls).toBe(0);
+    expect(context.sourceCalls).toBe(1);
+
+    eqActions.setEnabled(true);
+    await settled();
+    expect(context.filters[0]!.gain.value).toBe(2.5);
+    expect(context.gains[0]!.gain.value).toBeCloseTo(10 ** (-3.5 / 20), 6);
+    expect(contextsCreated).toBe(1);
+    expect(context.sourceCalls).toBe(1);
+    expect(context.closeCalls).toBe(0);
+  });
+
+  it("restores the curve when an A/B comparison is released", async () => {
+    eqActions.choosePreset("aurora-v");
+    await settled();
+
+    eqActions.setComparing(true);
+    await settled();
+    expect(context.filters.map((f) => f.gain.value)).toEqual(
+      FLAT_BANDS.map((b) => b.gain),
+    );
+    expect(context.gains[0]!.gain.value).toBeCloseTo(1, 6);
+
+    eqActions.setComparing(false);
+    await settled();
+    expect(context.filters[0]!.gain.value).toBe(2.5);
+    expect(context.gains[0]!.gain.value).toBeCloseTo(10 ** (-3.5 / 20), 6);
+    expect(contextsCreated).toBe(1);
+    expect(context.closeCalls).toBe(0);
+  });
+
+  it("lands on the LAST of a rapid series of switches", async () => {
+    // §18, latest-requested-state-wins. Three changes before the first
+    // engagement has finished building; the audio and the interface must both
+    // end on the third, never on the first.
+    eqActions.choosePreset("flat");
+    eqActions.choosePreset("aurora-v");
+    eqActions.choosePreset("flat");
+    await settled();
+
+    expect(getEqState().config.presetId).toBe("flat");
+    expect(getEqState().engaged).toBe(true);
+    expect(context.filters.map((f) => f.gain.value)).toEqual(
+      FLAT_BANDS.map((b) => b.gain),
+    );
+    expect(contextsCreated).toBe(1);
+    expect(context.sourceCalls).toBe(1);
+  });
+
+  it("never reports the equalizer unavailable while it waits for a gesture", async () => {
+    // A suspended context at page load is an ordinary lifecycle state, and the
+    // page cannot be playing yet - so there is nothing for the interface to
+    // warn about, and the graph retries by itself at the next gesture.
+    context.resume = async () => {
+      throw new Error("NotAllowedError");
+    };
+
+    eqActions.choosePreset("aurora-v");
+    await settled();
+
+    const state = getEqState();
+    expect(state.engaged).toBe(false);
+    expect(state.unsupportedReason).toBeNull();
+    // And the element was never touched, so whatever is playing keeps playing.
+    expect(context.sourceCalls).toBe(0);
+    expect(context.sourcedElement).toBeNull();
+  });
+
+  it("keeps one context and one re-homing across a long editing session", async () => {
+    eqActions.choosePreset("aurora-v");
+    await settled();
+
+    for (let index = 0; index < 10; index += 1) {
+      eqActions.setBandGain(index, index % 2 === 0 ? 4 : -3);
+      await settled();
+    }
+    eqActions.setPreampMode("manual");
+    eqActions.setManualPreamp(-6);
+    await settled();
+
+    expect(contextsCreated).toBe(1);
+    expect(context.sourceCalls).toBe(1);
+    expect(context.closeCalls).toBe(0);
+    expect(context.filters).toHaveLength(10);
+    expect(context.filters[0]!.gain.value).toBe(4);
+    expect(context.filters[1]!.gain.value).toBe(-3);
+    expect(context.gains[0]!.gain.value).toBeCloseTo(10 ** (-6 / 20), 6);
   });
 });

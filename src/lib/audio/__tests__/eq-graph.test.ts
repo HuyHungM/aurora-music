@@ -25,11 +25,6 @@ import {
   resetEqGraphForTests,
   getEqGraph,
   setEqElementResolver,
-  type EqAudioContext,
-  type EqAudioParam,
-  type EqBiquadNode,
-  type EqGainNode,
-  type EqNode,
 } from "@/lib/audio/eq-graph";
 import {
   AURORA_V_SHAPE,
@@ -42,138 +37,78 @@ import {
 
 /* ==========================================================================
    THE FAKE
+
+   It lives in `fake-web-audio.ts` alongside these tests, so that `eq-store`
+   can prime the same graph singleton and prove the whole chain - an action,
+   through the store, into an `AudioParam` - rather than half of it.
    ========================================================================== */
 
-interface ScheduledEvent {
-  kind: "cancel" | "set" | "ramp";
-  value: number;
-  time: number;
-}
+import { FakeContext, fakeAudioElement } from "./fake-web-audio";
 
-class FakeParam implements EqAudioParam {
-  value: number;
-  readonly events: ScheduledEvent[] = [];
-
-  constructor(initial: number) {
-    this.value = initial;
-  }
-
-  setValueAtTime(value: number, startTime: number): EqAudioParam {
-    this.value = value;
-    this.events.push({ kind: "set", value, time: startTime });
-    return this;
-  }
-
-  linearRampToValueAtTime(value: number, endTime: number): EqAudioParam {
-    this.value = value;
-    this.events.push({ kind: "ramp", value, time: endTime });
-    return this;
-  }
-
-  cancelScheduledValues(cancelTime: number): EqAudioParam {
-    this.events.push({ kind: "cancel", value: this.value, time: cancelTime });
-    return this;
-  }
-}
-
-class FakeNode implements EqNode {
-  readonly connections: EqNode[] = [];
-  disconnectCount = 0;
-
-  connect(destination: EqNode): EqNode {
-    this.connections.push(destination);
-    return destination;
-  }
-
-  disconnect(): void {
-    this.disconnectCount += 1;
-    this.connections.length = 0;
-  }
-}
-
-class FakeBiquad extends FakeNode implements EqBiquadNode {
-  type = "peaking";
-  readonly frequency = new FakeParam(350);
-  readonly gain = new FakeParam(0);
-  readonly Q = new FakeParam(1);
-}
-
-class FakeGain extends FakeNode implements EqGainNode {
-  readonly gain = new FakeParam(1);
-}
-
-class FakeContext implements EqAudioContext {
-  sampleRate = 48_000;
-  currentTime = 10;
-  state = "suspended";
-  readonly destination: EqNode = new FakeNode();
-  readonly filters: FakeBiquad[] = [];
-  readonly gains: FakeGain[] = [];
-  resumeCalls = 0;
-  closeCalls = 0;
-  sourceCalls = 0;
-  sourcedElement: unknown = null;
-  /** Set to make `createMediaElementSource` throw, as a browser would. */
-  sourceThrows = false;
-
-  async resume(): Promise<void> {
-    this.resumeCalls += 1;
-    this.state = "running";
-  }
-
-  async close(): Promise<void> {
-    this.closeCalls += 1;
-    this.state = "closed";
-  }
-
-  createBiquadFilter(): EqBiquadNode {
-    const node = new FakeBiquad();
-    this.filters.push(node);
-    return node;
-  }
-
-  createGain(): EqGainNode {
-    const node = new FakeGain();
-    this.gains.push(node);
-    return node;
-  }
-
-  createMediaElementSource(element: unknown): EqNode {
-    this.sourceCalls += 1;
-    if (this.sourceThrows) {
-      throw new Error("InvalidStateError: cannot re-home this element");
-    }
-    this.sourcedElement = element;
-    return new FakeNode();
-  }
-}
-
-const element = { tagName: "AUDIO" } as const;
+const element = fakeAudioElement();
 
 function harness(
-  options: { element?: unknown | null; sourceThrows?: boolean } = {},
+  options: {
+    element?: unknown | null;
+    sourceThrows?: boolean;
+    resumeTimeoutMs?: number;
+  } = {},
 ): {
   context: FakeContext;
   contextsCreated: () => number;
+  gesture: () => void;
   graph: EqGraph;
   reasons: string[];
 } {
-  const contexts: FakeContext[] = [];
   const reasons: string[] = [];
   const context = new FakeContext();
   context.sourceThrows = options.sourceThrows ?? false;
-  contexts.push(context);
+  // COUNTED, NOT MERELY HELD. This harness used to derive the figure from an
+  // array that nothing ever pushed to after the first element, so it reported
+  // `1` no matter how many times `createContext` actually ran - which made
+  // "creates the AudioContext exactly once" (§26) impossible to fail, and made
+  // the no-second-engagement guarantee untestable.
+  let created = 0;
+  // A gesture source of our own, because this suite runs in Node: there is no
+  // `document` here to dispatch on, and a retry path that only ever worked
+  // against a real DOM would be the one part of the fix with no coverage.
+  let gestureHandler: (() => void) | null = null;
   const graph = new EqGraph({
     createContext: () => {
-      if (contexts.length > 1) {
-        contexts.push(new FakeContext());
-      }
-      return contexts[contexts.length - 1]!;
+      created += 1;
+      return context;
     },
     getElement: () => ("element" in options ? options.element : element),
     onUnsupported: (reason) => reasons.push(reason),
+    resumeTimeoutMs: options.resumeTimeoutMs,
+    onUserGesture: (handler) => {
+      gestureHandler = handler;
+      return () => {
+        if (gestureHandler === handler) {
+          gestureHandler = null;
+        }
+      };
+    },
   });
-  return { context, contextsCreated: () => contexts.length, graph, reasons };
+  const gesture = (): void => {
+    const handler = gestureHandler;
+    // Detached first, exactly as the graph's own handler does, so a listener
+    // left subscribed after `dispose()` would still be reachable here.
+    gestureHandler = null;
+    handler?.();
+  };
+  return { context, contextsCreated: () => created, gesture, graph, reasons };
+}
+
+/** Polls a condition set by asynchronous work started outside `await`. */
+async function until(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error("condition did not become true in time");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 const vShapeState = effectiveGraphState({
@@ -233,15 +168,77 @@ describe("engaging the graph", () => {
     expect(context.state).toBe("running");
   });
 
-  it("survives a context that cannot be resumed", async () => {
-    // A suspended context is a normal mobile state, not an error: the graph is
-    // wired correctly and will start on the next gesture.
+  it("never re-homes the element into a context that cannot be resumed", async () => {
+    // THE SILENCE BUG, AND THE GUARD THAT REMOVES IT.
+    //
+    // The old contract asserted that a failed resume still engaged - "the
+    // graph is wired correctly and will start on the next gesture". It will
+    // not: nothing in this feature ever calls `resume()` again, and `engage()`
+    // does not rebuild once the graph reports itself engaged. Re-homing into a
+    // suspended context routes the element into something that produces no
+    // sound, permanently, and no mode switch can bring it back.
+    //
+    // So the door stays shut. The element is never touched, the inert chain is
+    // discarded, and the attempt is deferred rather than recorded as a
+    // failure - a suspended context is an ordinary lifecycle state, not a
+    // browser that lacks Web Audio.
     const { graph, context } = harness();
     context.resume = async () => {
       throw new Error("NotAllowedError");
     };
-    await expect(graph.engage(vShapeState)).resolves.toBe(true);
-    expect(graph.isEngaged).toBe(true);
+
+    await expect(graph.engage(vShapeState)).resolves.toBe(false);
+
+    expect(graph.isEngaged).toBe(false);
+    expect(context.sourceCalls).toBe(0);
+    expect(context.sourcedElement).toBeNull();
+    expect(context.closeCalls).toBe(1);
+    // Deferred, not broken: the interface must not report the EQ unsupported.
+    expect(graph.isAwaitingGesture).toBe(true);
+    expect(graph.unsupportedReason).toBeNull();
+    // And the listener's audio was never at risk - it kept playing directly.
+    expect(graph.health().contextState).toBe("none");
+  });
+
+  it("engages on the next gesture once the browser allows the context", async () => {
+    const { context, gesture, graph } = harness();
+    let allowed = false;
+    context.resume = async () => {
+      if (!allowed) {
+        throw new Error("NotAllowedError");
+      }
+      context.state = "running";
+    };
+
+    await expect(graph.engage(vShapeState)).resolves.toBe(false);
+    expect(context.sourceCalls).toBe(0);
+
+    allowed = true;
+    gesture();
+    await until(() => graph.isEngaged);
+
+    expect(graph.isAwaitingGesture).toBe(false);
+    expect(context.sourceCalls).toBe(1);
+    expect(context.filters[0]!.gain.value).toBe(2.5);
+  });
+
+  it("never starts a second engagement while one is in flight", async () => {
+    // §18. The store pushes on EVERY configuration change and does not await
+    // the result, and the first engagement always has to wait - on `resume()`.
+    // A second engagement begun in that window builds a second context and a
+    // second chain, then loses the race for the element and reports
+    // `no-source`, which `decline()` stores PERMANENTLY: the equalizer would
+    // be dead for the rest of the page's life.
+    const { graph, context, contextsCreated } = harness({ resumeTimeoutMs: 20 });
+    context.resume = () => new Promise<void>(() => undefined);
+
+    const first = graph.engage(vShapeState);
+    const second = graph.engage(vShapeState);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([false, false]);
+    expect(contextsCreated()).toBe(1);
+    expect(graph.isAwaitingGesture).toBe(true);
+    expect(graph.unsupportedReason).toBeNull();
   });
 });
 
@@ -352,6 +349,34 @@ describe("preset changes update parameters, never the graph (addendum §28)", ()
     );
     // -3.5 dB in linear amplitude, not 3.5.
     expect(context.gains[0]!.gain.value).toBeCloseTo(10 ** (-3.5 / 20), 6);
+  });
+
+  it("points an ALREADY BUILT graph at the new configuration", async () => {
+    // THE MODE-SWITCH DEFECT.
+    //
+    // `engage()` used to return `this.engaged` as soon as the graph existed,
+    // silently dropping the state it was handed - and the store routes every
+    // enabled-state change through `engage()` and nowhere else. A preset
+    // switch, a band drag, an A/B release and an EQ re-enable therefore
+    // updated the interface and nothing else: the audio kept whatever curve it
+    // already had, and after a bypass it stayed flat for the rest of the
+    // session. Being BUILT and being TOLD the current curve are two different
+    // questions, and this is the second one.
+    const { graph, context } = harness();
+    await graph.engage(vShapeState);
+    expect(context.filters[0]!.gain.value).toBe(2.5);
+
+    const flat = effectiveGraphState({ ...selectPreset("flat"), enabled: true });
+    await expect(graph.engage(flat)).resolves.toBe(true);
+
+    expect(context.filters.map((f) => f.gain.value)).toEqual(
+      FLAT_BANDS.map((b) => b.gain),
+    );
+    expect(context.gains[0]!.gain.value).toBeCloseTo(10 ** (flat.preampDb / 20), 6);
+    // Same ten nodes, same context, one re-homing: nothing was rebuilt (§28).
+    expect(context.filters).toHaveLength(10);
+    expect(context.sourceCalls).toBe(1);
+    expect(context.closeCalls).toBe(0);
   });
 
   it("carries a dragged band into the graph without touching anything else", async () => {

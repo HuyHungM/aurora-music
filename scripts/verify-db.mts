@@ -14,8 +14,12 @@ let adapter;
 if (url.startsWith("postgresql://") || url.startsWith("postgres://")) {
   adapter = new PrismaPg({ connectionString: url });
 } else {
+  // Same rule as `src/lib/db.ts`: the message carries the scheme, never the
+  // connection string — this script prints to stdout, where the password
+  // would end up in a CI log.
+  const scheme = url.slice(0, url.indexOf(":") + 1) || "(none)";
   throw new Error(
-    `Unsupported DATABASE_URL scheme: ${url}. ` +
+    `Unsupported DATABASE_URL scheme: ${scheme} ` +
       `Expected "postgresql://" or "postgres://"`,
   );
 }

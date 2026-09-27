@@ -162,15 +162,17 @@ describe("PlaylistShareControl: what is being shared", () => {
     expect(privateOption().getAttribute("aria-pressed")).toBe("true");
   });
 
-  // A first draft also carried a "Private" badge in the preview row. The
-  // dialog then said "Private" twice - once as the selected control, once as a
-  // readout of it - which is two answers to one question and a duplicated
-  // announcement. The state is now stated exactly once.
-  it("states the access state exactly once", async () => {
+  // A first draft also carried a "Private"/"Shared" badge in the preview row.
+  // The dialog then showed the state word twice - once as the selected control,
+  // once as a readout of it - which is two answers to one question and a
+  // duplicated announcement. Each word may appear, but only as its control.
+  it("never states the access state as a second, separate readout", async () => {
     await openDialog(playlist({ visibility: "shared", shareToken: TOKEN }));
-    expect(screen.queryAllByText("Shared")).toHaveLength(0);
-    expect(screen.queryAllByText("Private")).toHaveLength(0);
-    expect(screen.queryAllByText("Public")).toHaveLength(1);
+    for (const word of ["Public", "Private"]) {
+      const matches = screen.queryAllByText(word);
+      expect(matches).toHaveLength(1);
+      expect(matches[0].tagName).toBe("BUTTON");
+    }
   });
 
   it("states the shared access state and warns that turning it off breaks the link", async () => {

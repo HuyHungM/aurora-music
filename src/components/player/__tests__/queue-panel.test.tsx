@@ -180,4 +180,97 @@ describe("QueuePanel", () => {
       "Thao tác với Track B",
     );
   });
+
+  it("renders the row menu in the panel's layer, outside the scrolling list", async () => {
+    // The list is a scroll container, and a scroll container clips its
+    // contents - including a menu opening downward from a row near the bottom
+    // of it. The surface therefore renders into the panel's own layer, which
+    // is a sibling of the list, and takes explicit offsets from there.
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+      yt("b", { title: "Track B", artistName: "Two" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+
+    const dialog = queueDialog();
+    const layer = dialog.querySelector("[data-queue-menu-layer]");
+    expect(layer, "the panel owns a menu layer").toBeTruthy();
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Thao tác với Track B" }),
+    );
+    const menu = await screen.findByRole("menu", { name: "Thao tác với bài hát" });
+    expect(menu.parentElement).toBe(layer);
+    expect(dialog.contains(menu)).toBe(true);
+
+    // The list must not be the surface's ancestor: that is the whole point.
+    const scroller = dialog.querySelector<HTMLElement>(".overflow-y-auto")!;
+    expect(scroller).toBeTruthy();
+    expect(scroller.contains(menu)).toBe(false);
+  });
+
+  it("dismisses the row menu when the list scrolls under it", async () => {
+    // The surface is positioned from the row it belongs to, and the row
+    // moves. Nothing but a scroll event can say so, so a surface left in
+    // place would float over rows it no longer belongs to.
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+      yt("b", { title: "Track B", artistName: "Two" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+
+    fireEvent.click(
+      within(queueDialog()).getByRole("button", { name: "Thao tác với Track B" }),
+    );
+    await screen.findByRole("menu", { name: "Thao tác với bài hát" });
+
+    // A scroll on a scroll container does not bubble, so this only arrives
+    // through the capture listener. Dispatching it non-bubbling keeps the
+    // test honest about which path it is exercising.
+    const scroller = queueDialog().querySelector<HTMLElement>(".overflow-y-auto")!;
+    scroller.dispatchEvent(new Event("scroll"));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("menu", { name: "Thao tác với bài hát" })).toBeNull(),
+    );
+    expect(screen.getByRole("dialog", { name: "Hàng chờ" })).toBeTruthy();
+  });
+
+  it("dismisses the row menu on a click elsewhere in the panel", async () => {
+    // The panel is itself a dialog. Treating every dialog as off-limits to
+    // the outside-click test meant nothing inside the panel could ever close
+    // the menu, which left Escape as the only way out.
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+      yt("b", { title: "Track B", artistName: "Two" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+
+    fireEvent.click(
+      within(queueDialog()).getByRole("button", { name: "Thao tác với Track B" }),
+    );
+    await screen.findByRole("menu", { name: "Thao tác với bài hát" });
+
+    fireEvent.mouseDown(queueDialog());
+
+    await waitFor(() =>
+      expect(screen.queryByRole("menu", { name: "Thao tác với bài hát" })).toBeNull(),
+    );
+    expect(screen.getByRole("dialog", { name: "Hàng chờ" })).toBeTruthy();
+  });
 });

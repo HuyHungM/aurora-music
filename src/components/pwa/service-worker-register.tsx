@@ -45,6 +45,25 @@ export function ServiceWorkerRegister() {
     if (typeof window === "undefined" || typeof navigator === "undefined") {
       return undefined;
     }
+    // Secure-context feature detect, NOT a truthiness guard.
+    //
+    // `navigator.serviceWorker` is a [SecureContext] interface: on a plain-HTTP
+    // origin (a LAN or IP host, e.g. http://192.168.1.32:3000 or the
+    // production host http://zeus.hidencloud.com:24584) the property is not
+    // exposed at all, so the container is `undefined` and any dereference of
+    // `container.register` throws.
+    //
+    // A plain `if (!container) return` is not sufficient: the production
+    // compiler treats `navigator.serviceWorker` as always defined and
+    // eliminates that branch as dead code, which shipped a bundle that
+    // evaluated `typeof container.register` on `undefined` and crashed the
+    // root layout with
+    // `TypeError: Cannot read properties of undefined (reading 'register')`.
+    // An `in` test is a runtime presence check the compiler must keep — the
+    // other two effects in this component use exactly this form.
+    if (!("serviceWorker" in navigator)) {
+      return undefined;
+    }
     const container = (
       navigator as Navigator & { serviceWorker?: ServiceWorkerContainer }
     ).serviceWorker;

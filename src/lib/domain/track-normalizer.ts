@@ -46,9 +46,61 @@ export interface CanonicalSearchInput {
   nextOffset?: number | null;
 }
 
-/** Generates an Aurora internal identity (existing cuid-style strategy). */
+/**
+ * Generates an Aurora internal identity (existing cuid-style strategy).
+ *
+ * `crypto.randomUUID()` is a SECURE-CONTEXT-ONLY API: browsers expose it only
+ * on `https://` and on loopback. Aurora is routinely opened from another
+ * device as `http://<lan-ip>:3000` during development, where
+ * `crypto.randomUUID` is `undefined` and a bare call throws `TypeError:
+ * crypto.randomUUID is not a function`. That throw is not local - this id is
+ * minted on every `toTrackIdentity`, i.e. on every playback, queue, dedupe and
+ * snapshot path - and every caller catches it as "track could not canonicalize":
+ * playback then reports "This track has no playable stream right now." with no
+ * network call, the queue snapshot reads as empty, and the player bar says
+ * nothing is playing. In other words, one insecure origin silently disabled the
+ * product.
+ *
+ * So the chain prefers `randomUUID` and otherwise mints the SAME UUIDv4 shape
+ * from `crypto.getRandomValues`, which every context - secure or not, browser
+ * or server - exposes. The two paths must stay interchangeable because these
+ * ids are persisted and compared.
+ *
+ * The final fallback never throws: a missing primitive here surfaces as a
+ * swallowed "unavailable" error in playback, which is the exact failure mode
+ * this chain exists to prevent. Collisions matter far less than uptime for an
+ * internal track identity (same reasoning as the tab id in
+ * `lib/multi-tab/playback-ownership.ts`).
+ */
 export function generateIdentityId(): string {
-  return crypto.randomUUID();
+  const webcrypto = globalThis.crypto;
+  if (webcrypto && typeof webcrypto.randomUUID === "function") {
+    return webcrypto.randomUUID();
+  }
+  if (webcrypto && typeof webcrypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    webcrypto.getRandomValues(bytes);
+    // RFC 4122 version 4 and variant bits, so the result is indistinguishable
+    // from `randomUUID()` to anything that parses the shape.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex: string[] = [];
+    for (const byte of bytes) {
+      hex.push(byte.toString(16).padStart(2, "0"));
+    }
+    return [
+      hex.slice(0, 4).join(""),
+      hex.slice(4, 6).join(""),
+      hex.slice(6, 8).join(""),
+      hex.slice(8, 10).join(""),
+      hex.slice(10, 16).join(""),
+    ].join("-");
+  }
+  let tail = "";
+  for (let index = 0; index < 12; index += 1) {
+    tail += Math.floor(Math.random() * 16).toString(16);
+  }
+  return `00000000-0000-4000-8000-${tail}`;
 }
 
 function asNonEmptyString(value: unknown): string | undefined {

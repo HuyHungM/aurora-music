@@ -26,6 +26,10 @@ export function SearchForm({
       label={t("searchForm.label")}
       placeholder={t("searchForm.placeholder")}
       clearLabel={t("searchForm.clear")}
+      // The template keeps its `{provider}` placeholder: `interpolate` leaves
+      // an unknown placeholder untouched, and the field substitutes the brand
+      // name itself so word order stays correct per locale.
+      linkDetectedTemplate={t("searchForm.linkDetected")}
       defaultValue={defaultValue}
     />
   );

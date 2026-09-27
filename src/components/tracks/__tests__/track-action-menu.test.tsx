@@ -126,6 +126,49 @@ describe("TrackActionMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Thêm vào hàng chờ" })).toBeTruthy();
   });
 
+  it("closes on a click elsewhere in the dialog that hosts it", async () => {
+    // A track menu can be opened from inside the queue panel or the full
+    // player, and both are dialogs. The outside-click test used to exempt
+    // every dialog, which meant nothing inside the hosting panel could ever
+    // dismiss the menu.
+    const user = userEvent.setup();
+    render(
+      <div role="dialog" aria-label="Hộp thoại">
+        <TrackActionMenu track={makeTrack("t1")} />
+        <button type="button">Nơi khác</button>
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: "Thao tác với Track t1" });
+    await user.click(trigger);
+    expect(screen.getByRole("menu", { name: "Thao tác với bài hát" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Nơi khác" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("menu", { name: "Thao tác với bài hát" })).toBeNull(),
+    );
+    // The host survives; only the menu went away. Focus is left on the
+    // button the user actually pressed, which is where a pointer click put it.
+    expect(screen.getByRole("dialog", { name: "Hộp thoại" })).toBeTruthy();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("stays open when a click lands in a different dialog", async () => {
+    // The create-playlist dialog is portaled to <body> and lives outside the
+    // menu. Working through its form must not collapse the menu underneath.
+    const user = userEvent.setup();
+    render(<TrackActionMenu track={makeTrack("t1")} />);
+    const other = document.createElement("div");
+    other.setAttribute("role", "dialog");
+    other.innerHTML = '<button type="button">Trong hộp thoại khác</button>';
+    document.body.appendChild(other);
+
+    const trigger = screen.getByRole("button", { name: "Thao tác với Track t1" });
+    await user.click(trigger);
+    await user.click(other.querySelector("button")!);
+    expect(screen.getByRole("menu", { name: "Thao tác với bài hát" })).toBeTruthy();
+    other.remove();
+  });
+
   it("calls playNext when Play next is clicked", async () => {
     const user = userEvent.setup();
     const track = makeTrack("t1");

@@ -7,6 +7,7 @@ import { CheckIcon, PlusIcon, SkipForwardIcon, ListMusicIcon, RadioIcon } from "
 import { getRadioSession } from "@/lib/radio/instance";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { usePresence } from "@/components/ui/presence";
+import { useMenuOpenUp } from "@/components/ui/menu-placement";
 import { AddToPlaylistMenu } from "./add-to-playlist-menu";
 
 function TrackActionMenuContent({
@@ -185,9 +186,6 @@ export function TrackActionMenu({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [showPlaylistMenu, setShowPlaylistMenu] = useState(false);
-  // Open upward when the trigger sits close to the viewport bottom so
-  // menus/submenus are never trapped behind the fixed player bar.
-  const [openUp, setOpenUp] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
@@ -201,11 +199,17 @@ export function TrackActionMenu({
   const { mounted, presenceProps } = usePresence(isOpen);
 
   const { t } = useLocale();
+  // Which way this menu opens is not a property of the host - it is decided
+  // from the surface that was actually rendered, so the taller playlist
+  // picker cannot be assumed to fit in the room the short row menu needed.
+  // See `menu-placement.ts` for why it is measured rather than guessed.
+  const openUp = useMenuOpenUp({
+    open: mounted,
+    triggerRef,
+    surfaceRef: containerRef,
+  });
+
   const handleToggle = () => {
-    if (!isOpen && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      setOpenUp(window.innerHeight - rect.bottom < 300);
-    }
     setIsOpen(!isOpen);
   };
 
@@ -229,9 +233,15 @@ export function TrackActionMenu({
     const handleClickOutside = (e: MouseEvent) => {
       // Dialogs (e.g. the portaled create-playlist dialog) live outside
       // the menu container by design; interacting with one must never
-      // collapse the menu underneath it.
+      // collapse the menu underneath it. "Outside" means outside the dialog
+      // that HOSTS this trigger, though: a row menu can be opened inside the
+      // queue panel or the full player, and those are dialogs too. Testing for
+      // any dialog made every click inside the hosting panel exempt, so the
+      // menu could not be dismissed by clicking anywhere else in it.
       const target = e.target as Element | null;
-      if (target?.closest?.('[role="dialog"]')) {
+      const host = triggerRef.current?.closest('[role="dialog"]') ?? null;
+      const clicked = target?.closest?.('[role="dialog"]') ?? null;
+      if (clicked && clicked !== host) {
         return;
       }
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {

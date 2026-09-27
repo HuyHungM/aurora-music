@@ -410,6 +410,73 @@ YouTube / Deezer / Spotify (single canonical registry)
   normalized tracks. Deterministic E2E fixture catalog under
   `AURORA_E2E_AUTH=1` (same test-only pattern as the fixture library).
 
+## 9a. Search input classification and link resolution
+
+One search field, three outcomes. The field classifies its own value
+**before any network call**, and the result of that classification decides
+which of two already-existing paths runs.
+
+```text
+classifySearchInput(value)
+ ├─ "query"            → unified text search (unchanged)
+ ├─ "source"           → resolveSearchLink (URL → canonical resource)
+ └─ "unsupported-url"  → inline refusal, never passed on as text
+```
+
+- **One parser.** `detectSource` / `isSupportedInput` in
+  `src/lib/providers/source-detection.ts` is the canonical URL parser;
+  `providerHostOf()` exposes its host allowlist beside it. `src/lib/search/input.ts`
+  is a classifier over that parser, not a second one: it adds
+  `looksLikeUrl` (trimmed, whitespace-free, `http(s)://`), the
+  `SearchInputKind` union, canonical-URL and canonical-query helpers, and
+  `providerDisplayName()` shared by the detection hint and the result
+  eyebrow. There is no provider selector and no second "search URL" button.
+- **Classification is string work.** It runs on every keystroke, costs no
+  request, and is the reason no provider is asked anything while a URL is
+  being pasted. Unparseable `http(s)` input, an allowlisted host with no
+  readable resource, and a foreign host all classify as `unsupported-url`;
+  non-`http(s)` schemes (`javascript:`, `data:`) are prose, not links, and
+  classify as `query`.
+- **`?q=` is validated as a URL first.** The search page classifies before
+  `searchQuerySchema`, whose 200-character prose cap would otherwise reject
+  a long playlist URL with a schema error. Unsupported links render
+  `CategoryError` — an inline, labelled error state on the same page, never
+  a full-page spinner.
+- **Track resolution** (`src/lib/search/resolve-link.ts`): the id from the
+  URL is used directly — a known YouTube video id is never re-discovered
+  through `search.list` — and `extractorManager.getTrack` fetches
+  metadata, which becomes a canonical identity through `toTrackIdentity`.
+  Only a *foreign* source (Spotify, Deezer) then buys **one**
+  `searchAll(query, { providers: ["youtube"], limit: LINK_MATCH_CANDIDATES })`
+  and an `enrichIdentity()` merge; YouTube sources skip matching entirely.
+  The result is a plain identity that the existing UI hands to
+  `engine.play()`. Playback source resolution happens at play time and is
+  never persisted.
+- **Collection resolution** loads a bounded page (`LINK_COLLECTION_LIMIT`),
+  normalizes every entry, cross-source matches non-YouTube sources with the
+  same bounded fan-out (`LINK_MATCH_CONCURRENCY`), and deduplicates on
+  canonical identity **after** enrichment. `provider.getPlaylist` /
+  `getAlbum` are reached through structural `PlaylistCapable` /
+  `AlbumCapable` narrowing, so a provider without the capability is a
+  runtime refusal rather than a cast.
+- **An action boundary, not a feature branch:** `resolveSearchLink` is
+  behind `src/app/actions/resolve-search-link.ts`, guarded by
+  `guardServerAction({ bucket: "search" })`, which re-classifies its own
+  input and returns a typed payload or one of four codes
+  (`not-found` / `unsupported` / `unavailable` / `unsupported-input`). The
+  browser never sees a provider message, a stack, a key or a signed URL.
+- **Security:** only `http(s)`, only an allowlisted host
+  (`youtube.com`, `music.youtube.com`, `youtu.be`, `open.spotify.com`,
+  `deezer.com`), only recognized resource types, only id shapes the parser
+  accepts. The server never fetches an arbitrary URL the user supplies and
+  there is no URL proxy: every outbound call is a structured provider API
+  request built from a validated id.
+- **Nothing new owns state.** Pasted links enter the existing queue,
+  playlist and Recently Played paths only after canonical dedupe; search
+  history stores `canonicalSearchInput()` — the trimmed text for a query,
+  the rebuilt canonical URL for a link, and `""` (nothing recorded) for a
+  refused link, so tracking parameters are never persisted.
+
 ## 10. Track model
 
 ```text
@@ -421,6 +488,17 @@ AudioSource ── ephemeral play-time source (url, mimeType, durationMs, expire
 ```
 
 - Internal Aurora ID (`cuid`) is never derived from a provider hash.
+- **Identity ids never depend on a secure context.**
+  `generateIdentityId()` (`src/lib/domain/track-normalizer.ts`) runs in the
+  browser as well as on the server, and `crypto.randomUUID()` exists only in
+  a secure context: on `http://192.168.1.32:3000` it is `undefined` and a bare
+  call threw, which broke play/queue/like for every LAN visitor. It now falls
+  back `randomUUID()` → RFC 4122 UUIDv4 from `getRandomValues()` → a
+  never-throwing `Math.random` hex of the same shape, mirroring the ordering
+  already used by `multi-tab/playback-ownership.ts`. The first two links are
+  CSPRNG-backed and are what every supported browser takes; the last link
+  exists only so a hostile environment degrades to a non-cryptographic id
+  instead of no playback at all.
 - `sources` grows **only** through explicit `mergeSourceReference`; automatic
   cross-provider matching that invents references is forbidden.
 - Playback persists only `TrackRef` (`provider` + `providerTrackId`); a
@@ -568,7 +646,8 @@ Sole persistence + ownership authority (`src/lib/dal/*`):
 ## 13. Database
 
 PostgreSQL via Prisma 7 (`prisma/schema.prisma`; migrations in
-`prisma/migrations/`; live: `postgresql_baseline`, `add_playback_state`).
+`prisma/migrations/` — eight to date, the set kept explicit by the
+allowlist test in `src/lib/dal/__tests__/playback-schema.test.ts`).
 Client emitted to `src/generated/prisma`.
 
 | Model | Purpose |
@@ -582,15 +661,19 @@ Client emitted to `src/generated/prisma`.
 | `Track` | Catalog track (`@@unique(provider, providerTrackId)`; frozen `streamUrl/previewUrl` never playback input) |
 | `Like` | User–track favorite (`@@unique(userId, trackId)`) |
 | `Follow` | User–artist follow (`@@unique(userId, artistId)`) |
-| `RecentlyPlayed` | Play events (`@@index(userId, playedAt)`) |
+| `RecentlyPlayed` | Recently-played row — **one per (user, track)** (`@@unique([userId, trackId])`, `@@index(userId, playedAt)`); deliberately not a play-event log |
 | `SearchHistory` | Query log (`@@index(userId, searchedAt)`) |
 | `Playlist` | User playlist (title, description, artwork URL) |
 | `PlaylistTrack` | Membership (`position`, `addedAt`; dual uniques) |
 | `PlaybackState` | One row per user (`userId @unique`: provider, providerTrackId, position, revision, versioned session `queueSnapshot` JSON) |
 
-Migrations are purely additive to date; deploy explicitly via
-`prisma migrate deploy` — never auto-migrated at boot. New migrations fail
-the allowlist test closed until the rollback analysis is redone.
+Every migration to date is additive to the *schema*, with one reviewed
+exception: `20260926130000_recently_played_one_row_per_track` also deletes
+the duplicate `RecentlyPlayed` rows its new uniqueness requires (that
+delete, and the rollback note for each of the eight migrations, is recorded
+in the allowlist test). Deploy explicitly via `prisma migrate deploy` —
+never auto-migrated at boot. New migrations fail the allowlist test closed
+until the rollback analysis is redone.
 
 ## 14. Authentication architecture
 
@@ -605,6 +688,25 @@ the allowlist test closed until the rollback analysis is redone.
   `requireUser()` (throws `AuthenticationError`) / `getSessionUserId()`.
   Mutations require a user; the DAL rechecks ownership per resource.
 - Sign-out redirects to fixed `/`; no open redirects anywhere.
+- **The auth route re-anchors its request origin to the browser's host.**
+  `src/app/api/auth/[...nextauth]/route.ts` wraps `handlers.GET`/`POST` in
+  `toBrowserOrigin()`: when Next's `request.url` origin differs from
+  `x-forwarded-host ?? host` (Next 16 dev pins it to `http://localhost:3000`
+  from `resolve-routes.js`, regardless of the `Host` header), the handler is
+  handed a rebuilt `NextRequest` on the browser's host, otherwise it is
+  passed through untouched. Auth.js derives every URL it emits —
+  `signinUrl`, `callbackUrl`, the OIDC `redirect_uri`, and the post-callback /
+  sign-out redirect (`baseUrl: url.origin`) — from `request.url`, so without
+  this a phone opening `http://192.168.1.32:3000` is handed
+  `localhost:3000` links that resolve to the phone itself. The rewrite
+  changes the origin only: the scheme is read from `x-forwarded-proto` or
+  the request's own scheme and never guessed, so plain HTTP keeps
+  non-`Secure` cookies and `trustHost: true` remains Auth.js's documented
+  trust in host headers. No cookie flag, `SameSite` policy, safe origin or
+  redirect target is relaxed anywhere. The app's own `signInWith` /
+  `signOutUser` server actions were already correct (they build their URL
+  from `headers()`); this closes the `/api/auth/*` surface they share with
+  the default sign-in page.
 - Language preference (`src/lib/dal/locale.ts`): `getUserLocale` /
   `setUserLocale` on the nullable `User.locale` column — not a dedicated
   table. Null means "no explicit preference" (falls back to cookie, then
@@ -641,6 +743,28 @@ the allowlist test closed until the rollback analysis is redone.
   fallback; everything else (POST, `/api/*`, cross-origin incl.
   `googlevideo.com`, images) → network passthrough with zero worker
   overhead.
+- **Registration is feature-detected with an `in` test, and a truthiness
+  guard does not count.** `navigator.serviceWorker` is a `[SecureContext]`
+  interface: on a plain-HTTP origin — a LAN/IP host *and the deployed
+  production origin, which is served over plain HTTP* — the property is not
+  exposed at all, so the container is `undefined`. The first effect therefore
+  opens with `!("serviceWorker" in navigator)` before it may read
+  `navigator.serviceWorker`. `if (!container) return undefined` is correct
+  TypeScript and the unit tests passed straight over it, and the production
+  compiler still eliminated that branch as dead code, because it treats
+  `navigator.serviceWorker` as always defined. The shipped bundle consequently
+  evaluated `typeof container.register` on `undefined`, threw
+  `TypeError: Cannot read properties of undefined (reading 'register')` out of
+  a root-layout effect, and unmounted the tree in a PlayerHost
+  `app_initialized` / `app_shutdown` loop until the page was unusable. An `in`
+  test is a runtime presence check the compiler must keep — it is the form the
+  other two effects in this component already used. Because a source-level
+  test cannot see an eliminated branch, the invariant is held by two gates on
+  the built artifact: `bun run verify:client-bundle` fails if the compiled
+  `.register(` is not preceded by a `serviceWorker"in navigator` test, and
+  `e2e/pwa.spec.ts` runs the production bundle against a `navigator` with the
+  API removed (exactly the insecure-origin surface) and requires the shell to
+  render with no uncaught error and no `app_shutdown`.
 - **Cache version:** single `aurora-sw-v2:static`; activation deletes older
   `aurora-` caches, never foreign caches; no HTML ever cached.
 - **Update flow is deferred, never forced** (Phase 51). A new worker does not
@@ -761,6 +885,20 @@ playback → PlayerError → controller classification → recovery or terminal 
   cross-origin media/artwork).
 - **Auth/session protection:** JWT HttpOnly/SameSite=Lax cookies;
   server-side ownership enforcement; fixed sign-out target.
+- **Dev origin allowlist (`allowedDevOrigins`), development only.** Next
+  blocks cross-origin requests to dev-only endpoints (`/_next/hmr`,
+  `/__nextjs_font`) for any host other than `localhost`, so opening the dev
+  server from another device returned 403 and the app never hydrated.
+  `src/lib/config/dev-origins.ts` builds the list at config-eval time:
+  loopback always (`localhost`, `127.0.0.1`, `[::1]`) plus every non-internal
+  IPv4/IPv6 interface address the host actually holds, or exactly the entries
+  in `AURORA_DEV_ORIGINS` (comma/space separated) when that variable is set —
+  an empty value means loopback only. Entries are reduced to a hostname and a
+  bare `*` / `**` is refused, so the list can never widen to "every host that
+  can reach the port". `next.config.ts` spreads the key only when the list is
+  non-empty and only when `NODE_ENV === "development"`, so production headers
+  and CSP are byte-identical to before. Browser code keeps calling
+  same-origin relative URLs; nothing in `src/` may read this list.
 - **Playback URL handling:** memory-only ephemeral URLs; resolver accepts
   exact provider ids only; no generic fetch/proxy endpoint.
 - **SW cache boundaries:** statics only; never HTML/API/auth/provider/
@@ -1039,6 +1177,84 @@ rather than clearing it, an `isConnected` guard before returning focus, and a
 correctly anchored by every consumer instead of by each consumer's own
 wrapper.
 
+### 21.4 A menu has to be able to leave its row
+
+Four separate decisions decide whether an open menu is visible at all, and
+`position: absolute` answers exactly one of them — it says where the box is
+anchored, not whether the box survives the trip:
+
+1. **Positioning context.** The trigger's own `relative` wrapper is the
+   anchor: `TrackRow` / `ActionArea` → `relative` → trigger → menu
+   `absolute right-0 top-full mt-1.5`. No distant ancestor and no app-root
+   box is a positioning context, because a menu anchored to a box three
+   levels up slides with *that* box rather than with the row the user
+   clicked. Nothing is `fixed` for this purpose either: `fixed` on the queue's
+   sheet would re-anchor to the viewport while `presence-sheet-in`'s
+   `translateY(0)` still stands, which is both a containing block and a
+   clipping box.
+2. **Overflow.** Every ancestor between the surface and the page must be
+   `overflow: visible`. A surface that needs a clip for its own artwork or
+   rounded corners **splits its layers** instead of clipping its children: the
+   outer box rounds itself with `rounded-2xl` and stays `visible`, the
+   decorative child carries the gradient and the clip. `EntityHeader` and the
+   search `TopResultCard` are both shaped this way now — each used to carry
+   `overflow-hidden` on the menu's own host box, which cost 120px of a 162px
+   menu on the search card. `overflow-hidden` is never removed globally; only
+   the box that would cut a menu moves it.
+3. **Stacking and layer.** `z-dropdown` only, never `z-[…]`. The audit for
+   this is static (`ui/__tests__/layering.test.ts`) and behavioural
+   (`e2e/layering-presence.spec.ts`); Aurora Glass creates no stacking
+   context of its own that could trap a menu, and the app-shell root remains
+   the only common ancestor that isolates.
+4. **Direction.** `useMenuOpenUp` (`src/components/ui/menu-placement.ts`) is
+   the single place a menu decides which way to open. It measures the trigger
+   against the viewport and the **surface that is actually in the slot** —
+   not a guessed menu height — and keeps `BOTTOM_CLEARANCE_PX = 120` of room
+   for the player chrome (88px desktop bar, 112px phone mini player). It is
+   decided in a `useLayoutEffect`, before paint, so the surface never appears
+   on one side and then jumps; and it depends on its own inputs rather than
+   its own output, so it cannot flip in a loop.
+
+**Where the queue is different, and why it portals.** The queue's list is a
+scroll container, and a scroll container clips: the list is 419px tall and a
+row menu is ~200px, so a row anywhere near the middle has less room on one
+side than the menu needs. Flipping therefore cannot guarantee the menu
+survives, and layer separation inside the row cannot either — the clip comes
+from an ancestor the row lives in. The panel consequently publishes a **menu
+layer** as its last child (`pointer-events-none absolute inset-0 z-dropdown`,
+deliberately *not* `aria-hidden`, because hiding the container would hide
+every menu item from assistive technology) and `QueueItemMenu` renders its
+surface there, positioned by computed `top`/`bottom`/`right` against the
+layer. This keeps the surface inside the dialog — inside its focus trap and
+its stacking context — while taking it out of the scroller; a body-level
+`z-dropdown` portal would have landed behind the `z-dialog` panel. The
+`relative` wrapper around the trigger stays: it is still the trigger's
+positioning context and still half of the outside-click test.
+
+**And why it closes on scroll.** A surface positioned from a row inside a
+scroller is stale the moment that scroller moves; left alone it floats over
+rows it no longer belongs to. So the panel closes the menu on the scroller's
+`scroll` — registered in the capture phase, because a scroll event does not
+bubble — and on `resize`. This is the **one** scroll listener a component may
+register, recorded as a counted exception in
+`src/app/__tests__/scrollbar.test.ts`, and the distinction the rule exists to
+protect still holds: it registers only while the menu is open, removes itself
+when it closes, and measures nothing and re-renders nothing per frame.
+
+**Dismissal is scoped to the dialog that hosts the trigger.** "Outside" means
+outside *this* trigger's dialog, not outside any dialog. The queue panel is
+itself a dialog, so the older rule — exempt every `[role="dialog"]` — made
+every click inside the panel exempt and left the row menu with no way to be
+dismissed but Escape. The portaled create-playlist dialog, a *different*
+dialog, remains exempt exactly as intended.
+
+Asserted at three levels: the rule by unit test
+(`ui/__tests__/menu-placement.test.ts`), the class-level "this box does not
+clip a menu" claim by `ui/__tests__/menu-clipping.test.ts`, and the resolved
+geometry — no clipping ancestor, nothing outside the viewport, every
+non-disabled item the topmost thing at its own centre — by
+`e2e/menu-clipping.spec.ts` in a real browser at desktop and phone widths.
+
 ## 22. Testability
 
 - **Deterministic unit tests** (`vitest.config.mts`): `src/**/*.test.ts(x)`,
@@ -1173,9 +1389,12 @@ being exhausted.
 Reads that are cheap and cacheable are not behind a bucket, because a limit
 there buys nothing and costs a page a broken control. The guarded set is the
 expensive, state-changing, or provider-touching set: radio start/extend, unified
-search, playback resolve, recommendations, playlist mutation, sharing, playback
-recording, and the infinite-listening read (which degrades to
-`enabled: false` rather than failing).
+search, playback resolve, recommendations, playlist mutation, sharing, and
+playback recording. The infinite-listening **write** passes the same guard for
+its feature gate but carries no bucket (it is a preference toggle), and the
+infinite-listening **read** is deliberately unguarded: one indexed row read
+that degrades to `enabled: false` rather than failing, so a bucket there would
+break a control for nothing — which is the rule stated above.
 
 ## 25. Client-facing API contract (Phase 52)
 
@@ -1755,7 +1974,41 @@ Every failure at steps 1–4 leaves the element playing directly and untouched,
 which is the entirety of §33's "fail gracefully and keep audio playback
 functional". If step 5 itself throws, the element is not re-homed — that is what
 throwing means — and the inert chain is discarded. **There is no ordering in
-which this module can leave a listener with no sound.**
+which this module can leave a listener with no sound.** Step 5 *completing* on a
+source the browser will not let Web Audio read is a different matter — not an
+ordering failure but a delivery one — and §33.8 measures it instead of assuming
+it.
+
+**The gate in front of step 5, added after the first implementation of this
+module shipped with the promise broken.** Steps 1–4 were never the risky part.
+Step 5 was, because it was preceded by `await context.resume().catch(() =>
+undefined)` — an unconditional commitment of the one-way door, whether or not
+the browser had actually started the context. `resume()` does not fail
+uniformly without a user activation: Safari rejects with `NotAllowedError`,
+Chromium keeps the promise pending until a gesture. Both are swallowed
+identically by a `.catch`, and re-homing an element into a context that never
+started is **permanent silence**, because nothing in this feature ever calls
+`resume()` a second time.
+
+`engage()` is therefore split into an orchestrator and a `build()` that obeys
+three rules:
+
+- **Bounded resume.** `resume()` is awaited under `EQ_RESUME_TIMEOUT_MS`
+  (1 s). The successful case resolves in a microtask, so the bound never
+  delays an engagement that was going to work; it only caps the case where the
+  browser is saying "not yet". Without it `engage()` could sit in flight
+  indefinitely, and the store — which pushes on every change — would start a
+  second engagement alongside it.
+- **Re-home only on `context.state === "running"`.** Otherwise the inert chain
+  is discarded, the context is closed, the element is never touched, and the
+  attempt is *deferred* rather than failed: `isAwaitingGesture` becomes true
+  and the next pointer/key/touch gesture re-runs it. A suspended context at
+  page load is an ordinary lifecycle state, so it sets no `unsupportedReason`.
+- **One engagement at a time.** `inflight` serialises concurrent `build()`s.
+  A burst of configuration changes produces one context and one ten-filter
+  chain; previously the loser of that race called `createMediaElementSource`
+  second, threw `InvalidStateError`, and recorded a permanent `no-source`
+  failure for a perfectly healthy graph.
 
 `AudioGraphBridge` resolves the element through a registration rather than
 creating it. `getElement()` returning `null` is a *supported answer* — server
@@ -1767,7 +2020,10 @@ handling because it is the same shape as "this browser cannot process audio".
 The corollary of 33.2. Turning the EQ off sets every band to 0 dB and the preamp
 to 0 dB **and leaves the graph in place**. Disconnecting would be silence, not a
 bypass. `effectiveGraphState()` returns all-zero bands and a 0 dB preamp when
-disabled, and `bypass()` applies that through the normal parameter path.
+disabled, and `bypass()` applies that through the normal parameter path — ten
+`linearRampToValueAtTime` writes and one preamp write, on the nodes that are
+already running. It never closes the context, never disconnects the source and
+never recreates anything, so leaving bypass and returning costs nothing.
 
 `dispose()` exists and is **test-only**. `PlayerEngine.cleanup()` remains what
 stops audio.
@@ -1947,22 +2203,125 @@ untouched and the interface says the equalizer is unavailable *in the same breat
 as the failure*, because a notice reporting only the problem reads as "music is
 broken".
 
+A deferral is **not** in that list and is deliberately not reported as an
+unavailability: `isAwaitingGesture` is a fourth answer to `engage()`, meaning
+"the browser wants a gesture first, the graph is healthy, and it will retry by
+itself". `eq-store.push()` maps it to `unsupportedReason: null`. Reporting it as
+an error would put a failure notice in front of a listener whose equalizer is
+perfectly fine — on a page load where nothing can be playing anyway.
+
 Parameter changes are smoothed: `cancelScheduledValues` →
 `setValueAtTime(current)` → `linearRampToValueAtTime(target, now + 0.03)`. The
 anchor is not optional: a ramp with no anchor ramps from whatever the last event
 left, which on a fresh gain is 0 — an audible full-scale jump on the first drag.
-A non-finite value is refused rather than scheduled, because Web Audio throws on
-a NaN `AudioParam` rather than treating it as silence.
+The same treatment is applied to frequency and to Q, because a filter whose
+centre jumps while its gain is already changing produces an artefact that
+smoothing only one of the two does not fix.
 
-**The known unmitigated risk.** The stream URLs are cross-origin googlevideo and
-the element carries no `crossOrigin`. Per specification a
-`MediaElementAudioSourceNode` over a CORS-cross-origin resource whose response
-lacks CORS headers can output **silence**. This cannot be fixed here without
-breaking element loading, and it is not detectable in CI (jsdom has no Web
-Audio). The mitigations are the ordering guarantee in 33.2 — the element is never
-touched before the chain is fully wired — and the fact that every failure path
-leaves direct playback intact. **This is the one thing in the phase that could
-ship broken and no test here would say so.**
+`sanitizeGraphState(state, fresh)` guards what reaches those ramps, and it is
+**one rule per situation rather than one rule for all of them**:
+
+- **On apply, non-finite gain/frequency/Q is rejected, not rewritten.** It is
+  passed through so `ramp()` drops it before it can reach an `AudioParam`, and
+  the parameter keeps the number already in the graph — the last known good
+  value. Nothing is scheduled, so nothing moves to a curve the listener never
+  asked for.
+- **On a fresh build, non-finite frequency/Q is replaced** with the canonical
+  centre and `EQ_BAND_Q`. There is no "already in the graph" to keep at that
+  point, and a node's own defaults are 350 Hz / Q 1 — neither is one of
+  Aurora's bands.
+- **Finite values are clamped** to the model's own ranges: band gain
+  −12…+12 dB, preamp −12…0 dB. **Non-finite preamp becomes 0 dB** (unity),
+  which is the model's own `dbToLinearSafe` answer: a preamp nobody can describe
+  must neither amplify nor attenuate.
+
+Anything it had to touch is reported once as `eq_parameter_sanitized`.
+
+**The known unmitigated risk — measured, not hypothesised.** The stream URLs are
+cross-origin googlevideo and the element carries no `crossOrigin`. Per
+specification a `MediaElementAudioSourceNode` over a CORS-cross-origin resource
+whose response lacks CORS headers outputs **silence**, and on 2026-09-26 that was
+confirmed end to end in a real Chromium against a real provider stream. The
+element is healthy — `paused: false`, `readyState: 4`, `currentTime` advancing,
+`volume: 1`, `muted: false` — while an analyser tapped at the source node and at
+the preamp both read **exactly 0**; a `cors`-mode `fetch()` of the same URL
+fails with `TypeError: Failed to fetch`; and Chrome says so in the console:
+*"MediaElementAudioSource outputs zeroes due to CORS access restrictions."*
+
+The obvious fix was tested rather than assumed, and it does not work: setting
+`element.crossOrigin = "anonymous"` and reloading makes the browser log *"No
+'Access-Control-Allow-Origin' header is present on the requested resource"* and
+the element fail outright with `MEDIA_ERR_SRC_NOT_SUPPORTED` (errorCode 4,
+`NotSupportedError: Failed to load because no supported source was found`) —
+**strictly worse than the silence.** The attribute cannot be set.
+
+**Consequence, stated plainly.** On this media delivery path the equalizer can
+be engaged, every mode switch is still structurally correct, and none of it is
+audible. Nothing in mode switching can change that: `createMediaElementSource()`
+is irreversible, so the only correct fix is to decline the one-way door until
+the element's source is known to be CORS-clean — a bounded probe before step 5
+— and that in turn requires the graph to defer re-homing until a source exists,
+plus a graph→store channel for a failure that arrives after `engage()` has
+already resolved. That is a media-delivery change wearing an equalizer costume;
+it is recorded in `docs/scope-boundaries.md` as deliberately not built here.
+This remains the one thing in this feature that could ship broken — only it is
+now proven instead of suspected, and `e2e/equalizer-playback.spec.ts` records
+the measurement and Chrome's sentence on every run.
+
+### 33.9 The mode model, one atomic apply, latest-wins
+
+**The four modes are `flat`, `aurora-v`, `custom` and `bypass`** — the model's
+own names. `bypass` is **derived, never stored**: `effectiveMode(config,
+comparing)` returns `"bypass"` whenever the equalizer is off or the
+hold-to-compare control is held, and otherwise `config.presetId`. It is the one
+place the rule *"off means neutral"* is written down, which is why `enabled` and
+`bypass` cannot disagree: there is no `bypass` flag to contradict `enabled`,
+because it is computed from `enabled` at the moment it is asked for.
+
+**Mode is separate from parameters.** A mode names a *policy* for choosing bands
+and preamp — Flat → every band 0 dB and a 0 dB preamp (no stale V-Shape
+headroom); V-Shape → the shipped ten-band curve under the declared −3.5 dB
+preamp; Custom → the listener's edited bands under automatic headroom — and
+bands/preamp are the parameters that policy resolves to. `effectiveGraphState()`
+performs the resolution, `graph.apply(state)` performs **one atomic write** of
+the result, and `push()` is the only bridge between them. Custom is independent
+of the presets: Custom → V-Shape → Custom restores the edited curve rather than
+the preset's.
+
+**What a mode change is forbidden to do** — pause, stop, reset position,
+recreate the media element, replace an `AudioSource`, trigger a resolver
+request, reload a track, clear the queue, recreate the controller or recreate
+the `AudioContext` — is guaranteed structurally rather than by review: `apply()`
+has no path that constructs a node and no path that touches the element, and the
+only constructor in the module is `build()`, which runs once per engagement. A
+preset change is ten `AudioParam` writes to the nodes that already exist.
+
+**Latest request wins.** `push()` stamps each request with a monotonic
+`pushGeneration` and only the `.then` whose generation is still current writes
+`engaged`/`unsupportedReason` back to the store; `engage()` re-reads `requested`
+after each in-flight build and applies the newest one. A rapid
+Flat → V-Shape → Flat therefore lands on Flat in the graph *and* in the
+interface, and a stale attempt can never stamp an error over a successful one.
+
+**Diagnostics** — one event per transition, one per failure, primitive fields
+only (the logger drops URL-shaped and credential-shaped keys regardless):
+
+| Event | Level | Emitted when |
+|---|---|---|
+| `eq_mode_change_requested` | info | the derived mode changed |
+| `eq_preset_applied` | info | `choosePreset` committed a different curve |
+| `eq_state_applied` | info | a write actually moved the graph |
+| `eq_bypass_changed` | info | the live graph was neutralised |
+| `eq_audio_context_state` | info / warn | engaged, deferred to a gesture, declined |
+| `eq_audio_graph_health` | info | at engagement, and on a mode transition |
+| `eq_parameter_sanitized` | warn | a non-finite or out-of-range value was refused |
+| `eq_transition_error` | warn | a parameter write threw |
+| `eq_state_reverted` | warn | the last-known-good curve was restored |
+
+`eq_audio_graph_health` is deliberately a *transition* check, not a per-frame
+one: `health()` reads `filterCount`, `contextState`, `preampConnected` and
+`awaitingGesture`, and runs where those being wrong would matter — at
+engagement and on a mode change.
 
 ## ARCHITECTURAL INVARIANTS
 
@@ -2164,7 +2523,17 @@ ship broken and no test here would say so.**
     no playback import in any `eq-*` module) and behaviourally by
     `src/lib/audio/__tests__/eq-graph.test.ts`, which drives a fake
     `AudioContext` and asserts that a failed engagement never touches the
-    element.
+    element, and by
+    `src/lib/audio/__tests__/eq-store.test.ts`, which drives the same fake
+    through the store and asserts the whole chain — an action to an `AudioParam`
+    — on one context and one set of ten nodes. The mode model is
+    `flat`/`aurora-v`/`custom`/`bypass`, where `bypass` is derived by
+    `effectiveMode()` from `enabled` and `comparing` rather than stored, so
+    there is no second flag that could contradict `enabled`; `push()` carries a
+    monotonic generation so the latest requested state wins; and `build()` only
+    re-homes the element once `AudioContext.state === "running"`, deferring to
+    the next user gesture otherwise, because re-homing into a context that
+    never started is the one path to permanent silence and it is now closed.
 39. **Headroom is measured from the real transfer function, and saturation is
     reported rather than hidden.** `peakingCoefficients()` produces the numbers
     handed to the node *and* the numbers the headroom arithmetic evaluates, so
@@ -2245,6 +2614,26 @@ ship broken and no test here would say so.**
     repeat; a user collection that reaches a component holding two entries for
     one song is a bug upstream, and hiding it in a render would leave the
     database wrong while making the symptom disappear.
+42. **An open menu is painted whole, where its trigger is.** Four claims, and
+    all four are the responsibility of whoever adds a menu: the trigger's own
+    `relative` wrapper is the positioning context (no app-root box, no
+    `fixed`); no ancestor between the surface and the page carries a clip, so
+    a host that needs `overflow-hidden` for artwork **splits layers** rather
+    than clipping its children; overlap is resolved with the `z-dropdown`
+    token, never a number; and the direction comes from `useMenuOpenUp` alone,
+    measured from the trigger and the surface actually in the slot. A surface
+    that has to escape a scroll container escapes it by rendering into a
+    layer inside the same panel — never into `<body>`, which would drop it out
+    of the dialog's focus trap and behind the panel — and then closes when
+    that container scrolls, because a menu anchored to a row it can no longer
+    see is a menu about the wrong row. "Outside click" is scoped to the dialog
+    that *hosts* the trigger, so a panel that is itself a dialog does not
+    exempt its own contents. Enforced by
+    `src/components/ui/__tests__/menu-placement.test.ts` (the rule),
+    `src/components/ui/__tests__/menu-clipping.test.ts` (the clip classes),
+    `src/components/player/__tests__/queue-panel.test.tsx` (the layer and the
+    three dismissals), `e2e/menu-clipping.spec.ts` (the resolved geometry), and
+    §21.4.
 
 ---
 

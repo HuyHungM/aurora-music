@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { setPlaylistVisibilityAction } from "@/app/actions/playlist";
 import { Dialog, DialogTitle, DialogClose, DialogActions } from "@/components/ui/dialog";
@@ -27,6 +27,92 @@ import type { Playlist, PlaylistVisibility } from "@/lib/domain";
  * This is a label, not an animation, so it is not gated on reduced motion.
  */
 const COPIED_RESET_MS = 2400;
+
+/** No-op subscription: a platform's share support cannot change mid-session. */
+function subscribeNever(): () => void {
+  return () => undefined;
+}
+
+function getNativeShareSupport(): boolean {
+  return typeof navigator !== "undefined" && typeof navigator.share === "function";
+}
+
+/**
+ * Copies through `document.execCommand("copy")` for when the async clipboard
+ * API is not there to ask.
+ *
+ * `navigator.clipboard` is a SECURE-CONTEXT-ONLY API: on a plain-HTTP origin -
+ * which is exactly how Aurora is opened from another device at
+ * `http://<lan-ip>:3000` during development - it is `undefined`. Without this
+ * path the product's only share control reports "copy failed" on every attempt
+ * while the URL sits right there in the field beside it, so sharing a playlist
+ * from a phone on the LAN simply does not work.
+ *
+ * Returns `false` instead of throwing so the caller always falls through to
+ * the honest error message and the read-only URL field stays the documented
+ * manual remedy (select it, press Ctrl+C) for a browser that refuses both.
+ */
+function legacyCopy(text: string): boolean {
+  if (
+    typeof document === "undefined" ||
+    typeof document.execCommand !== "function"
+  ) {
+    return false;
+  }
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.setAttribute("aria-hidden", "true");
+  // Off-screen rather than `display: none`: a hidden element is not
+  // selectable in some browsers, and an unselectable field copies nothing.
+  field.style.position = "fixed";
+  field.style.top = "0";
+  field.style.left = "-9999px";
+  document.body.appendChild(field);
+  const selection = document.getSelection();
+  const restore =
+    selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  field.select();
+  field.setSelectionRange(0, text.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  field.remove();
+  if (restore && selection) {
+    // Leave the page's own selection as it was: the caller's dialog is open
+    // and something in it may already be selected.
+    selection.removeAllRanges();
+    selection.addRange(restore);
+  }
+  return copied;
+}
+
+/**
+ * Whether the platform has a share sheet, read as an external store.
+ *
+ * `navigator.share` does not exist on the server, so this cannot simply be
+ * evaluated during the first render. The obvious fix - `useState(false)` plus a
+ * `useEffect` that probes and sets - is what the React Compiler lint rejects as
+ * a cascading render, and it is right to: the dialog would paint once with no
+ * share button, then again with one, for a value that was knowable up front.
+ *
+ * `useSyncExternalStore` is the codebase's established answer to "is this real,
+ * and is this the server?" (the PWA install prompt and the MusicEngine bindings
+ * use the same primitive for the same reason). React guarantees the *client*
+ * getter is not consulted while hydrating, so the first paint always agrees with
+ * the server's HTML and there is no mismatch to reconcile.
+ *
+ * The server snapshot is `false`, the conservative direction: SSR emits no
+ * share button, and a platform that cannot open anything is worse off with one
+ * than without. A missing button is an absence; a broken one is a promise the
+ * OS will not keep.
+ */
+function useCanNativeShare(): boolean {
+  return useSyncExternalStore(subscribeNever, getNativeShareSupport, () => false);
+}
 
 /**
  * Owner-only playlist sharing (Phase 47).
@@ -86,7 +172,7 @@ export function PlaylistShareControl({
    */
   const [failedVisibility, setFailedVisibility] = useState<PlaylistVisibility | null>(null);
   const [copied, setCopied] = useState(false);
-  const [canNativeShare, setCanNativeShare] = useState(false);
+  const canNativeShare = useCanNativeShare();
   const stateId = useId();
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -125,21 +211,14 @@ export function PlaylistShareControl({
       : null;
 
   /**
-   * Feature detection, in an effect, on purpose. `navigator.share` does not
-   * exist during SSR, so reading it during the first render would either throw
-   * or produce a button that vanishes on hydration - which is worse than a
-   * button that appears a frame later, because the user may already have
-   * looked. `false` is the safe default: a missing share button is an absence,
-   * a wrongly-offered one is a promise the platform will not keep.
-   */
-  useEffect(() => {
-    setCanNativeShare(typeof navigator.share === "function");
-  }, []);
-
-  /**
    * "Copied" is a temporary claim, so it has to expire. Without this the
    * button claimed a copy had happened for as long as the dialog stayed open,
    * including after the user had copied something else entirely.
+   *
+   * The reset happens in a timer callback, which is an external system
+   * reporting back rather than a synchronous setState in the effect body - the
+   * distinction the same lint draws for `canNativeShare`, which had to be
+   * `useSyncExternalStore` instead.
    */
   useEffect(() => {
     if (!copied) return;
@@ -183,16 +262,29 @@ export function PlaylistShareControl({
     if (!shareUrl) {
       return;
     }
+    // `navigator.clipboard` only exists in a secure context, so on the plain
+    // HTTP LAN origin a phone opens during development it is absent rather
+    // than merely restricted. Both paths are tried before reporting failure.
+    const clipboard =
+      typeof navigator !== "undefined" ? navigator.clipboard : undefined;
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
-      } else {
+      if (clipboard?.writeText) {
+        await clipboard.writeText(shareUrl);
+      } else if (!legacyCopy(shareUrl)) {
         setError(t("playlistShare.copyError"));
         return;
       }
       setError(null);
       setCopied(true);
     } catch {
+      // A rejected write is usually a denied permission; the synchronous path
+      // does not consult that permission, so it is worth one attempt before
+      // telling the person the copy failed.
+      if (legacyCopy(shareUrl)) {
+        setError(null);
+        setCopied(true);
+        return;
+      }
       setError(t("playlistShare.copyError"));
     }
   }, [shareUrl, t]);
@@ -235,16 +327,30 @@ export function PlaylistShareControl({
     return (
       <Button
         type="button"
-        variant={selected ? "primary" : "ghost"}
+        // The selected option is NOT `variant="primary"`. An accent fill is
+        // this design system's loudest treatment, and it is spent on exactly
+        // one thing per screen: the action you most want taken. Here that is
+        // "Copy link". Painting the selected segment in the same fill put two
+        // accent buttons in one dialog and left the reader with no answer to
+        // "which of these do I press?" - on top of rendering a 14px semibold
+        // label at ~4.2:1, which is the accent-foreground token's contrast
+        // everywhere in the product and not a property of this control.
+        //
+        // `secondary` is a raised neutral pill, which on the `bg-surface-2`
+        // track reads as selected without competing. Selection is carried by
+        // four independent signals, so it survives greyscale: this surface, the
+        // `font-semibold`, the globe/lock in the sentence below, and
+        // `aria-pressed` for assistive technology.
+        variant={selected ? "secondary" : "ghost"}
         size="sm"
         aria-pressed={selected}
+        className={selected ? "min-w-0 flex-1 font-semibold" : "min-w-0 flex-1"}
         // Both options are disabled while a request is in flight, not just the
         // one being pressed. There is only one meaningful action available at
         // that moment, and leaving the other enabled would let a second click
         // race the first into a contradictory pair of writes.
         disabled={isSubmitting}
         onClick={() => void changeVisibility(option)}
-        className="min-w-0 flex-1"
       >
         {/* The label does NOT swap to the pending message. A segmented control
             whose option text changes mid-press stops telling the user which
@@ -270,10 +376,15 @@ export function PlaylistShareControl({
       </Button>
 
       <Dialog open={open} onClose={close} label={t("playlistShare.shareTitle")}>
-        <div className="relative">
-          <DialogTitle>{t("playlistShare.shareTitle")}</DialogTitle>
-          <DialogClose onClick={close} />
-        </div>
+        {/* The title and the close control are direct children of the panel, NOT
+            wrapped in a `relative` div. The panel is itself `relative`, and
+            `DialogClose` is `absolute right-4 top-4` - so a positioned wrapper
+            here would become the containing block instead and drop the ✕ below
+            the title, into the identity row, where it reads as part of the
+            playlist's own controls. Every sibling playlist dialog places these
+            two as direct children for the same reason. */}
+        <DialogTitle>{t("playlistShare.shareTitle")}</DialogTitle>
+        <DialogClose onClick={close} />
 
         <div className="mt-4 flex flex-col gap-5">
           {/* WHAT. The dialog never used to say which playlist it was about,

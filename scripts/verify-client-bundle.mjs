@@ -1,18 +1,22 @@
 /**
  * Client-bundle security and size gate (Phase 24, extended in Phase 52).
  *
- * Two jobs, both after `bun run build`:
+ * Three jobs, all after `bun run build`:
  *
  * 1. SECURITY. Scans production client chunks for server-only implementation
  *    details that must never reach the browser.
- * 2. PERFORMANCE BUDGETS. Measures what the client actually ships and fails if
+ * 2. SECURE-CONTEXT REGRESSION. Requires a `"serviceWorker" in navigator`
+ *    presence test before any compiled `.register(` call, because a
+ *    source-level truthiness guard on `navigator.serviceWorker` is eliminated
+ *    by the production compiler (see scanServiceWorkerGuard below).
+ * 3. PERFORMANCE BUDGETS. Measures what the client actually ships and fails if
  *    it has grown past a recorded ceiling.
  *
  *   bun run verify:client-bundle [chunksDir]
  *   AURORA_RECORD_BUDGETS=1 bun run verify:client-bundle   # print new ceilings
  *
- * Exit 0 = clean, 1 = violation (secret leak, or budget exceeded),
- * 2 = misconfiguration (e.g. chunks dir missing — build first).
+ * Exit 0 = clean, 1 = violation (secret leak, missing presence test, or budget
+ * exceeded), 2 = misconfiguration (e.g. chunks dir missing — build first).
  * No dependencies, no network, Windows/PowerShell-safe.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -183,6 +187,48 @@ export function scanChunks(directory) {
   return { files: files.length, violations };
 }
 
+/**
+ * Secure-context service-worker registration gate.
+ *
+ * `navigator.serviceWorker` is a [SecureContext] interface: on a plain-HTTP
+ * origin (a LAN/IP host, and the production deployment served over http://)
+ * the property is not exposed at all, so the container is `undefined` and
+ * `container.register` throws.
+ *
+ * This gate exists because a SOURCE-LEVEL GUARD IS NOT SUFFICIENT. The
+ * registration effect guarded with `if (!container) return undefined`, which
+ * is correct and which unit tests pass, and the production compiler still
+ * eliminated that branch as dead code — the shipped bundle evaluated
+ * `typeof container.register` on `undefined` and crashed the root layout in a
+ * PlayerHost init/shutdown loop
+ * (`TypeError: Cannot read properties of undefined (reading 'register')`).
+ * A test that runs the TypeScript source can never see that; only a check on
+ * the built chunks can.
+ *
+ * So: in every client chunk that both references `serviceWorker` and calls
+ * `.register(`, a `"serviceWorker" in navigator` presence test must occur
+ * BEFORE the call. The `in` form is what survives minification (a truthiness
+ * guard on the property does not), and it is the same feature detect the
+ * other two effects in this component use.
+ */
+export function scanServiceWorkerGuard(directory) {
+  const files = chunkFiles(directory);
+  const violations = [];
+  let guarded = 0;
+  for (const file of files) {
+    const content = readFileSync(file, "utf8");
+    if (!content.includes("serviceWorker")) continue;
+    const call = content.indexOf(".register(");
+    if (call === -1) continue;
+    guarded += 1;
+    const presenceTest = content.indexOf('serviceWorker"in navigator');
+    if (presenceTest === -1 || presenceTest > call) {
+      violations.push({ file, presenceTest, call });
+    }
+  }
+  return { files: files.length, guarded, violations };
+}
+
 function main() {
   const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
   const staticDir = process.argv[2]
@@ -204,6 +250,7 @@ function main() {
     process.exit(2);
   }
   const { files, violations } = scanChunks(chunks);
+  const swGuard = scanServiceWorkerGuard(chunks);
 
   // Size budgets are measured across the whole static tree, not just `chunks`:
   // CSS and any media-sized assets live beside the chunks, and a budget that
@@ -220,6 +267,19 @@ function main() {
     for (const violation of violations) {
       console.error(
         `verify-client-bundle: FORBIDDEN "${violation.marker}" in ${violation.file}\n  ${violation.reason}.`,
+      );
+    }
+    process.exit(1);
+  }
+
+  if (swGuard.violations.length > 0) {
+    for (const violation of swGuard.violations) {
+      console.error(
+        `verify-client-bundle: service-worker registration in ${violation.file} is not preceded by a ` +
+          `"serviceWorker" in navigator presence test (test at ${violation.presenceTest}, ` +
+          `.register( at ${violation.call}).\n` +
+          `  On a plain-HTTP origin navigator.serviceWorker is undefined, so an unguarded ` +
+          `container.register throws and unmounts the app.`,
       );
     }
     process.exit(1);
@@ -275,7 +335,8 @@ function main() {
   }
 
   console.log(
-    `verify-client-bundle: OK (${files} client chunks scanned, ${measurement.files} assets measured).`,
+    `verify-client-bundle: OK (${files} client chunks scanned, ${measurement.files} assets measured, ` +
+      `${swGuard.guarded} service-worker registration chunk(s) presence-tested).`,
   );
 }
 

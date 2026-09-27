@@ -184,6 +184,46 @@ export function parseDeezerUrl(input: string): DetectedSource | null {
 }
 
 /**
+ * The hostnames the three parsers above accept, in one place.
+ *
+ * It lives beside them rather than beside any caller because "only explicitly
+ * supported Spotify/YouTube hosts are recognised" is a claim about this module
+ * as a whole. A caller that kept its own copy would be a second answer that
+ * can silently drift from the parsers: the caller could call a host a provider
+ * link and the parser would then refuse it, or the parser could start
+ * accepting a host the caller still reports as foreign.
+ */
+const PROVIDER_HOSTS: ReadonlySet<string> = new Set([
+  "youtube.com",
+  "music.youtube.com",
+  "youtu.be",
+  "open.spotify.com",
+  "deezer.com",
+]);
+
+/**
+ * The normalized provider host of an input that parses as a URL on an
+ * allowlisted host, else null.
+ *
+ * The host question only. Nothing is read from the path or query, so this
+ * extracts no resource identity and cannot become a second parser: callers
+ * that need an id still go through `detectSource`. What it is for is
+ * classification — telling "a provider link we cannot read" (a truncated id,
+ * an `/artist/` URL no parser accepts) apart from "a link to somewhere else"
+ * — so an unsupported link gets a truthful message instead of being called
+ * malformed, and so nothing outside the allowlist is ever described as an
+ * Aurora link.
+ */
+export function providerHostOf(input: string): string | null {
+  const url = parseUrl(input);
+  if (!url) {
+    return null;
+  }
+  const host = hostOf(url);
+  return PROVIDER_HOSTS.has(host) ? host : null;
+}
+
+/**
  * Detects the provider source for a supported URL, or null for plain-text
  * queries, malformed URLs, and unsupported domains. Deterministic: parser
  * order cannot change the result because provider host sets are disjoint.

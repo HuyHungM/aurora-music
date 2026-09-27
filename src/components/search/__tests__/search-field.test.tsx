@@ -257,3 +257,68 @@ describe("SearchField: accessibility", () => {
     expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
   });
 });
+
+/**
+ * The "Spotify link detected" / "YouTube link detected" hint (feature §10).
+ *
+ * The property that matters is not the wording but WHERE the work happens:
+ * classification is pure string comparison against the value already in
+ * state, so the hint costs zero requests. Search here is submit-driven, so
+ * this is also the only client-side signal a user gets before submitting —
+ * it must therefore appear for a supported link and stay silent for anything
+ * else, rather than promise a resolution the server will then refuse.
+ */
+describe("SearchField: provider link detection", () => {
+  const TEMPLATE = "{provider} link detected";
+
+  it("announces a Spotify link as soon as one is in the field", async () => {
+    const user = userEvent.setup();
+    renderField({ linkDetectedTemplate: TEMPLATE });
+    await user.type(input(), "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQ3");
+    expect(screen.getByRole("status").textContent).toBe("Spotify link detected");
+  });
+
+  it("announces a YouTube link from any supported host", async () => {
+    const user = userEvent.setup();
+    renderField({ linkDetectedTemplate: TEMPLATE });
+    await user.type(input(), "https://youtu.be/dQw4w9WgXcQ?si=abc");
+    expect(screen.getByRole("status").textContent).toBe("YouTube link detected");
+  });
+
+  it("says nothing for ordinary text", async () => {
+    const user = userEvent.setup();
+    renderField({ linkDetectedTemplate: TEMPLATE });
+    await user.type(input(), "Sơn Tùng M-TP");
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("says nothing for a link this build cannot resolve", async () => {
+    const user = userEvent.setup();
+    renderField({ linkDetectedTemplate: TEMPLATE });
+    await user.type(input(), "https://open.spotify.com/artist/6Ub0qfYbXNoUvufHmuvafC");
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("is a hint, not a second search: detecting issues no navigation", async () => {
+    const user = userEvent.setup();
+    renderField({ linkDetectedTemplate: TEMPLATE });
+    await user.type(input(), "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).not.toBe("");
+  });
+
+  it("is absent from the header field, which keeps its existing layout", async () => {
+    renderField({ variant: "header", linkDetectedTemplate: TEMPLATE });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("keeps the live region mounted so a screen reader can announce into it", () => {
+    // A node that is inserted *with* its text is frequently missed by screen
+    // readers; the region has to exist first and change afterwards. That is
+    // also why an empty region renders here rather than nothing at all.
+    renderField({ linkDetectedTemplate: TEMPLATE });
+    const region = screen.getByRole("status");
+    expect(region.textContent).toBe("");
+    expect(region.tagName).toBe("P");
+  });
+});

@@ -70,7 +70,16 @@
  * pure factory that a test can drive with a fake.
  */
 
-import { EQ_BAND_FREQUENCIES, EQ_BAND_Q, dbToLinear } from "./eq";
+import { logger } from "@/lib/diagnostics/logger";
+import {
+  EQ_BAND_FREQUENCIES,
+  EQ_BAND_GAIN_MAX_DB,
+  EQ_BAND_GAIN_MIN_DB,
+  EQ_BAND_Q,
+  PREAMP_MAX_DB,
+  PREAMP_MIN_DB,
+  dbToLinear,
+} from "./eq";
 
 /* ==========================================================================
    DEPENDENCY SEAMS
@@ -131,6 +140,30 @@ export interface EqGraphDeps {
   getElement: () => unknown;
   /** Reported when the graph declines to engage. */
   onUnsupported?: (reason: EqUnsupportedReason) => void;
+  /**
+   * How long `engage()` waits for `AudioContext.resume()` to settle before it
+   * stops waiting (test seam for {@link EQ_RESUME_TIMEOUT_MS}).
+   *
+   * The wait is BOUNDED deliberately. A `resume()` issued without a user
+   * activation does not reject in every browser - Chromium keeps the promise
+   * pending until a gesture arrives - and an unbounded `await` there would
+   * leave `engage()` in flight forever. While it was in flight the store would
+   * start another one on the next configuration change, and each of those
+   * would build a second `AudioContext` and a second ten-filter chain.
+   */
+  resumeTimeoutMs?: number;
+  /**
+   * Subscribes to "the browser has just been given a user gesture", returning
+   * the function that unsubscribes (§23's retry path).
+   *
+   * It is a dependency for the same reason `createContext` is: this module is
+   * tested in Node, where there is no `document` to attach anything to, and a
+   * graph whose only retry mechanism were a hard-coded `document.addEventListener`
+   * would be untestable at the exact point where getting it wrong costs the
+   * listener their audio. Returning nothing (or a no-op disposer) simply means
+   * the graph never retries, which is a supported answer rather than a crash.
+   */
+  onUserGesture?: (handler: () => void) => () => void;
 }
 
 export type EqUnsupportedReason =
@@ -154,6 +187,28 @@ export type EqUnsupportedReason =
  */
 export const EQ_RAMP_SECONDS = 0.03;
 
+/**
+ * How long a single engagement attempt waits for the context to start
+ * (bugfix: mode switching without audio loss).
+ *
+ * WHY A BOUND EXISTS AT ALL. `AudioContext.resume()` is the last thing that
+ * happens before the element is re-homed, and its behaviour when it is called
+ * without a user activation is NOT uniform: Safari rejects, Chromium keeps the
+ * promise pending until the first gesture. An unbounded `await` on the pending
+ * form never returns, so `engage()` would sit in flight indefinitely and the
+ * store - which pushes on every configuration change - would start another
+ * engagement alongside it. Two engagements mean two contexts, two ten-filter
+ * chains, and two calls to `createMediaElementSource` on one element, of which
+ * exactly one can succeed.
+ *
+ * WHY ONE SECOND. The successful case resolves in a microtask, so this never
+ * delays an engagement that was going to work; it only caps the case where the
+ * browser is telling us, politely, "not yet". At the timeout the attempt gives
+ * up WITHOUT touching the element, and the next user gesture starts a fresh
+ * one under conditions the browser will accept.
+ */
+export const EQ_RESUME_TIMEOUT_MS = 1_000;
+
 export interface EqGraphState {
   bands: readonly { frequency: number; gain: number; q: number }[];
   preampDb: number;
@@ -168,6 +223,30 @@ export class EqGraph {
   private disposed = false;
   private failure: EqUnsupportedReason | null = null;
 
+  /** The newest configuration anyone has asked for. The latest one wins. */
+  private requested: EqGraphState | null = null;
+  /**
+   * The single engagement in flight, if there is one.
+   *
+   * WITHOUT THIS the store's fire-and-forget `push()` starts a second full
+   * engagement the moment the first one has to wait - which it always has to,
+   * because `engage()` awaits `resume()`. The second one builds a second
+   * context and a second chain, then loses the race for the element and
+   * reports `no-source`, which `decline()` stores PERMANENTLY. One in-flight
+   * build, ever.
+   */
+  private inflight: Promise<boolean> | null = null;
+  /**
+   * Set when the graph is deliberately waiting for a user gesture rather than
+   * having failed. Not a `failure`: nothing is wrong, the browser has simply
+   * not been given a gesture yet, and the attempt repeats on the next one.
+   */
+  private awaitingGesture = false;
+  /** Detaches the one-shot gesture listeners. */
+  private gestureDetach: (() => void) | null = null;
+  /** The last curve known to have been written successfully (§19 rollback). */
+  private lastApplied: EqGraphState | null = null;
+
   constructor(private readonly deps: EqGraphDeps) {}
 
   get isEngaged(): boolean {
@@ -178,9 +257,41 @@ export class EqGraph {
     return this.disposed;
   }
 
+  /**
+   * True while the graph is waiting for a user gesture before it may open the
+   * one-way door. `false` in every state that a caller should report as an
+   * error.
+   */
+  get isAwaitingGesture(): boolean {
+    return this.awaitingGesture;
+  }
+
   /** Why the EQ is not running, or `null` when it is (or has not tried). */
   get unsupportedReason(): EqUnsupportedReason | null {
     return this.failure;
+  }
+
+  /**
+   * A cheap structural health check (§23), for diagnostics rather than for
+   * control flow. It reads state that already exists - no scheduling, no
+   * traversal of the node graph, nothing that could run per frame.
+   */
+  health(): {
+    engaged: boolean;
+    contextState: string;
+    filterCount: number;
+    preampConnected: boolean;
+    awaitingGesture: boolean;
+    failure: EqUnsupportedReason | null;
+  } {
+    return {
+      engaged: this.engaged,
+      contextState: this.context?.state ?? "none",
+      filterCount: this.filters.length,
+      preampConnected: this.preamp !== null,
+      awaitingGesture: this.awaitingGesture,
+      failure: this.failure,
+    };
   }
 
   /** The live sample rate, or `null` before engagement. */
@@ -196,27 +307,112 @@ export class EqGraph {
   /**
    * Brings the graph up and points it at the current configuration.
    *
-   * IDEMPOTENT, and deliberately so: the store may call this on every
-   * configuration change including the ones that happen before the user has
-   * interacted with anything, and each of those must be a no-op rather than a
-   * second context (addendum §27, §28).
+   * THREE QUESTIONS, ANSWERED SEPARATELY. The previous implementation asked
+   * only the first, and conflating them is what made mode switching lose
+   * audio:
+   *
+   *   1. is the graph BUILT?              -> `build()`, once, ever
+   *   2. is it TOLD the current curve?    -> `apply()`, on every change
+   *   3. is the context PRODUCING audio?  -> checked before the one-way door
+   *
+   * Question 1 used to swallow 2: `engage()` returned `this.engaged` when the
+   * graph was already up, and because the store routes EVERY enabled-state
+   * change through this method, a preset switch, a band drag, an A/B release
+   * and an EQ re-enable all updated the interface and nothing else. The graph
+   * kept playing whatever curve it already had - after a bypass, permanently
+   * flat.
+   *
+   * IDEMPOTENT about building (addendum §27, §28): the store may call this on
+   * every configuration change, including ones that happen before the user has
+   * interacted with anything, and none of those may produce a second context.
    *
    * Returns whether audio is actually being processed. `false` is a supported
    * outcome, not an error: the caller keeps playing and the interface says the
    * EQ is unavailable.
    */
   async engage(state: EqGraphState): Promise<boolean> {
-    if (this.disposed || this.engaged) {
-      return this.engaged;
+    // The newest request always wins, even when it arrives while a build is
+    // still in flight (§18).
+    this.requested = state;
+
+    if (this.disposed) {
+      return false;
     }
+
+    if (this.engaged) {
+      this.applyRequested();
+      return true;
+    }
+
     if (this.failure) {
       return false;
     }
 
+    // ONE BUILD AT A TIME. Waiting here rather than starting alongside the
+    // in-flight attempt is what stops a second `AudioContext`, a second
+    // ten-filter chain, and a second `createMediaElementSource` call on an
+    // element that can only ever be associated with one.
+    if (this.inflight) {
+      const ok = await this.inflight;
+      if (ok) {
+        this.applyRequested();
+      }
+      return ok;
+    }
+
+    const build = this.build(state);
+    this.inflight = build;
+    try {
+      const ok = await build;
+      if (ok) {
+        this.applyRequested();
+      }
+      return ok;
+    } finally {
+      if (this.inflight === build) {
+        this.inflight = null;
+      }
+    }
+  }
+
+  /**
+   * Writes the NEWEST requested configuration, if the graph is up to take it.
+   *
+   * The newest rather than the one that was in flight when the build started:
+   * a listener who moves two sliders in the half second it takes to engage
+   * should hear the second value, not the first.
+   */
+  private applyRequested(): void {
+    if (this.disposed || !this.engaged || !this.requested) {
+      return;
+    }
+    this.apply(this.requested);
+  }
+
+  /**
+   * One attempt at bringing the graph up. Never called twice concurrently.
+   *
+   * THE ORDER IS THE WHOLE DESIGN. The element is the LAST thing touched and
+   * it is touched exactly once: `createMediaElementSource` cannot be undone,
+   * so every step that can fail has to happen while the element is still
+   * playing directly.
+   */
+  private async build(state: EqGraphState): Promise<boolean> {
     const element = this.deps.getElement();
     if (element === null || element === undefined) {
       return this.decline("no-element");
     }
+
+    // A context created before the first user gesture cannot be started, and
+    // a started context is the precondition for everything below. Deferring
+    // HERE means no context is allocated at all on a page whose equalizer is
+    // on by persistence: nothing can be playing before a gesture, so nothing
+    // is lost by waiting for one.
+    if (!userActivationSeen()) {
+      return this.awaitGesture("no user activation yet");
+    }
+
+    const safeState = sanitizeGraphState(state, true);
 
     let context: EqAudioContext;
     try {
@@ -232,7 +428,7 @@ export class EqGraph {
     let filters: EqBiquadNode[] = [];
     let preamp: EqGainNode | null = null;
     try {
-      filters = state.bands.map((band) => {
+      filters = safeState.bands.map((band) => {
         const node = context.createBiquadFilter();
         node.type = "peaking";
         ramp(node.frequency, band.frequency, context.currentTime);
@@ -264,15 +460,31 @@ export class EqGraph {
       return this.decline("no-web-audio");
     }
 
-    // --- THE ONE-WAY DOOR --------------------------------------------------
-    // iOS/Safari (addendum §34): the context may start suspended, and audio
-    // stays silent until it is resumed from a user gesture. The resume is
-    // awaited and its failure is tolerated rather than propagated - the graph
-    // is still correctly wired, the context will start on the next gesture, and
-    // throwing here would turn a normal mobile lifecycle into an error state.
-    // Critically, this never calls `play()`: resuming a context is not
-    // playback, so it cannot trip an autoplay policy or start a second stream.
-    await context.resume().catch(() => undefined);
+    // --- THE ONE-WAY DOOR, AND THE GUARD IN FRONT OF IT --------------------
+    // Resuming is not playback: it never calls `play()`, so it cannot trip an
+    // autoplay policy or start a second stream (addendum §34).
+    //
+    // It CAN fail, and it CAN simply not settle - Chromium keeps the promise
+    // pending until a gesture arrives, Safari rejects with NotAllowedError.
+    // The previous implementation treated both as "close enough": it swallowed
+    // the failure, waited however long the browser felt like, and re-homed the
+    // element regardless. Re-homing into a context that never started is
+    // SILENCE, and it is unrecoverable - nothing in this feature ever calls
+    // `resume()` a second time, and `engage()` will not build again once the
+    // graph reports itself engaged. No mode switch could bring the audio back.
+    //
+    // So the door is opened only when the context has actually said `running`.
+    await awaitResume(context, this.deps.resumeTimeoutMs ?? EQ_RESUME_TIMEOUT_MS);
+
+    if (context.state !== "running") {
+      // The element was NOT touched, so it is still playing directly. Discard
+      // the inert chain, release the context, and try again on the next
+      // gesture - by which point the browser has a reason to say yes.
+      safeDisconnect(filters);
+      safeDisconnectOne(preamp);
+      void context.close().catch(() => undefined);
+      return this.awaitGesture(`context is ${context.state}`);
+    }
 
     let source: EqNode;
     try {
@@ -298,8 +510,77 @@ export class EqGraph {
     this.preamp = preamp;
     this.source = source;
     this.engaged = true;
-    this.apply(state);
+    this.awaitingGesture = false;
+    this.lastApplied = safeState;
+    logger.info("Equalizer engaged", {
+      event: "eq_audio_context_state",
+      audioContextState: context.state,
+      filterCount: filters.length,
+      preamp: round(safeState.preampDb),
+      maxBandGain: round(maxBandGainDb(safeState.bands)),
+      engaged: true,
+    });
+    // The health check runs here and nowhere else - on the transition into the
+    // graph, not per animation frame (§23). A filter count that is not ten, or
+    // a preamp that never got connected, is invisible until playback is wrong.
+    const health = this.health();
+    logger.info("Equalizer graph health at engagement", {
+      event: "eq_audio_graph_health",
+      engaged: health.engaged,
+      audioContextState: health.contextState,
+      filterCount: health.filterCount,
+      preampConnected: health.preampConnected,
+      awaitingGesture: health.awaitingGesture,
+      failure: health.failure,
+    });
     return true;
+  }
+
+  /**
+   * Deliberate, retryable stop: the graph is fine, the browser just wants a
+   * gesture first. NOT a `failure` - `failure` is permanent by design, and a
+   * suspended context at page load is an ordinary lifecycle state.
+   */
+  private awaitGesture(why: string): false {
+    this.awaitingGesture = true;
+    this.scheduleGestureRetry();
+    logger.info("Equalizer waiting for a user gesture", {
+      event: "eq_audio_context_state",
+      audioContextState: "suspended",
+      engaged: false,
+      awaitingGesture: true,
+      failureStage: why,
+    });
+    return false;
+  }
+
+  /**
+   * One-shot: the next gesture re-runs the engagement that was deferred.
+   *
+   * It detaches BEFORE re-engaging, so a gesture that does not manage to start
+   * the context schedules a fresh listener instead of a growing set of them.
+   * Cleared by `dispose()`, which is the only place a listener could otherwise
+   * outlive the graph.
+   */
+  private scheduleGestureRetry(): void {
+    const subscribe = this.deps.onUserGesture;
+    if (this.gestureDetach || this.disposed || !subscribe) {
+      return;
+    }
+    const handler = (): void => {
+      this.clearGestureRetry();
+      if (this.disposed || this.engaged || this.failure || !this.requested) {
+        return;
+      }
+      void this.engage(this.requested);
+    };
+    this.gestureDetach = subscribe(handler);
+  }
+
+  private clearGestureRetry(): void {
+    const detach = this.gestureDetach;
+    this.gestureDetach = null;
+    detach?.();
   }
 
   /**
@@ -308,13 +589,80 @@ export class EqGraph {
    * No node is created, destroyed or reconnected. A preset change is ten
    * parameter writes and nothing else, which is what makes switching presets
    * instant and what makes a slider drag free of allocation churn (§30).
+   *
+   * VALIDATED BEFORE IT IS WRITTEN (§9, §10). Web Audio treats a non-finite
+   * value as an exception rather than as silence, so a configuration from a
+   * hand-edited cookie must never reach a parameter: `sanitizeGraphState`
+   * clamps what is finite into the model's own ranges and drops what is not,
+   * so the graph keeps the number already in it. Anything it had to touch is
+   * reported as `eq_parameter_sanitized`.
+   *
+   * ROLLED BACK ON FAILURE (§19). If a write throws, the previous curve is
+   * written back and both the failure and the reversal are reported, so the
+   * graph is never left half configured. A parameter write cannot disconnect
+   * anything, so playback survives either outcome.
    */
   apply(state: EqGraphState): void {
     const context = this.context;
     if (!context || !this.engaged) {
       return;
     }
-    const now = context.currentTime;
+    const sanitized = sanitizeGraphState(state, false);
+    // Captured before the write, so both the rollback and the "did anything
+    // actually move" comparison below are against the curve that is playing.
+    const previous = this.lastApplied;
+    try {
+      this.write(sanitized, context.currentTime);
+    } catch (error) {
+      let rollbackResult: "restored" | "failed" | "none" = "none";
+      if (previous) {
+        try {
+          this.write(previous, context.currentTime);
+          rollbackResult = "restored";
+        } catch {
+          // The rollback itself failed. Nothing can be done from here, and
+          // nothing needs to be: the stable path is still connected.
+          rollbackResult = "failed";
+        }
+      }
+      logger.warn("Equalizer state could not be applied", {
+        event: "eq_transition_error",
+        failureStage: "write",
+        rollbackResult,
+        reason: error instanceof Error ? error.name : "unknown",
+        filterCount: this.filters.length,
+        audioContextState: context.state,
+      });
+      if (previous && rollbackResult === "restored") {
+        logger.warn("Equalizer rolled back to the last curve it could write", {
+          event: "eq_state_reverted",
+          rollbackResult,
+          failureStage: "write",
+          preamp: round(previous.preampDb),
+          maxBandGain: round(maxBandGainDb(previous.bands)),
+          filterCount: this.filters.length,
+          audioContextState: context.state,
+        });
+      }
+      return;
+    }
+    this.lastApplied = sanitized;
+    if (previous && sameGraphState(previous, sanitized)) {
+      // Nothing moved. Re-applying an identical curve is not a state change,
+      // and filling the log with it would bury the ones that were.
+      return;
+    }
+    logger.info("Equalizer state applied", {
+      event: "eq_state_applied",
+      preamp: round(sanitized.preampDb),
+      maxBandGain: round(maxBandGainDb(sanitized.bands)),
+      filterCount: this.filters.length,
+      audioContextState: context.state,
+    });
+  }
+
+  /** The parameter writes themselves, separated so a failure can be rolled back. */
+  private write(state: EqGraphState, now: number): void {
     // Nodes past the end of the supplied list are explicitly zeroed rather than
     // skipped. The graph has ten filters and the model always supplies ten
     // bands, so this cannot happen through the store - but "cannot happen
@@ -361,6 +709,10 @@ export class EqGraph {
     }
     this.disposed = true;
     this.engaged = false;
+    this.awaitingGesture = false;
+    this.clearGestureRetry();
+    this.requested = null;
+    this.lastApplied = null;
     safeDisconnectOne(this.source);
     safeDisconnect(this.filters);
     safeDisconnectOne(this.preamp);
@@ -376,6 +728,14 @@ export class EqGraph {
 
   private decline(reason: EqUnsupportedReason): false {
     this.failure = reason;
+    logger.warn("Equalizer cannot engage", {
+      event: "eq_audio_context_state",
+      audioContextState: this.context?.state ?? "none",
+      engaged: false,
+      awaitingGesture: false,
+      failureStage: reason,
+      filterCount: this.filters.length,
+    });
     this.deps.onUnsupported?.(reason);
     return false;
   }
@@ -397,6 +757,162 @@ function neutralBands(): Array<{ frequency: number; gain: number; q: number }> {
     gain: 0,
     q: EQ_BAND_Q,
   }));
+}
+
+/**
+ * Has the browser seen a user gesture yet?
+ *
+ * Answers "no" ONLY when there is real evidence of none: the API is missing,
+ * or it exists and says so. Every other case proceeds, because the check that
+ * actually decides is `context.state` after `resume()` - this one just avoids
+ * allocating a context that provably cannot start.
+ */
+function userActivationSeen(): boolean {
+  if (typeof navigator === "undefined") {
+    return true;
+  }
+  const activation = (
+    navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }
+  ).userActivation;
+  if (!activation) {
+    return true;
+  }
+  return activation.hasBeenActive;
+}
+
+/**
+ * `context.resume()`, bounded - see {@link EQ_RESUME_TIMEOUT_MS} for why.
+ *
+ * The `async` wrapper is load-bearing: a resume implementation that throws
+ * synchronously would otherwise escape before `Promise.race` ever sees it, and
+ * a thrown exception out of `engage()` would strand `inflight` set forever.
+ */
+async function awaitResume(
+  context: EqAudioContext,
+  timeoutMs: number,
+): Promise<void> {
+  const resumed = (async () => {
+    await context.resume();
+  })().catch(() => undefined);
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      resumed,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, Math.max(0, timeoutMs));
+      }),
+    ]);
+  } finally {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * Clamps a requested state into values Web Audio will accept (§9, §10).
+ *
+ * WHAT HAPPENS TO A VALUE THAT CANNOT BE USED, and why it is not one rule.
+ *
+ *   REJECTED, NOT REWRITTEN - on apply. A non-finite gain, frequency or Q is
+ *   passed through so that `ramp()` drops it before it can reach an
+ *   `AudioParam`, and the parameter simply keeps the number already in the
+ *   graph. That is the known-good value (§19), and "nothing is scheduled" is
+ *   the observable form of it: rewriting it to a finite number would schedule
+ *   a real move to a curve the listener never asked for. For gain this also
+ *   lands on the right answer with no work at all, because a
+ *   `BiquadFilterNode`'s own default is 0 dB.
+ *
+ *   REPLACED - on build, and only for frequency and Q. There is no "already
+ *   in the graph" to keep at that point, and the node's own defaults are 350 Hz
+ *   and Q 1, neither of which is one of Aurora's bands. The canonical centre
+ *   and the model's Q are used instead, so a fresh graph can never come up on
+ *   a frequency Aurora does not have.
+ *
+ *   preampDb -> 0 dB (unity) whenever it is not finite, which is the model's
+ *   own `dbToLinearSafe` answer: a preamp nobody can describe must neither
+ *   amplify nor attenuate. A FINITE preamp is clamped to
+ *   PREAMP_MIN_DB..PREAMP_MAX_DB (-12..0), so a hand-edited cookie cannot ask
+ *   for gain the signal has no headroom for.
+ *
+ *   gain (finite) -> clamped to the model's EQ_BAND_GAIN_*_DB (-12..+12).
+ *
+ * `fresh` is true only while the graph is being built for the first time.
+ */
+function sanitizeGraphState(state: EqGraphState, fresh: boolean): EqGraphState {
+  let corrected = 0;
+
+  const bands = state.bands.map((band, index) => {
+    const canonical = EQ_BAND_FREQUENCIES[index] as number | undefined;
+
+    const frequency = usableFrequency(band.frequency)
+      ? band.frequency
+      : fresh && canonical !== undefined
+        ? canonical
+        : band.frequency;
+
+    const q = usableQ(band.q) ? band.q : fresh ? EQ_BAND_Q : band.q;
+
+    const gain = Number.isFinite(band.gain)
+      ? Math.min(EQ_BAND_GAIN_MAX_DB, Math.max(EQ_BAND_GAIN_MIN_DB, band.gain))
+      : band.gain;
+
+    if (frequency !== band.frequency) corrected += 1;
+    if (q !== band.q) corrected += 1;
+    if (gain !== band.gain) corrected += 1;
+    return { frequency, gain, q };
+  });
+
+  const preampDb = Number.isFinite(state.preampDb)
+    ? Math.min(PREAMP_MAX_DB, Math.max(PREAMP_MIN_DB, state.preampDb))
+    : 0;
+  if (preampDb !== state.preampDb) corrected += 1;
+
+  if (corrected > 0) {
+    logger.warn("Equalizer parameter sanitized before it reached the graph", {
+      event: "eq_parameter_sanitized",
+      parameters: corrected,
+      preamp: round(preampDb),
+      filterCount: bands.length,
+    });
+  }
+
+  return { bands, preampDb };
+}
+
+function usableFrequency(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+function usableQ(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+/** The largest BOOST in a curve, in dB. Negative-only curves report 0. */
+function maxBandGainDb(bands: readonly { gain: number }[]): number {
+  return bands.reduce((max, band) => Math.max(max, band.gain), 0);
+}
+
+/** True when two sanitized states would write exactly the same numbers. */
+function sameGraphState(a: EqGraphState, b: EqGraphState): boolean {
+  if (a.preampDb !== b.preampDb || a.bands.length !== b.bands.length) {
+    return false;
+  }
+  return a.bands.every((band, index) => {
+    const other = b.bands[index];
+    return (
+      other !== undefined &&
+      band.frequency === other.frequency &&
+      band.gain === other.gain &&
+      band.q === other.q
+    );
+  });
+}
+
+/** Diagnostics are readable numbers on a log line, not 3.0000000000000004. */
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 /**
@@ -494,6 +1010,25 @@ function productionDeps(): EqGraphDeps {
       return new Ctor() as unknown as EqAudioContext;
     },
     getElement: () => getCanonicalMediaElement(),
+    onUserGesture: (handler) => {
+      if (typeof document === "undefined") {
+        return () => undefined;
+      }
+      // CAPTURE, so the retry runs before anything that might stop propagation
+      // on its way up, and the three events between them cover mouse, pen, key
+      // and touch. A gesture is exactly what the browser is waiting for; the
+      // retry must not be lost because one menu swallowed the click.
+      const options = { capture: true } as const;
+      const events = ["pointerdown", "keydown", "touchend"] as const;
+      for (const name of events) {
+        document.addEventListener(name, handler, options);
+      }
+      return () => {
+        for (const name of events) {
+          document.removeEventListener(name, handler, options);
+        }
+      };
+    },
   };
 }
 

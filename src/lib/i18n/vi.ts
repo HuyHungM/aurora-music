@@ -107,6 +107,23 @@ const vi = {
     albumsUnavailable: "Không tải được mục Album.",
     historyTitle: "Đã tìm gần đây",
     clearHistory: "Xóa lịch sử tìm kiếm",
+    linkUnsupportedTitle: "Liên kết không được hỗ trợ",
+    linkUnsupported:
+      "Loại liên kết này chưa được hỗ trợ. Hãy thử liên kết Spotify hoặc YouTube.",
+    linkUnreadable:
+      "Aurora nhận diện liên kết Spotify, YouTube và Deezer tới bài hát, album và playlist.",
+    linkErrorTitle: "Không mở được liên kết",
+    linkNotFound: "Không tìm thấy liên kết này. Có thể liên kết đã bị gỡ.",
+    linkUnavailable: "Aurora chưa tải được liên kết này. Thử lại sau một lát.",
+    linkResultSection: "Liên kết đã nhận diện",
+    resourceTrack: "Bài hát",
+    resourceAlbum: "Album",
+    resourcePlaylist: "Playlist",
+    collectionCountOne: "1 bài hát",
+    collectionCount: "{count} bài hát",
+    collectionTruncated: "{shown}/{total} bài hát",
+    playAll: "Phát tất cả",
+    queueAll: "Thêm tất cả vào hàng đợi",
   },
   library: {
     eyebrow: "Thư viện",
@@ -214,11 +231,6 @@ const vi = {
   playlistShare: {
     share: "Chia sẻ",
     shareTitle: "Chia sẻ playlist",
-    enableShare: "Chia sẻ",
-    enableShareHint:
-      "Bất kỳ ai có liên kết đều có thể xem và phát các bài hát này. Họ không thể thay đổi gì.",
-    disableShare: "Ngừng chia sẻ",
-    disableShareHint: "Liên kết sẽ ngừng hoạt động ngay lập tức.",
     linkLabel: "Liên kết chia sẻ",
     copyLink: "Sao chép liên kết",
     linkCopied: "Đã sao chép liên kết",
@@ -226,8 +238,6 @@ const vi = {
       "Không sao chép được liên kết. Hãy bôi đen và sao chép thủ công.",
     copiedAnnouncement: "Đã sao chép liên kết chia sẻ.",
     shareError: "Không cập nhật được chia sẻ",
-    sharedBadge: "Đang chia sẻ",
-    privateBadge: "Riêng tư",
     accessLabel: "Ai có thể xem",
     accessGroupLabel: "Chế độ chia sẻ",
     publicOption: "Công khai",
@@ -724,6 +734,7 @@ const vi = {
     label: "Tìm bài hát",
     placeholder: "Tìm bài hát, nghệ sĩ hoặc album…",
     clear: "Xóa tìm kiếm",
+    linkDetected: "Đã nhận diện liên kết {provider}",
   },
   multiTab: {
     playingElsewhere: "Đang phát ở tab khác.",

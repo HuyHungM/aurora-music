@@ -27,7 +27,9 @@
  *      the subtlest thing in the change and the easiest to break by editing
  *      what looks like the right line.
  *   5. No JavaScript. No scroll listeners, no rAF loop, no observers, no
- *      React state on scroll.
+ *      React state on scroll. The single named exception is an anchored menu
+ *      that has to be told its row scrolled away - see
+ *      `SCROLL_LISTENER_ALLOWANCE`.
  *   6. Scrolling and selecting are separate concerns: no scroll container may
  *      carry `select-none`, and no scroll container may claim `cursor: grab`.
  *   7. The scroll-container inventory is closed. A new one is a decision, not
@@ -167,6 +169,29 @@ const SCROLL_UTILITIES = [
   "overflow-x-scroll",
   "overflow-scroll",
 ];
+
+/**
+ * The one place a component may register a scroll listener, and how many.
+ *
+ * The rule above is about the SCROLLBAR: nothing may restyle, measure or
+ * re-render on scroll, because the platform already does all of it. An
+ * anchored overlay is the one case that is not about the scrollbar at all and
+ * still needs the event. A menu whose trigger lives inside a scroll
+ * container but whose surface has to be painted OUTSIDE that container -
+ * because the container clips it - is positioned from the trigger's
+ * coordinates, and those coordinates are stale the moment the list scrolls.
+ * Left alone the surface stays where it was, floating over rows it no longer
+ * belongs to, which is the detached menu this listener exists to prevent.
+ *
+ * What makes it acceptable is everything the rule is actually protecting
+ * against: it registers only while the menu is open, it removes itself when
+ * the menu closes, and it neither measures nor re-renders per frame - it
+ * closes the menu, once, and that is the end of it. The count is capped at
+ * one per file so a second listener cannot hide behind the first.
+ */
+const SCROLL_LISTENER_ALLOWANCE = new Map<string, number>([
+  ["src/components/player/queue-panel.tsx", 1],
+]);
 
 describe("scrollbar system", () => {
   it("declares the whole system only where a scrollbar can be hovered", () => {
@@ -417,9 +442,12 @@ describe("scrollbar system", () => {
     // CSS already did.
     for (const file of COMPONENT_FILES) {
       const source = readFileSync(file, "utf-8");
-      expect(source, `${rel(file)} registers a scroll listener`).not.toMatch(
-        /addEventListener\(\s*["'`]scroll["'`]/,
-      );
+      const matches = source.match(/addEventListener\(\s*["'`]scroll["'`]/g) ?? [];
+      const allowance = SCROLL_LISTENER_ALLOWANCE.get(rel(file)) ?? 0;
+      expect(
+        matches.length,
+        `${rel(file)} registers ${matches.length} scroll listener(s), allowance ${allowance}`,
+      ).toBeLessThanOrEqual(allowance);
       expect(source, `${rel(file)} observes scrolling`).not.toMatch(
         /IntersectionObserver|ResizeObserver[\s\S]{0,80}scroll/,
       );

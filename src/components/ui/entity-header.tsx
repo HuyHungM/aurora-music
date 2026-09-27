@@ -29,10 +29,18 @@ export function EntityHeader({
   secondary?: ReactNode;
 }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-border-subtle bg-surface-1">
+    // The card does NOT clip. `actions` is a row of real controls and one of
+    // them is a menu trigger; a menu is deliberately bigger than the row that
+    // opened it, so `overflow-hidden` here cut every action menu in half — the
+    // track, album, artist and playlist headers all open their menus from
+    // inside this box. The corners never needed it: `rounded-2xl` already
+    // clips this element's own background and border, and the only child that
+    // could have poked out of them is the decorative wash, which now rounds
+    // itself.
+    <div className="relative rounded-2xl border border-border-subtle bg-surface-1">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-accent/[0.13] via-transparent to-aurora-cyan/[0.07]"
+        className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-accent/[0.13] via-transparent to-aurora-cyan/[0.07]"
       />
       <div className="relative flex flex-col gap-5 p-5 sm:flex-row sm:items-end sm:gap-6 sm:p-7">
         <Artwork

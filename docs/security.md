@@ -5,10 +5,13 @@ by automated gates. It is a statement of what holds, not a wishlist.
 
 ## Boundaries
 
-- **Providers are server-only.** `youtubei.js` is imported by exactly one
-  module (`lib/providers/youtube/playback/innertube-client.ts`); no `.tsx`
-  file imports provider implementations (only `@/lib/providers/server`).
-  The browser receives serialized `AudioSource` objects, never internals.
+- **Providers are server-only.** `youtubei.js` has a single value import
+  (`lib/providers/youtube/innertube/session.ts`); the playback client
+  (`lib/providers/youtube/playback/innertube-client.ts`) imports it as
+  *types only*, and the boundary test confines both to the two
+  provider-internal directories. No `.tsx` file imports provider
+  implementations (only `@/lib/providers/server`). The browser receives
+  serialized `AudioSource` objects, never internals.
 - **Client bundle gate:** `bun run verify:client-bundle` fails the build
   pipeline if server markers (`youtubei`, `Innertube`, secrets, tokens)
   appear in production client chunks.
@@ -83,9 +86,26 @@ by automated gates. It is a statement of what holds, not a wishlist.
   Auth.js defaults (`__Secure-` prefix in production). No custom cookie or
   session code. `trustHost: true` assumes the deployment sanitizes the Host
   header upstream (standard for Next + Auth.js behind a proxy).
+- `/api/auth/*` is re-anchored to the host the browser used
+  (`toBrowserOrigin()` in `src/app/api/auth/[...nextauth]/route.ts`), because
+  Next 16 dev builds `request.url` from `opts.hostname || "localhost"` rather
+  than from the `Host` header. The rewrite touches the origin only — scheme
+  comes from `x-forwarded-proto` or the request itself and is never guessed,
+  so a plain-HTTP origin still gets non-`Secure` cookies. No cookie attribute,
+  safe origin, or redirect target is relaxed to make LAN sign-in work.
 - Mutations require a session user; DAL rechecks resource ownership
   (`AuthorizationError`); sign-out redirects to the fixed `/` target
   (no open redirects anywhere — verified by search).
+- **CSRF is layered, and the layers are named here because they are not all
+  Auth.js's.** `/api/auth/*` POSTs use Auth.js's own double-submit token.
+  The `signInWith` / `signOutUser` *server actions* go through next-auth's
+  server-action path, which passes `skipCSRFCheck`; they are protected
+  instead by Next 16's Origin↔Host comparison (`serverActions.allowedOrigins`
+  is unset, so: same origin only) on top of `SameSite=Lax` cookies. Next's
+  comparison admits a request that carries **no** `Origin` header with a
+  warning rather than rejecting it — the residual is therefore a non-browser
+  client, which has no ambient cookies to ride on. Recorded as the posture
+  it is, not as an Auth.js guarantee.
 
 ## Rate limiting (Phase 52)
 
@@ -132,12 +152,17 @@ target name equals the source name, and always drops what it created. See
 
 ## Caching
 
-- Dynamic routes are uncached (`private, no-cache`); immutable
-  `/_next/static/*` is long-cached by Next. The service worker caches only
-  same-origin immutable statics, never HTML/API/auth/provider/playback, and
-  serves a built-in offline page for failed navigations. The offline page is
-  built per request from the `aurora-locale` cookie and is never itself cached,
-  so no personalised or authenticated HTML can leak between sessions.
+- Dynamic routes are served uncached by Next's own defaults (no app code
+  sets `Cache-Control`; there is a gate on what the *service worker* may
+  cache instead of on the header); immutable `/_next/static/*` is
+  long-cached by Next. The service worker caches only same-origin immutable
+  statics, never HTML/API/auth/provider/playback, and serves a built-in
+  offline page for failed navigations. The offline page prefers the locale
+  the visitor chose, remembered in the worker's own two-letter cache (a
+  Chromium navigation reaches a worker with no `cookie` header), falling
+  back to the `aurora-locale` cookie when nothing is remembered; it is
+  never itself cached, so no personalised or authenticated HTML can leak
+  between sessions.
 
 ## Installable web app posture
 
@@ -197,8 +222,18 @@ introduces no new trust boundary:
 ## Known deployment assumptions
 
 - Spotify/YouTube credentials stay server-side or absent (providers stay
-  unregistered without them). No rate limiting in-app (documented
-  limitation — enforce at the edge if needed).
+  unregistered without them). In-app rate limiting exists for the expensive
+  server actions (search, playback resolve, radio, recommendations, playlist
+  mutation) as fixed-window buckets behind `guardServerAction`, single
+  instance only — see the rate-limiting section above for what is
+  deliberately not gated and for the per-instance multiplication.
 - In this stack, programmatic `notFound()` renders the not-found UI with
   HTTP 200 (verified across routes; filesystem misses still 404). Gates
   assert behavior (no fixture content served), not the status code.
+- **Opening the dev server from another device is a host configuration, not
+  an application change.** The dev listener binds the LAN address and
+  `allowedDevOrigins` admits it (development only); a phone on the same
+  network additionally needs an inbound firewall allowance for the dev port,
+  which Aurora never creates or disables — the allow rule is scoped to the
+  port and the private profile, and the firewall itself is left exactly as
+  it was found.

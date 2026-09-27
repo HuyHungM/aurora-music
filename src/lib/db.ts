@@ -13,8 +13,13 @@ function createClient(): PrismaClient {
   if (url.startsWith("postgresql://") || url.startsWith("postgres://")) {
     adapter = new PrismaPg({ connectionString: url });
   } else {
+    // Only the scheme goes into the message. The whole connection string
+    // carries the password, and this Error is thrown at boot, where it lands
+    // in stderr and in any crash capture — `docs/security.md` forbids logging
+    // secret values. The scheme is the part that is actually wrong here.
+    const scheme = url.slice(0, url.indexOf(":") + 1) || "(none)";
     throw new Error(
-      `Unsupported DATABASE_URL scheme: ${url}. ` +
+      `Unsupported DATABASE_URL scheme: ${scheme} ` +
         `Expected "postgresql://" or "postgres://"`,
     );
   }

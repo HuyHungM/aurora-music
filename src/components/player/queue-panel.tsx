@@ -1,7 +1,17 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  createContext,
+} from "react";
+import { createPortal } from "react-dom";
 import { usePresence } from "@/components/ui/presence";
+import { useMenuOpenUp, MENU_TRIGGER_GAP_PX } from "@/components/ui/menu-placement";
 import { usePlayerStore } from "@/lib/player/store";
 import { resolveArtworkUrl, type Track } from "@/lib/domain";
 import { useMusicEngine, useMusicEngineState } from "@/lib/music/use-music-engine";
@@ -15,6 +25,42 @@ import { KeepListeningToggle } from "@/components/player/keep-listening-toggle";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { useSyncExternalStore } from "react";
 import { ArrowDownIcon, ArrowUpIcon, ListMusicIcon, PauseIcon, PlayIcon, QueueIcon, RadioIcon, XIcon } from "@/components/ui/icons";
+
+/**
+ * The panel's own menu layer, handed to every row menu below `lg`.
+ *
+ * WHY A LAYER AT ALL. The queue list is a scroll container - it has to be,
+ * the queue is unbounded and the panel is not - and a scroll container clips
+ * everything inside it, including a menu that opens downward from a row near
+ * the bottom of the visible list. The row menu is ~200px tall and the list
+ * is ~420px tall, so a row in the middle of the list has less than 200px on
+ * either side: no amount of flipping fits. A surface has to LEAVE the
+ * scroller, and the only place it can go without losing the panel's stacking
+ * context (and with it, the ordering against the page behind) is the panel
+ * itself. So the panel owns an empty, click-through layer that sits above
+ * its scroll content, and the row menus render into it.
+ *
+ * `pointer-events-none` keeps the layer from becoming an invisible shield
+ * over the rows: the layer is the full panel box, and the surface is the
+ * only thing in it that takes pointer events.
+ */
+const QueueMenuLayerContext = createContext<HTMLElement | null>(null);
+
+/**
+ * Where a row's menu goes, in the layer's own coordinate space.
+ *
+ * The layer is `absolute inset-0` on the panel, so it is the positioning
+ * context for what is rendered into it and these are offsets from the
+ * panel's padding box. They are kept together (rather than a `top` or a
+ * `bottom` chosen at render time) because which side the menu opens on is
+ * itself decided from the rendered surface - `useMenuOpenUp` - and the
+ * offsets have to answer both questions.
+ */
+interface QueueMenuPlacement {
+  right: number;
+  top: number;
+  bottom: number;
+}
 
 function QueueItemMenu({
   position,
@@ -42,6 +88,10 @@ function QueueItemMenu({
   const itemRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
+  /** The portaled surface, whichever of the two is in the slot right now. */
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const layer = useContext(QueueMenuLayerContext);
+  const [placement, setPlacement] = useState<QueueMenuPlacement | null>(null);
   // One lifecycle for the row's open region (Phase 48), owned here for the
   // same reason as in `TrackActionMenu`: the menu and the picker share one
   // slot, so a single exit timer must decide which of them unmounts.
@@ -52,6 +102,36 @@ function QueueItemMenu({
   const engine = useMusicEngine();
   const { t } = useLocale();
   const removeFromQueue = (position: number) => engine?.queue.remove(position);
+  // Same rule as every other menu in the product (`menu-placement.ts`),
+  // measured against the surface this panel actually rendered.
+  const openUp = useMenuOpenUp({
+    open: menuMounted,
+    triggerRef,
+    surfaceRef,
+    placementKey: showPlaylistMenu ? "playlist" : "actions",
+  });
+  const surfaceStyle = placement
+    ? openUp
+      ? { bottom: placement.bottom, right: placement.right }
+      : { top: placement.top, right: placement.right }
+    : undefined;
+
+  useLayoutEffect(() => {
+    if (!menuMounted || !layer) return;
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const triggerRect = trigger.getBoundingClientRect();
+    const layerRect = layer.getBoundingClientRect();
+    // Right edge to the trigger's right edge, exactly the `right-0` the
+    // in-flow menus get for free from their own wrapper. Both sides are
+    // measured because which one is used is decided after the surface has
+    // been rendered (see `openUp` above).
+    setPlacement({
+      right: layerRect.right - triggerRect.right,
+      top: triggerRect.bottom - layerRect.top + MENU_TRIGGER_GAP_PX,
+      bottom: layerRect.bottom - triggerRect.top + MENU_TRIGGER_GAP_PX,
+    });
+  }, [layer, menuMounted, showPlaylistMenu]);
 
   useEffect(() => {
     // Return focus to the trigger when the menu closes.
@@ -67,12 +147,23 @@ function QueueItemMenu({
     function handleClickOutside(e: MouseEvent) {
       // The portaled create-playlist dialog lives outside the menu
       // container by design; interacting with it must not collapse
-      // the queue menu underneath.
+      // the queue menu underneath. "Outside" means outside the dialog that
+      // HOSTS this row, though - the queue panel is itself a dialog, so
+      // testing for any dialog made every click inside the panel exempt and
+      // left the row menu with no way to be dismissed but Escape.
       const target = e.target as Element | null;
-      if (target?.closest?.('[role="dialog"]')) {
+      const host = triggerRef.current?.closest('[role="dialog"]') ?? null;
+      const clicked = target?.closest?.('[role="dialog"]') ?? null;
+      if (clicked && clicked !== host) {
         return;
       }
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      // Two containers, because the surface is in one and the trigger in the
+      // other: a click on either is inside the menu, anything else is not.
+      const node = e.target as Node;
+      const inside =
+        menuRef.current?.contains(node) === true ||
+        surfaceRef.current?.contains(node) === true;
+      if (!inside) {
         setShowPlaylistMenu(false);
         setIsOpen(false);
       }
@@ -94,12 +185,27 @@ function QueueItemMenu({
       }
     }
 
+    // The surface is anchored to a row, not to the panel, so anything that
+    // moves the row under it has to dismiss it. An in-flow menu gets this for
+    // free - it is painted inside the row, so it travels with it - which is
+    // exactly why a menu rendered in the layer has to be told.
+    function handleAnchorMoved() {
+      setShowPlaylistMenu(false);
+      setIsOpen(false);
+    }
+
     document.addEventListener("mousedown", handleClickOutside);
     document.addEventListener("keydown", handleKeyDown, true);
+    // Capture phase: the list scrolls on its own element, and an event that
+    // never bubbles to `window` would not reach a bubble-phase listener.
+    window.addEventListener("scroll", handleAnchorMoved, true);
+    window.addEventListener("resize", handleAnchorMoved);
     itemRef.current?.focus();
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("scroll", handleAnchorMoved, true);
+      window.removeEventListener("resize", handleAnchorMoved);
     };
   }, [isOpen, showPlaylistMenu]);
 
@@ -131,101 +237,113 @@ function QueueItemMenu({
           <circle cx="12" cy="19" r="1.5" />
         </svg>
       </button>
-      {menuMounted && !showPlaylistMenu ? (
-        <div
-          role="menu"
-          aria-label={t("menus.trackActions")}
-          {...menuPresence}
-          className="presence-menu aurora-glass-float absolute right-0 top-full z-dropdown mt-1 w-48 overflow-hidden rounded-lg border border-border-subtle"
-        >
-          <button
-            ref={itemRef}
-            type="button"
-            role="menuitem"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowPlaylistMenu(true);
-            }}
-            className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
-          >
-            <ListMusicIcon size={16} className="text-text-muted" />
-            <span>{t("menus.addToPlaylist")}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            aria-label={t("menus.startRadioFor", { title: trackTitle })}
-            onClick={(e) => {
-              e.stopPropagation();
-              const session = getRadioSession();
-              if (engine && session) {
-                void session.startTrackRadio(engine, track, {
-                  key: "radio.labelFromTrack",
-                  params: { title: trackTitle },
-                });
-              }
-              setIsOpen(false);
-            }}
-            className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
-          >
-            <RadioIcon size={16} className="text-text-muted" />
-            <span>{t("menus.startRadio")}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!canMoveUp}
-            aria-label={t("queue.moveUp", { title: trackTitle })}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMove?.("up");
-              setIsOpen(false);
-            }}
-            className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none disabled:pointer-events-none disabled:opacity-50"
-          >
-            <ArrowUpIcon size={16} className="text-text-muted" />
-            <span>{t("queue.moveUpShort")}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!canMoveDown}
-            aria-label={t("queue.moveDown", { title: trackTitle })}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMove?.("down");
-              setIsOpen(false);
-            }}
-            className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none disabled:pointer-events-none disabled:opacity-50"
-          >
-            <ArrowDownIcon size={16} className="text-text-muted" />
-            <span>{t("queue.moveDownShort")}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={(e) => {
-              e.stopPropagation();
-              removeFromQueue(position);
-              setIsOpen(false);
-            }}
-            className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
-          >
-            <XIcon size={16} className="text-text-muted" />
-            <span>{t("queue.removeFromQueue")}</span>
-          </button>
-        </div>
-      ) : null}
-      {menuMounted && showPlaylistMenu ? (
-        <AddToPlaylistMenu
-          track={track}
-          onClose={() => {
-            setShowPlaylistMenu(false);
-            setIsOpen(false);
-          }}
-          presenceProps={menuPresence}
-        />
-      ) : null}
+      {/* The surface is rendered into the panel's own layer, not here. See
+          `QueueMenuLayerContext`: the rows live in a scroll container, and a
+          menu that stays inside one is cut off by it. */}
+      {menuMounted && layer
+        ? createPortal(
+            showPlaylistMenu ? (
+              <AddToPlaylistMenu
+                track={track}
+                onClose={() => {
+                  setShowPlaylistMenu(false);
+                  setIsOpen(false);
+                }}
+                openUp={openUp}
+                presenceProps={menuPresence}
+                placement={surfaceStyle}
+                surfaceRef={surfaceRef}
+              />
+            ) : (
+              <div
+                ref={surfaceRef}
+                role="menu"
+                aria-label={t("menus.trackActions")}
+                {...menuPresence}
+                className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float pointer-events-auto absolute z-dropdown w-48 overflow-hidden rounded-lg border border-border-subtle`}
+                style={surfaceStyle}
+              >
+                <button
+                  ref={itemRef}
+                  type="button"
+                  role="menuitem"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowPlaylistMenu(true);
+                  }}
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+                >
+                  <ListMusicIcon size={16} className="text-text-muted" />
+                  <span>{t("menus.addToPlaylist")}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-label={t("menus.startRadioFor", { title: trackTitle })}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const session = getRadioSession();
+                    if (engine && session) {
+                      void session.startTrackRadio(engine, track, {
+                        key: "radio.labelFromTrack",
+                        params: { title: trackTitle },
+                      });
+                    }
+                    setIsOpen(false);
+                  }}
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+                >
+                  <RadioIcon size={16} className="text-text-muted" />
+                  <span>{t("menus.startRadio")}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!canMoveUp}
+                  aria-label={t("queue.moveUp", { title: trackTitle })}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMove?.("up");
+                    setIsOpen(false);
+                  }}
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <ArrowUpIcon size={16} className="text-text-muted" />
+                  <span>{t("queue.moveUpShort")}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!canMoveDown}
+                  aria-label={t("queue.moveDown", { title: trackTitle })}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMove?.("down");
+                    setIsOpen(false);
+                  }}
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <ArrowDownIcon size={16} className="text-text-muted" />
+                  <span>{t("queue.moveDownShort")}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeFromQueue(position);
+                    setIsOpen(false);
+                  }}
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+                >
+                  <XIcon size={16} className="text-text-muted" />
+                  <span>{t("queue.removeFromQueue")}</span>
+                </button>
+              </div>
+            ),
+            layer,
+          )
+        : null}
     </div>
   );
 }
@@ -323,6 +441,10 @@ export function QueuePanel() {
   const listRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLLIElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  // The layer is published as state, not a ref, because the row menus read
+  // it during render: a ref would be null on the render that first puts the
+  // layer on screen, and the callback ref fires again on every remount.
+  const [menuLayer, setMenuLayer] = useState<HTMLElement | null>(null);
   const { mounted: queueMounted, presenceProps: queuePresence } =
     usePresence(isQueueOpen);
 
@@ -577,6 +699,7 @@ export function QueuePanel() {
         {...queuePresence}
         className="presence-backdrop fixed inset-0 z-dialog bg-black/40 lg:hidden"
       />
+      <QueueMenuLayerContext.Provider value={menuLayer}>
       <div
         ref={dialogRef}
         role="dialog"
@@ -602,7 +725,13 @@ export function QueuePanel() {
         // header row rendered off the top with no way to scroll to it. Capping
         // against the space actually available between the anchor and the
         // safe-area top makes the sheet fit by construction.
-        className="presence-sheet aurora-glass-float fixed bottom-[calc(9rem+env(safe-area-inset-bottom))] z-dialog mx-auto flex max-h-[min(70svh,calc(100dvh-9rem-env(safe-area-inset-bottom)-env(safe-area-inset-top)))] w-[calc(100vw-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] max-w-md flex-col overflow-hidden rounded-2xl border border-border-subtle sm:bottom-[calc(9.5rem+env(safe-area-inset-bottom))] lg:bottom-[calc(6rem+1.5rem)] lg:right-6 lg:left-auto lg:mx-0 lg:w-96 focus:outline-none"
+        //
+        // No `overflow-hidden`, and that is deliberate: a row menu renders
+        // into the layer below so it can be bigger than the list it opened
+        // from, and the panel clipping its own layer would put the clipping
+        // back one level up. The rounded corners never needed it —
+        // `rounded-2xl` clips this element's own background and border.
+        className="presence-sheet aurora-glass-float fixed bottom-[calc(9rem+env(safe-area-inset-bottom))] z-dialog mx-auto flex max-h-[min(70svh,calc(100dvh-9rem-env(safe-area-inset-bottom)-env(safe-area-inset-top)))] w-[calc(100vw-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] max-w-md flex-col rounded-2xl border border-border-subtle sm:bottom-[calc(9.5rem+env(safe-area-inset-bottom))] lg:bottom-[calc(6rem+1.5rem)] lg:right-6 lg:left-auto lg:mx-0 lg:w-96 focus:outline-none"
       >
       <div className="flex items-center gap-2 border-b border-border-subtle px-4 py-3">
         <QueueIcon size={18} className="text-text-muted" />
@@ -679,7 +808,19 @@ export function QueuePanel() {
           ) : null}
         </div>
       )}
+        {/* The menu layer, last so it paints above the list. Empty and
+            click-through: it exists so a row menu has somewhere to render
+            that the list's `overflow-y-auto` cannot cut off. Deliberately
+            NOT `aria-hidden`: the surfaces inside it are the panel's own
+            menus, and hiding the container would hide every menu item from
+            assistive technology along with it. */}
+        <div
+          ref={setMenuLayer}
+          data-queue-menu-layer
+          className="pointer-events-none absolute inset-0 z-dropdown"
+        />
       </div>
+      </QueueMenuLayerContext.Provider>
     </>
   );
 }

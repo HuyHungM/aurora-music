@@ -32,7 +32,8 @@
  */
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { SearchIcon, XIcon } from "@/components/ui/icons";
+import { SearchIcon, XIcon, LinkIcon } from "@/components/ui/icons";
+import { classifySearchInput, providerDisplayName } from "@/lib/search/input";
 
 export type SearchFieldVariant = "page" | "header";
 
@@ -51,6 +52,18 @@ export interface SearchFieldProps {
   variant: SearchFieldVariant;
   /** Accessible name for the clear control; must describe the action. */
   clearLabel: string;
+  /**
+   * Server-resolved sentence shown while a supported link is in the field,
+   * with a `{provider}` placeholder the field substitutes.
+   *
+   * A template rather than a client lookup for the same reason the rest of
+   * this component's copy is passed in: this stays a component with no
+   * dictionary, so nothing can disagree with the locale the server rendered.
+   * It is also why provider names are not in the template — brand names are
+   * spelled the same everywhere and only the surrounding sentence moves
+   * around. The header omits it, so only the page variant shows the hint.
+   */
+  linkDetectedTemplate?: string;
   /** Optional trailing affordance, e.g. a keyboard hint. */
   children?: ReactNode;
 }
@@ -62,6 +75,7 @@ export function SearchField({
   defaultValue,
   variant,
   clearLabel,
+  linkDetectedTemplate,
   children,
 }: SearchFieldProps) {
   const router = useRouter();
@@ -133,6 +147,23 @@ export function SearchField({
 
   const isPage = variant === "page";
   const showClear = value.length > 0;
+
+  // Detection is pure string work against the value already in state: no
+  // request, no debounce, no provider call. It therefore runs before (and
+  // independently of) anything that could spend a round trip, and it costs
+  // nothing while typing. Only a link this build actually supports is
+  // reported — an unsupported link stays silent here and is explained on the
+  // results page, so the field never promises something the submit cannot do.
+  const classified =
+    isPage && linkDetectedTemplate ? classifySearchInput(value) : null;
+  const detectedSource =
+    classified?.kind === "source" ? classified.source : null;
+  const linkDetectedText = detectedSource
+    ? linkDetectedTemplate?.replace(
+        "{provider}",
+        providerDisplayName(detectedSource.provider),
+      ) ?? null
+    : null;
 
   // THE SIGNATURE GLASS COMPONENT (§36) - and it is two different treatments
   // for a reason that is a requirement rather than a preference.
@@ -217,6 +248,27 @@ export function SearchField({
         ) : null}
         {children}
       </div>
+      {/* Present from the first paint even when empty, so the screen reader
+          already has a live region to announce into the moment a link is
+          detected rather than meeting a node that appeared fully formed.
+          Page variant only: the header field keeps its existing layout. */}
+      {isPage ? (
+        <p
+          role="status"
+          className={
+            linkDetectedText
+              ? "mt-2 flex items-center gap-1.5 text-xs text-text-muted"
+              : "sr-only"
+          }
+        >
+          {linkDetectedText ? (
+            <>
+              <LinkIcon size={13} className="shrink-0 text-accent" aria-hidden="true" />
+              <span className="break-all">{linkDetectedText}</span>
+            </>
+          ) : null}
+        </p>
+      ) : null}
     </form>
   );
 }

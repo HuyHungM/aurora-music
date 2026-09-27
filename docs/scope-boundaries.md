@@ -56,7 +56,8 @@ implementation exists; several additionally asserted by boundary tests):
 - Payments / subscriptions
 - Analytics / external telemetry
 - Live radio / live streams (resolver rejects live/upcoming)
-- Equalizer / sleep timer / crossfade / gapless playback
+- Sleep timer / crossfade / gapless playback (the equalizer shipped — see
+  the Phase 53 addendum below — those three did not)
 - New providers beyond YouTube / Deezer / Spotify
 - Queue history navigation across sessions
 - Additional UI locales beyond Vietnamese / English; Accept-Language
@@ -126,6 +127,39 @@ deliberately **not** converted in Phase 48:
 
 Converting it is legitimate future work. It is not authorized here, and it
 must not be treated as an open bug.
+
+### LAN development over plain HTTP: what is deliberately not solved
+
+The dev server is reachable at `http://<lan-ip>:3000` and the application is
+usable there end to end (render, HMR, API, server actions, auth, search,
+playback, queue, likes, playlists, sharing, radio, EQ, appearance). Two
+things on that origin are left unsolved on purpose:
+
+- **No TLS for the dev origin — and none for the deployed origin either.** A
+  private IP over plain HTTP is not a secure context, so the browser withholds
+  `serviceWorker`, the async clipboard API, Web Share, `crypto.subtle` and
+  `crypto.randomUUID`, and reports notifications as denied. Aurora degrades
+  honestly — the share control falls back to a selection copy and then to a
+  selectable link field, identity ids fall back to `getRandomValues`, and the
+  service worker simply does not register — but **PWA install/offline and the
+  system share sheet cannot work on a plain-HTTP origin.** The same holds for
+  the deployed production URL, which is reached over plain HTTP rather than
+  TLS; TLS termination is an edge responsibility (`docs/deployment.md`) and
+  the edge in front of it does not currently provide it, so "production is a
+  secure context" is not an assumption the app may make anywhere. Registration
+  therefore feature-detects instead of dereferencing, and the compiled result
+  of that is gated by `verify:client-bundle` and `e2e/pwa.spec.ts` — see
+  `ARCHITECTURE.md` for why a source-level guard was not enough. Adding a dev
+  certificate, a tunnel or edge TLS is environment work, not a product
+  feature, and it is not authorized here.
+- **Google OAuth refuses a private-network redirect URI.** Google answers
+  the LAN callback with `invalid_request: device_id and device_name are
+  required for private IP`, so Google sign-in cannot complete from
+  `http://<lan-ip>:3000` regardless of Aurora's configuration. This is the
+  provider's policy, and the fix is an origin Google accepts (a public TLS
+  host), not a relaxed `redirect_uri`, callback allowlist or cookie policy.
+  GitHub OAuth accepts the same origin and remains the usable provider on
+  the LAN.
 
 ## Phase 52 — production hardening: what is deliberately partial
 
@@ -313,9 +347,11 @@ Deliberately **not** done, each with the reason rather than left as a gap:
   under `(app)/` and a hard navigation destroys the JS context. Left in place
   rather than deleted: it is the correct teardown and the call site is the
   thing that is missing, not the method.
-- **No dependency, route, script or migration was removed.** All 30 packages
-  are used by source or config; all 27 route files are intentional; all 15
-  package scripts were executed and pass; migration history is untouched.
+- **No dependency, route, script or migration was removed.** Every direct
+  package is used by source or config (26 today: 11 dependencies + 15
+  devDependencies); every route file under `src/app` is intentional (12
+  pages + 3 API routes); all 17 package scripts execute and pass;
+  migration history is untouched.
 
 ## Bun migration and toolchain boundary (Phase 50)
 
@@ -549,6 +585,23 @@ are missing are recorded here rather than papered over.
   control that duplicates the panel would be a second place to keep in step for
   no gain. The option remains open, and adding it is a button plus a link — not a
   second state, because there is only one store.
+- **No CORS-clean media delivery, and no pre-engagement source probe.** A
+  provider stream is cross-origin and answers without
+  `Access-Control-Allow-Origin`, so the browser will not let Web Audio read the
+  element: `MediaElementAudioSourceNode` outputs digital silence while the
+  element plays normally. Measured in a real browser, with Chrome's own message —
+  see `ARCHITECTURE.md` §33.8. Two fixes exist and neither is built. A
+  same-origin relay of the stream is a proxy: an SSRF surface and a bandwidth
+  bill that belongs in `docs/security.md`, and not an equalizer change. A probe
+  of the element's source before `createMediaElementSource()` must be followed
+  by *deferring that one-way door until a source exists* — because the listener
+  who enables the equalizer before pressing play has no source to probe — plus a
+  graph→store path for a failure that lands after `engage()` has already
+  resolved. That is a re-architecture of the engagement lifecycle inside a phase
+  whose subject is mode switching, and the wrong place to introduce new races.
+  Until one of the two lands, the equalizer is structurally correct and
+  inaudible on provider streams, and `e2e/equalizer-playback.spec.ts` keeps the
+  measurement — and the browser's sentence about it — in every run.
 
 ## Phase 54 — mobile, tablet and foldable: what is deliberately absent
 
@@ -643,3 +696,42 @@ Deliberately not done:
 - **No preference change.** `rankAudioFormats` is unchanged and still puts
   audio-only first; the validator is the only thing that rejects, and it
   rejects with evidence.
+
+## Search by link — what is deliberately out of scope
+
+The link-search work added classification to the existing search field. It
+did not add a second search system, and the following are exclusions rather
+than omissions:
+
+- **Artist and channel URLs are refused, not resolved.** Spotify
+  `/artist/<id>`, Deezer `/artist/<id>` and YouTube `/channel/<id>` /
+  `@handle` links are on allowlisted hosts and are correctly recognised as
+  links, but they classify as `unsupported-url` with readable copy. The
+  parser deliberately does not gain an `artist`/`channel` kind: an artist
+  link wants a *page* (top tracks, follow, radio) rather than a resolvable
+  music resource, the identity and playability rules for an artist differ
+  from a track's, and the alternative — rendering an artist link as a track
+  card — would be a wrong answer that looks right. Deferred to a phase that
+  designs artist surfaces.
+- **No URL proxy, no arbitrary fetch, no Open Graph scraping.** The server
+  never retrieves the URL the user pasted. Every outbound request is a
+  structured provider API call built from an id that the allowlist,
+  resource-type and id-shape checks already accepted; a page the link points
+  at is never read for its title or artwork. This is the existing
+  "arbitrary URL playback / generic URL fetch / audio proxying" non-goal
+  applied to a new entry point.
+- **No Spotify audio of any kind, and no playback token of any kind.**
+  Spotify links resolve metadata → canonical identity → the existing
+  matcher → a YouTube equivalent → the one playback resolver. There is no
+  Web Playback SDK, no streaming link stored or echoed back, and no signed
+  URL persisted; a Spotify card whose equivalent was not found renders
+  catalog-only rather than degrading to an approximation.
+- **No live detect-as-you-type resolution.** Detection is pure client-side
+  string work against the value already in state — no request, no debounce,
+  no spinner. Submitting is what resolves, so there is no keystroke-to-
+  provider path and no pasted-link preview.
+- **No automatic queue mutation on paste.** Resolving a link renders a
+  result. Queueing, playing, liking and adding to a playlist stay explicit
+  user actions, exactly as they are for a text search.
+- **No new provider selector, no second search input, no "search URL"
+  button.** One field, one submit path, one history.

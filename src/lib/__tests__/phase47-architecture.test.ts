@@ -278,10 +278,18 @@ describe("Phase 47: one keep-listening control", () => {
   //
   // Granularity is the FILE, not the call: this catches a new surface growing
   // its own queue writer (the realistic failure), not a second method added
-  // to one of the five listed writers.
+  // to one of the listed writers.
+  //
+  // The sixth entry is the resolved-collection header's "Add all to queue",
+  // which is the bulk form of what `track-action-menu.tsx` already does per
+  // row: a user-initiated append through `QueueManager`, not a generation
+  // source, so the coordinator's guards are untouched. It writes only after
+  // `resolveSearchLink` has cross-source matched and deduplicated on
+  // canonical identity, so a duplicate cannot reach the queue through it.
   it("has no queue writer beyond the known ones", () => {
     const writers = productionOffenders(/\.queue\.(add|replace|clear|remove|reorder)\(/);
     expect(writers.sort()).toEqual([
+      "app/(app)/search/link-result.tsx",
       "app/(app)/track/[id]/track-player.tsx",
       "components/player/queue-panel.tsx",
       "components/tracks/track-action-menu.tsx",

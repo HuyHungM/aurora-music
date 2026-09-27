@@ -282,6 +282,72 @@ test.describe("pwa application shell", () => {
     expect(errors).toEqual([]);
   });
 
+  test("startup survives an origin with no service worker API", async ({
+    page,
+  }) => {
+    // The other half of the registration contract, and the half that a
+    // secure-context CI host can never reach by navigating on its own.
+    //
+    // `navigator.serviceWorker` is a [SecureContext] interface: on a plain-HTTP
+    // origin (a LAN/IP host such as http://192.168.1.32:3000, and the
+    // production deployment served over http://) the property is not exposed
+    // at all — `"serviceWorker" in navigator` is false and the container is
+    // `undefined`. Deleting the prototype property reproduces exactly that
+    // API surface while still running the real production bundle.
+    //
+    // This is a regression test for a real crash, not a hypothetical. The
+    // source guarded with `if (!container) return undefined`, which is
+    // correct TypeScript and which unit tests pass — but the production
+    // compiler eliminated that branch as dead code, so the shipped bundle
+    // evaluated `typeof container.register` on `undefined` and threw
+    // `TypeError: Cannot read properties of undefined (reading 'register')`
+    // out of a root-layout effect. That unmounted the tree: PlayerHost logged
+    // `app_initialized`, crashed, logged `app_shutdown`, and re-mounted in a
+    // loop until the page was unusable. Nothing but the built bundle can
+    // catch that, which is why this test exists here and not in vitest.
+    await page.addInitScript(() => {
+      delete (Navigator.prototype as unknown as Record<string, unknown>)
+        .serviceWorker;
+    });
+
+    const pageErrors: string[] = [];
+    const consoleLines: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    page.on("console", (message) => consoleLines.push(message.text()));
+
+    await page.goto("/");
+    await expect(page.getByRole("navigation").first()).toBeVisible();
+
+    // The page really is running with the API absent.
+    expect(await page.evaluate(() => "serviceWorker" in navigator)).toBe(false);
+    expect(await page.evaluate(() => typeof navigator.serviceWorker)).toBe(
+      "undefined",
+    );
+
+    // PlayerHost stays alive: it initialized and was never shut down.
+    await expect
+      .poll(
+        () =>
+          consoleLines.filter((line) =>
+            line.includes('"event":"app_initialized"'),
+          ).length,
+        { timeout: 15_000 },
+      )
+      .toBeGreaterThan(0);
+    expect(
+      consoleLines.filter((line) => line.includes('"event":"app_shutdown"')),
+    ).toEqual([]);
+
+    // No uncaught exception of any kind, and specifically not the
+    // `reading 'register'` failure this test exists to prevent.
+    expect(pageErrors).toEqual([]);
+    expect(
+      consoleLines.filter(
+        (line) => line.includes("register") && line.includes("TypeError"),
+      ),
+    ).toEqual([]);
+  });
+
   test("offline reload serves the built-in fallback, not music", async ({
     page,
     context,

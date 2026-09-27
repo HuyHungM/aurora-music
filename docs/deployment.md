@@ -33,9 +33,11 @@ the `LayoutProps`-style generated types are absent and typecheck fails. The
 build step above is therefore ordered first, not last. This is Next.js 16
 behaviour and is unrelated to the package manager.
 
-Migrate **before** deploying the new artifact: both current migrations are
-purely additive, so old code also runs against the new schema, while new
-code requires it.
+Migrate **before** deploying the new artifact: every migration to date is
+additive to the schema — the one exception is the reviewed duplicate-row
+`DELETE` inside `recently_played_one_row_per_track`, which only removes rows
+the new uniqueness forbids — so old code also runs against the new schema,
+while new code requires it.
 
 ## Startup contract
 
@@ -140,10 +142,12 @@ mistyped kill switch cannot take the site down.
 `playlistSharing` blocks the transition TO shared only. Going back to private is
 always permitted: revocation must work even when the feature is being killed.
 
-## Rollback## Rollback
+## Rollback
 
 - Application rollback = redeploy the previous artifact. Safe: migrations
-  to date are additive, so old code runs on the new schema.
+  to date are additive to the schema (the one reviewed duplicate-row
+  `DELETE` inside `recently_played_one_row_per_track` only removes rows the
+  new uniqueness forbids), so old code runs on the new schema.
 - Database rollback has **no automatic downgrade** (Prisma provides none);
   it means restoring from backup. Never run `prisma migrate resolve`
   destructive commands casually.

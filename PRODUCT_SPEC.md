@@ -37,8 +37,9 @@ YouTube-backed browser playback and authenticated personal-library features.
 
 | Capability | Status |
 |---|---|
-| Home / discovery sections (popular, featured, recommendations, albums, artists) | Implemented |
+| Home / discovery sections (recommendations always; popular / featured / albums / artists when the active provider advertises those capabilities) | Implemented, capability-gated |
 | Unified multi-provider track search + capability-gated artist/album search | Implemented |
+| Same search field accepts a Spotify / YouTube / Deezer link (classified before any provider call) | Implemented |
 | Album browsing (detail + track list + play) | Implemented |
 | Artist browsing (detail + track list + play + follow) | Implemented |
 | Track details (player + like + recommendations) | Implemented |
@@ -84,6 +85,11 @@ Mechanics:
 - No custom cookie or session code; secure `HttpOnly` / `SameSite=Lax`
   cookies via Auth.js defaults (`__Secure-` prefix in production).
 - Sign-out redirects to the fixed `/` target (no open redirects).
+- **Sign-in always targets the host the browser is on.** The authorization
+  `redirect_uri` and every link `/api/auth/*` renders are built from the
+  request the browser made, so opening the dev server from another device
+  (`http://<lan-ip>:3000`) starts OAuth against that same origin instead of
+  `localhost` — which would try to return the token to the phone itself.
 - Mutations require a session user; the DAL rechecks resource ownership.
 
 ## 4. Provider model
@@ -261,6 +267,24 @@ Authenticated users own:
   and percent-encodes the query; re-submitting the query already shown
   does not re-navigate. Searching never interrupts playback, replaces the
   queue, or drops an active radio session.
+- **The same field accepts a provider link.** It classifies what is in it
+  — ordinary text, a link Aurora can read, or a link it cannot — before
+  anything is requested, and says so with a one-line hint under the field
+  ("Spotify link detected" / "YouTube link detected"). A link Aurora can
+  read resolves through the provider and renders one result — a track card,
+  or an album/playlist page of bounded numbered rows — instead of a search
+  result list: the id in the URL is used directly (a YouTube video is never
+  re-searched), Spotify and Deezer supply metadata only, and any
+  cross-source equivalent is found by the existing matcher. Collections are
+  cross-source matched and deduplicated on canonical identity before they
+  can reach the queue, a playlist or Recently Played, and pasting a link
+  changes nothing on its own — playback, queueing and saving remain the
+  user's explicit actions. A link Aurora cannot read is refused with copy
+  and is never passed to the provider as text, while ordinary prose —
+  punctuation, `?` and `—` included — keeps searching exactly as before.
+  Resolution renders inline in the same page: no full-page spinner, no
+  stack trace, no provider message. Refused links are not recorded in
+  search history. See `ARCHITECTURE.md` §9a.
 - **Playlists** — see §8.
 - **Persistent playback session** — one row per user (`userId @unique`)
   holding `provider` + `providerTrackId` + `position` + `revision`, plus a
@@ -342,6 +366,20 @@ appear only as catalog detail and inside home sections.
 - The owner enables sharing from the playlist's `Share` control
   (`[Play] [Share] [More]` → Share Playlist). The server mints an opaque
   token and returns a link; the owner can copy it or revoke it.
+- The owner-facing dialog presents that choice as a two-state selector rather
+  than a single action button whose label flips: the owner picks **private** or
+  **shared**, the current state is stated in words alongside it, and the
+  consequence of turning sharing off — the current public link stops working
+  immediately — is stated before the choice, not after it. The link is offered
+  as a copy field, plus the platform share sheet where `navigator.share` is
+  available, and copy confirmation expires on its own so it never goes on
+  claiming a copy that has since been undone.
+- Copying degrades instead of failing: `navigator.clipboard` where it exists,
+  a selection-based `execCommand("copy")` fallback where it does not (a
+  plain-HTTP origin has no async clipboard API), and a selectable read-only
+  link field plus an honest message when neither works. The share link itself
+  is always `window.location.origin`-relative, so a page opened from another
+  device on the LAN copies an address that device can reach.
 - The public URL is `/playlist/share/<token>` and carries **only** the token:
   no playlist id, no owner id, no provider id, no Prisma identifier. The
   token is 24 random bytes (192 bits) rendered base64url, so it is not
@@ -403,7 +441,10 @@ change, and the worker keeps it in a small dedicated cache
 Service-worker boundaries: single versioned static cache
 (`aurora-sw-v2:static`); activation deletes older `aurora-` caches only;
 nothing precached at install; registration is production-only (development
-sessions never register, so Turbopack dev chunks are never served from PWAcache), failure-tolerant, and decoupled from player lifecycle. A new worker
+sessions never register, so Turbopack dev chunks are never served from PWAcache), **secure-context-only** (an origin that does not expose a
+`serviceWorker` API — every plain-HTTP host, the deployed production URL
+among them — skips registration instead of failing), failure-tolerant, and
+decoupled from player lifecycle. A new worker
 waits rather than taking over: the page releases it at `pagehide`, so a deploy
 never interrupts a listening session and the new build is picked up on the next
 launch. The offline page is rendered in the visitor's own language.
@@ -494,6 +535,19 @@ Concrete guarantees (no WCAG certification claimed):
   document for its exit and is then removed. A rapid open → close → open
   never flickers, never leaves an element stuck half-open, and never
   unmounts before its exit has played.
+- **A menu always opens whole, and never outlives its anchor.** Opening a
+  track's actions from any row shows every action: the menu is inside the
+  viewport, no container between it and the page cuts any part of it, and
+  nothing paints over it. That holds at the bottom of a list, at the right
+  edge of the screen, inside a scroll container, and at every supported
+  width. Direction is measured rather than assumed — a menu opens on whichever
+  side actually has the room for it, keeping clear of the player chrome. It
+  dismisses on outside click, on Escape, on selecting an action, and — for a
+  menu that has to be drawn outside the scroll container holding its row, so
+  that the container cannot clip it — on scrolling that row away, because a
+  menu anchored to a row it can no longer see is a menu about the wrong row.
+  Enforced by `src/components/ui/__tests__/menu-clipping.test.ts`,
+  `e2e/menu-clipping.spec.ts`, and §21.4 of `ARCHITECTURE.md`.
 
 ## 10.2 Text selection (Phase 51 addendum)
 
@@ -806,7 +860,8 @@ NON-GOALS
 - Payments / subscriptions
 - Analytics / external telemetry
 - Live radio / live streams (rejected by the resolver)
-- Equalizer / sleep timer / crossfade / gapless playback
+- Sleep timer / crossfade / gapless playback (the equalizer is *in* scope —
+  it shipped, see §18 — but the other three are not)
 - New providers beyond YouTube / Deezer / Spotify
 - Machine-learned, embedding-based, or externally-served recommendations
   (see §15.1)
@@ -865,10 +920,11 @@ place, and the Settings route was already reachable from the shell.
   a reset control. The eight individual sliders live behind "Advanced", because
   a form of ten controls whose defaults are already good reads as unfinished.
 - **Presets are starting points, not modes.** Each sets glass alpha, blur,
-  saturation, border intensity and ambient intensity together. A preset owns
-  exactly those five values and nothing else — choosing a look never discards a
-  background image or the ambience setting, and nudging one slider after
-  choosing a preset is expected and supported.
+  saturation, border intensity, ambient intensity and background dim
+  together. A preset owns exactly those six values and nothing else —
+  choosing a look never discards a background image or the ambience
+  setting, and nudging one slider after choosing a preset is expected and
+  supported.
 - **Minimal is the performance choice.** It sets blur to zero, which removes
   every backdrop filter in the application in one selection. This is offered
   rather than inferred: the product does not inspect the device's hardware to
@@ -973,8 +1029,20 @@ tuned away, and automatic headroom (which measures the whole chain) offers
 - **Playback never depends on the equalizer.** If the browser has no Web Audio,
   or the graph cannot be built, or the audio element cannot be connected, the
   music plays exactly as it would with the equalizer off, and the interface says
-  so in the same sentence as the failure. There is no configuration of this
-  feature in which a listener hears silence because of it.
+  so in the same sentence as the failure.
+- **There is one condition that defeats that guarantee, and it lives in the
+  media path rather than in this feature.** A provider stream is cross-origin
+  and carries no CORS headers, and a browser refuses to let Web Audio read an
+  element loaded from such a source: the graph then receives digital silence
+  while the element itself plays normally. This was measured, not inferred —
+  Chromium, 2026-09-26, with the browser's own console message and a
+  `MEDIA_ERR_SRC_NOT_SUPPORTED` result for the `crossOrigin` workaround. It
+  means enabling the equalizer on a provider stream is currently the one known
+  way for this feature to cost a listener their sound. Closing it needs either
+  same-origin media delivery or a pre-engagement CORS probe with the element
+  handed over only after the source is known to be readable; neither is a mode
+  switching change and neither is built. Full evidence in `ARCHITECTURE.md`
+  §33.8, deliberate deferral in `docs/scope-boundaries.md`.
 - **Nothing about playback changes.** The equalizer has no playback controls: it
   cannot start, pause, skip, seek, replace a track or touch the queue. The curve
   is not part of the playback session, so clearing a restored session does not
@@ -983,6 +1051,24 @@ tuned away, and automatic headroom (which measures the whole chain) offers
   previous, queues, playlists, radio, infinite listening and resolver retries —
   without rebuilding the audio graph or duplicating it. Changing the curve
   changes parameters, not structure.
+- **Switching modes is a parameter change, never an audio event.** The four
+  modes are Flat, Aurora V-Shape, Custom and Bypass (equalizer off, or the
+  hold-to-compare control held). Choosing one never pauses playback, never
+  resets position, never recreates the media element, the `AudioSource`, the
+  controller or the `AudioContext`, and never asks for a track or touches the
+  queue. It writes the ten band gains and the preamp onto the nodes already
+  running, and the newest request wins when two arrive close together. Bypass is
+  unity gain through that same live graph — not a disconnect — so coming back
+  out of it restores the curve immediately, with no re-engagement and no
+  second context.
+- **The equalizer never silences the listener *because the context could not
+  start*.** The audio element is only ever handed to Web Audio once the context
+  has confirmed it is running; if the browser wants a user gesture first, the
+  element keeps playing directly and the equalizer retries by itself at the next
+  gesture. This is reported as a wait, not as an error, because it is not one.
+  That guarantee is about the context — the media-path condition above is a
+  different failure with a different owner, and it is named rather than folded
+  into this sentence.
 - **No clicks.** Every band and preamp change is smoothed over 30 ms rather than
   stepped.
 - **Persisted per account when signed in, per browser otherwise,** on the same
