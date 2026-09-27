@@ -772,6 +772,28 @@ until the rollback analysis is redone.
   port-stripping regex — because that would work only for the port that happens
   to be wrong today and would break a legitimate
   `http://192.168.1.32:3000` LAN origin.
+- **The two Auth.js URL sources are independent, and each has its own test.**
+  This is the invariant the whole origin work exists to protect, so it is worth
+  stating plainly. A sign-in reaches Auth.js by one of two routes that never
+  share an input:
+  1. `signInWith()` → `signIn()` → `createActionURL()`, which reads
+     `AUTH_URL` from `process.env` and builds a **fresh** string. It never
+     touches the inbound request.
+  2. `/api/auth/*` → the route handler → `toBrowserOrigin()`, which rewrites
+     the inbound `Request` in place and lets Auth.js read `request.url`.
+
+  So a deployment can be half-fixed: route (2) correct while (1) still hands
+  browsers a loopback link, and the symptom is a sign-in that dies at the
+  callback rather than an error anywhere near the cause. In production (1) was
+  already portless while (2) carried `:24584` — same headers, same process,
+  two answers. Correctness therefore means the two agree, and the pair of specs
+  is built to fail separately, which was verified by reintroducing each defect
+  in turn: `e2e/auth-public-origin.spec.ts` (route 2) fails when `url.host` is
+  used, and `e2e/auth-server-action-public-origin.spec.ts` (route 1, a real
+  browser click through to the Google authorization request) fails when the
+  `AUTH_URL` bridge in `src/lib/auth.ts` is removed — with the callback
+  falling back to `http://127.0.0.1:<port>/...`. Neither spec can catch the
+  other's regression, so neither is sufficient alone.
 - Language preference (`src/lib/dal/locale.ts`): `getUserLocale` /
   `setUserLocale` on the nullable `User.locale` column — not a dedicated
   table. Null means "no explicit preference" (falls back to cookie, then
@@ -1350,6 +1372,16 @@ non-disabled item the topmost thing at its own centre — by
   acceptance, keyboard, error-recovery, PWA, authenticated library/playlist/
   session (setup/teardown harness), E2E-only routes (`e2e-playback`,
   `e2e-library`) gated out of production.
+- **One spec runs its own server.** `e2e/auth-server-action-public-origin.spec.ts`
+  boots and tears down its own `next start`, on an OS-assigned port, with
+  `AURORA_PUBLIC_URL` set. The shared `webServer` must not set that variable,
+  because a good part of what the suite proves is that a deployment declaring
+  *nothing* still derives its origin from the request. A second `webServer`
+  entry or a dedicated project would both work, but each is paid for by every
+  run of the whole suite, so the cost is kept inside the one file that needs it
+  — at the price of restating four environment flags from `playwright.config.ts`.
+  It asserts the URL the browser is *sent to* and never waits on Google's
+  reply, so it needs no credentials, no OAuth round trip, and no network egress.
 - **Phone projects** (`mobile-chromium`, `mobile-landscape`): a Pixel 7
   portrait profile and a rotated iPhone 15 Pro Max, both `testMatch`-scoped to
   `e2e/mobile-layout.spec.ts`. The scoping is deliberate: a project-level
