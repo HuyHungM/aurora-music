@@ -25,27 +25,37 @@ queue" — were both **test-side or fixture-side defects that had been hiding a 
 bug behind them**. Chasing them to the bottom produced:
 
 - **1 genuine P1 product bug** that no test was able to see because it only appears when a
-  user's playlist list is long: the add-to-playlist picker inherits a placement verdict
-  computed for the *short* menu it replaced, so its lower items land under the fixed
-  player bar and **"add to playlist" becomes unclickable** (M3-04).
+  user's playlist list is long: the add-to-playlist picker's placement decision is taken
+  against a surface that is **still loading its content**, so it is told there is room
+  below and then grows 185px into the fixed player bar. Its lower items are visible and
+  unclickable, so **"add to playlist" fails for exactly the users with the most playlists**
+  (M3-04). The first fix for it — re-judging on a surface swap — was necessary and
+  **not sufficient**; the second full-suite run failed again, and only a geometry probe
+  turned "flaky" into a measured cause.
 - **1 P1 reliability defect** exposed by measuring the provider: a playback source that is
   provably *alive* but refused by the CDN was classified **permanent**, so a throttle
   window left every subsequent track unplayable until the user pressed play by hand
   (M3-02).
-- **1 P2 a11y defect** (two controls on one screen sharing the accessible name
-  "Create playlist", M3-01) and **1 P2 data-integrity hole** (an unvalidated client
-  `Track` written straight into the catalog every user reads, M3-03).
+- **1 P2 data-integrity hole**: an unvalidated client `Track` written straight into the
+  catalog every user reads (M3-03).
+- **3 accessibility defects** where there had been none recorded — two of them found by
+  running the first objective a11y audit this project has ever had (M3-01's duplicate
+  accessible name, M3-07's skipped heading level, M3-08's Label-in-Name break), and one
+  that is *reported rather than fixed* with proof that no one-line fix exists (M3-09,
+  the primary sign-in CTA at 3.97:1).
 
-**Release status: NOT production-ready.** Two P1s remain open, both of them
-*deployment* rather than code, and neither can be closed from this machine:
+**Release status: NOT production-ready.** One P0 is open and it is a *deployment*, not a
+code defect:
 
 1. The P0 crash fix (AUR-001) is **verified fixed in the build but not deployed** — the
    live production origin still serves the pre-fix bundle and still crashes on ~40% of
    loads.
-2. The full E2E suite and the live-playback suite are **network-dependent and
-   self-throttling**: an 8-minute live run drives YouTube into a refusal state that fails
-   8/11 tests that pass 11/11 in two shorter runs. The product handles it correctly only
-   after M3-02; the suite itself is not a reliable gate (AUR-015).
+
+A second item is not a defect in the product at all but does gate release confidence: the
+full E2E suite and the live-playback suite are **network-dependent and self-throttling**.
+An 8-minute live run drives YouTube into a refusal state that fails 8/11 tests that pass
+11/11 in two shorter runs. The product handles it correctly only after M3-02; the suite
+itself is not a reliable gate (AUR-015).
 
 Everything else in the coverage floor — startup, 12 routes, authn/authz, user-data
 isolation, DB integrity, search, playback, queue, playlist mutations, navigation, mobile
@@ -60,14 +70,19 @@ named in *Remaining Risks* and *Unverified Areas*.
 |---|---|---|
 | Lint | `bun run lint` | **0 errors** *(measured)* |
 | Typecheck | `bun run typecheck` | **0 errors** *(measured)* |
-| Unit suite | `bun run test` | **196 files / 2814 tests passed** *(measured)* |
-| Production build | `bun run build` | **0 errors** *(measured, 4 builds)* |
-| E2E (default suite) | `bunx playwright test` | see *Audit Stopping Evidence* *(measured)* |
+| Unit suite | `bun run test` | **198 files / 2822 tests passed** *(measured)* |
+| Production build | `bun run build` | **0 errors** *(measured, 6 builds)* |
+| E2E (default suite) | `bunx playwright test` | **165 passed / 0 failed / 20 skipped** *(measured twice, 5.4 and 5.5 min, on the final build)* |
 | E2E (live playback, opt-in) | `AURORA_E2E_LIVE_PLAYBACK=1 … live-playback.spec.ts` | **11 / 11 passed** *(measured, split into 3 + 8 runs)* |
-| Canonical-dedupe journeys | `… canonical-dedupe.spec.ts` | **6 / 6 passed** *(measured)* |
+| Canonical-dedupe journeys | `… canonical-dedupe.spec.ts` | **6 / 6 passed** *(measured, and 4/4 within the full suite)* |
+| Accessibility audit | Lighthouse, production build, insecure origin | **0.96**, best-practices 1.00, SEO 1.00 *(measured; was 0.94 with three failures)* |
+| Production runtime | `bun run start` on `http://192.168.1.32:3200` | 4/4 loads, 0 console errors, `app_initialized` ×1, `app_shutdown` 0 *(measured)* |
+| Production smoke | `bun run smoke:prod -- --spawn --port 3100` | **OK** *(measured on the final build)* |
+| Operational verifiers | `verify:client-bundle`, `verify:share-route`, `db:verify`, `db:integrity` | **0 / 0 / OK / OK** *(measured)* |
+| Restore drill | `AURORA_RESTORE_DRILL=1 bun run db:restore-drill` | **OK, row-for-row** *(measured: dump → isolated restore → integrity verify → count compare → drop)* |
 
-Baseline for this pass was 193 files / 2786 tests, so **+3 files and +28 tests** are new
-work from this mission (M3-01 … M3-04 regression tests), with zero pre-existing tests
+Baseline for this pass was 193 files / 2786 tests, so **+5 files and +36 tests** are new
+work from this mission (M3-01 … M3-09 regression tests), with zero pre-existing tests
 weakened or removed.
 
 **Product shape.** 12 pages + 3 API routes + 18 server-action modules (40 exported
@@ -183,39 +198,58 @@ so nothing is hidden.
 | **M3-03** | P2 | Data integrity | the like path's write contract (AUR-010) | **fixed** |
 | **M3-04** | P1 | Core flow / layering | long playlist picker is covered by the player bar | **fixed** |
 | **M3-05** | P3 | Test isolation | a journey asserted a queue shared with every other spec | **fixed** |
+| **M3-07** | P2 | Accessibility | home page sections were `h3` under a lone `h1` | **fixed** |
+| **M3-08** | P3 | Accessibility | brand link's visible text was one word, its name two | **fixed** |
+| **M3-09** | P2 | Accessibility | primary sign-in CTA is 3.97:1 contrast (AA needs 4.5:1) | **reported** (provably a token decision) |
 | **M3-06** | — | Environment | live suite self-throttles; 8/11 fail only in a long run | documented (not a defect) |
 
 ### M3-04 — A long "Add to playlist" picker is covered by the fixed player bar
 
 - **Category:** Core flow / layering
 - **Severity:** P1 (fixed)
-- **Location:** `src/components/tracks/track-action-menu.tsx:206`; `src/components/ui/menu-placement.ts`; consumer `src/components/tracks/add-to-playlist-menu.tsx:317,379`
+- **Location:** `src/components/ui/menu-placement.ts` (the rule itself);
+  `src/components/tracks/track-action-menu.tsx:206` (the host);
+  `src/components/ui/empty-state.tsx`, `src/components/shell/brand.tsx` (see M3-07/08)
 - **Evidence:** a full-suite E2E run failed with
   `<div role="region" aria-label="Player bar"> … subtree intercepts pointer events`
   on a playlist item, for 15 s across 8 retries, while the item itself was
   "visible, enabled and stable". The row menu and the playlist picker occupy **one
-  slot** — the picker *replaces* the row menu while `mounted` stays true. The flip
-  verdict is produced by `useMenuOpenUp({ open, triggerRef, surfaceRef })`, whose effect
-  re-runs only on `[open, placementKey, surfaceRef, triggerRef]`; `placementKey` was
-  never passed, so the verdict computed for the ~200 px row menu was applied to the
-  ~330 px picker, which then extended past the room the verdict cleared.
-  `queue-panel.tsx:107-112` passes `placementKey: showPlaylistMenu ? … ` for exactly this
-  swap — the row menu's host simply omitted it.
-- **Impact:** for a user with more than a handful of playlists, the items at the bottom
-  of the picker sit under the fixed player bar: visible, not clickable, and **"add to
-  playlist" fails** for precisely the users with the most playlists. Unreproducible for
-  anyone with two playlists, which is why no earlier pass saw it.
-- **Root Cause:** a documented invariant ("the taller playlist picker cannot be assumed to
-  fit in the room the short row menu needed") was expressed in a comment but not wired to
-  the hook's existing re-run seam.
-- **Fix:** pass `placementKey: showPlaylistMenu ? "playlist-picker" : "row-menu"`, so the
-  decision is re-made against whichever surface is actually in the slot.
-- **Validation:** two new hook cases in `ui/__tests__/menu-placement.test.tsx` (re-judges
-  on key change / keeps the stale verdict when no key is given — the failure itself as a
-  test) plus a host-shape case in
-  `tracks/__tests__/track-action-menu-placement.test.ts`; 28/28 in the four menu test
-  files; the previously failing journey now passes in the same full-suite conditions
-  (M3-05) that exposed it.
+  slot** — the picker *replaces* the row menu while `mounted` stays true.
+  A temporary geometry probe (since deleted) built the failing state — ten
+  playlists, the player bar mounted — and measured the real numbers: the row
+  menu is **202px**, the picker is **131px with one playlist and 316px with ten**,
+  and the picker extends past the player bar's top edge, whose measured position
+  is 655px in a 720px viewport.
+- **Impact:** for a user with more than a handful of playlists, the items at the
+  bottom of the picker sit under the fixed player bar: visible, not clickable, and
+  **"add to playlist" fails** for precisely the users with the most playlists.
+  Unreproducible for anyone with two playlists, which is why no earlier pass saw it.
+- **Root Cause:** the flip rule takes its decision **once**, in a layout effect, from
+  the surface's height at that instant — and the playlist picker's list is a *server
+  action*. The picker therefore mounts at 131px, is told "there is room below", and
+  grows to 316px a moment later. The verdict describes a surface that no longer
+  exists. The swap case is the same failure in a different costume: the row menu's
+  verdict was applied to the picker that replaced it in the same slot.
+- **Fix (two parts, because the first part alone was not enough):**
+  1. The host passes `placementKey: showPlaylistMenu ? "playlist-picker" : "row-menu"`,
+     so a surface swapping into the same slot re-judges — the pattern
+     `queue-panel.tsx` already follows, which the host had simply omitted.
+  2. The rule itself now watches the surface's **size** (`ResizeObserver`) and
+     re-decides on a viewport `resize`. A flip changes a surface's position, never
+     its size, so this cannot oscillate.
+  The first part was shipped and **still failed** in the next full-suite run; the
+  probe above is what turned "flaky" into a measured cause. Reporting the first
+  attempt as the fix would have been wrong.
+- **Validation:** 4 new hook cases in `ui/__tests__/menu-placement.test.tsx` — the
+  swap (re-judges on key change), the swap's absence (keeps the stale verdict, i.e.
+  the defect stated as a test), **the surface growing after the decision** (the real
+  defect: 131px → 316px must flip), and a viewport change; plus a host-shape case
+  in `tracks/__tests__/track-action-menu-placement.test.ts`. 13/13 hook cases, 28
+  across the four menu test files. In the real browser with the failing state built
+  on purpose, the picker now carries `presence-menu-up … bottom-full`, the last item
+  reports `coveredByBar: false`, and the click that previously timed out for 15 s
+  succeeds.
+
 
 ### M3-02 — A playback source that is alive but refused was classified permanent
 
@@ -299,6 +333,78 @@ so nothing is hidden.
   hostile media fields stripped, parsed-not-caller, unlike ref paths); the pre-existing
   56 schema tests and 43 playlist-action tests pass unchanged; full unit suite green.
 
+### M3-07 — The home page's own sections were `h3` under a lone `h1`
+
+- **Category:** Accessibility / semantics
+- **Severity:** P2 (fixed)
+- **Location:** `src/components/ui/empty-state.tsx`; `src/app/(app)/page.tsx:161,215,224`
+- **Evidence:** objective, not a reading — a Lighthouse accessibility audit of the
+  **production build** reported `heading-order` as a failure: the page's headings
+  were `H1 "Chào mừng đến với Aurora"`, then `H3`, `H3` with nothing between them
+  (`main > div > div > h3` in the audit's own path). Three of the home page's five
+  empty states are not inside a titled section; the other two are, and are correct
+  at `h3`.
+- **Impact:** assistive-technology users navigating by heading level cannot tell
+  that the two states are top-level sections; the outline reports them as nested
+  under content that does not exist.
+- **Root Cause:** `EmptyState` hard-coded `<h3>`, which is only correct inside a
+  section that already has a heading — the component had no way to say otherwise.
+- **Fix:** an explicit `headingLevel` prop (`2 | 3`, default `3`), passed as `2` by
+  the three top-level call sites. The two in-section call sites are untouched, so
+  no other page's outline changes.
+- **Validation:** 3 new cases in `ui/__tests__/empty-state.test.tsx` (default level 3,
+  requested level 2 with no `h3` present, and the empty state's three-question
+  contract). No test or spec located these titles by level, so no locator needed
+  updating.
+
+### M3-08 — The brand link's visible text was one word, its name two
+
+- **Category:** Accessibility / Label in Name
+- **Severity:** P3 (fixed)
+- **Location:** `src/components/shell/brand.tsx:65-70`
+- **Evidence:** the same Lighthouse audit reported
+  `label-content-name-mismatch` on `<a aria-label="Aurora Music home" href="/">`:
+  "Text inside the element is not included in the accessible name". The wordmark is
+  two sibling spans, so the element's text content is the single word
+  **"AuroraMusic"**, which is not a substring of "Aurora Music home" — even though a
+  sighted user reads two words.
+- **Impact:** WCAG 2.5.3 (Label in Name) — a voice-control user who says what is on
+  screen cannot be guaranteed to get the control on screen. Nothing else is affected
+  (the name already described the link correctly).
+- **Root Cause:** the two words were separated visually (a flex column) but not in
+  the text content.
+- **Fix:** a single `{" "}` between the spans. A whitespace-only run is not
+  rendered as a flex item, so the layout is byte-for-byte unchanged and the text
+  content becomes "Aurora Music".
+- **Validation:** 3 new cases in `shell/__tests__/brand.test.tsx` asserting the
+  normalized visible text is contained in the accessible name (the rule, restated),
+  that the decorative mark contributes no text, and that the compact variant still
+  has a non-empty name.
+
+### M3-09 — The primary sign-in button fails WCAG 1.4.3 contrast (3.97:1)
+
+- **Category:** Accessibility / colour
+- **Severity:** P2 (**reported, not fixed** — and provably not a one-line fix)
+- **Location:** the `bg-accent text-accent-foreground` sign-in control
+  (`#f5f5f8` on `#8d5bed`), `text-sm` = 14px, font-weight 500
+- **Evidence:** Lighthouse, on the production build: "Element has insufficient color
+  contrast of **3.97** … Expected contrast ratio of 4.5:1", on
+  `button[type=submit]` with `bg-accent text-accent-foreground` — the header's
+  "Đăng nhập" (Sign in) button, i.e. the one control every anonymous visitor is
+  invited to press.
+- **Impact:** below AA for the control that gates the whole signed-in product.
+- **Why it was not fixed, and the proof:** the fix cannot live in the foreground.
+  `#8d5bed` has relative luminance **0.1902**; 4.5:1 against it requires a
+  foreground luminance of `4.5 × 0.2402 − 0.05 = 1.0309`, and **1.0 is pure white**.
+  No text colour on that background can pass. The only correct fix is to darken
+  `--accent`, which changes the brand colour on every surface in the product — a
+  design decision this audit is not entitled to make. Recorded with the exact
+  numbers needed to make it.
+- **Recommended fix (operator/design decision, not an audit fix):** darken
+  `--accent` until `accent-foreground` clears 4.5:1 (roughly `#7c4de0` and darker
+  for white text), or set the button's background to the existing
+  `accent-hover`/darker step, then re-run the audit.
+
 ### M3-05 — A journey asserted a queue it shares with every other spec
 
 - **Category:** Test isolation
@@ -314,11 +420,18 @@ so nothing is hidden.
   regression and trains people to re-run.
 - **Root Cause:** the assertion was "the queue equals exactly this array", a claim about
   shared state the journey does not own, instead of a claim about what the journey did.
-- **Fix:** read the starting line, then assert the **occurrences of the ids under test**
-  plus the **total length** — "one entry per logical song, and each add either adds its
-  one entry or changes nothing". A duplicate that slipped through moves either number.
-- **Validation:** 6/6 in isolation; and in the full-suite run that previously produced
-  two failures, the same spec now passes (see *Validation* in the stopping evidence).
+- **Fix (two rounds, because the first was still a claim about the world):** read the
+  starting line, then assert the **occurrences of the ids under test** plus the
+  **total length**. The second round is the more interesting one: the first version used
+  `before.length + 1`, and the next full-suite run failed with `total: 2` where `3` was
+  expected — because `e2e-track-1` was **already** in the shared queue, so
+  `dedupeCanonicalTracks` correctly refused the add and the length did not move. An
+  offset expectation reports the product working as designed as a product failure. The
+  expectation is now computed from the baseline: `totalAfter(before, ids)` is the size of
+  `before ∪ ids`, which is the invariant itself (one entry per distinct song) rather than
+  a guess about how many adds should have landed.
+- **Validation:** 6/6 in isolation; and in the full-suite runs that produced these
+  failures, the same spec now passes under the same conditions (see *Validation*).
 
 ### AUR-020 / QA-02 — Three canonical-dedupe journeys failing on baseline (root-caused and fixed)
 
@@ -437,13 +550,15 @@ validation named in the finding.
 |---|---|---|---|
 | AUR-001 | P0 | presence-test `serviceWorker` before dereferencing; build gate + E2E | compiled form, insecure-origin browser probe, secure-origin registration, 4 gate fixtures, 1 E2E |
 | AUR-002 | P1 | scheme only in both thrown messages | grep, full gates |
-| M3-04 | P1 | `placementKey` so the placement verdict is re-made for the picker | 3 new cases + 28/28 menu tests; failing journey now passes |
+| M3-04 | P1 | re-judge placement on a surface **swap** (`placementKey`) *and* on the surface's own **size** or the viewport's (M3-04) | 4 new hook cases (13/13) + 28 across the four menu files; the click that timed out for 15 s now succeeds in a browser with the failing state rebuilt by hand; the journey passes in the full suite |
 | M3-02 | P1 | alive-but-refused ⇒ `retryable`, so bounded recovery runs | 7 new cases + 56/56; live suite 11/11 |
 | M3-01 | P2 | distinct accessible name for the section-header action | 4 new cases; i18n parity; 8 dependent E2E specs still resolve |
+| M3-07 | P2 | `EmptyState` takes an explicit heading level; the three top-level home states are `h2` | 3 new cases; Lighthouse `heading-order` before the fix |
+| M3-08 | P3 | the wordmark's two spans are separated in the text content, not only visually | 3 new cases; Lighthouse `label-content-name-mismatch` before the fix |
 | M3-03 (AUR-010) | P2 | one `trackInputSchema` for both catalog writers; parsed value passed on | 13 new cases; 56 schema + 43 playlist tests unchanged |
 | AUR-020 / QA-02 | P2 | four stale locators + re-anchoring on "Add to queue" | 6/6 isolated and in the full suite |
 | QA-03 | P3 | fixture B is a distinct real recording, ids in one shared module | 3 tests pass; new id probed (progressive 206) before use |
-| M3-05 | P3 | journey asserts its own effect, not the shared queue | same full-suite run that failed now passes |
+| M3-05 | P3 | the journey asserts its own effect (`occurrences` + `totalAfter(before, ids)`) instead of the shared queue's exact contents | 6/6 isolated; the two full-suite runs that failed it now pass |
 | AUR-021 | P3 | capability row corrected | static |
 | AUR-003…AUR-009 | P1 | 7 documentation corrections (rate limiting, `youtubei.js` boundary, migrations, TLS, equalizer scope, listening read, caching) | each re-read against the cited code |
 
@@ -473,24 +588,46 @@ Implemented this pass:
    flips the way it was always documented to.
 2. **M3-02** is a user-visible reliability win with no UI: after a provider refusal
    window the track now recovers by itself instead of demanding a manual press.
-3. **M3-05** removes a false alarm from CI, which is a UX property of the team's own
+3. **M3-07 / M3-08** improve accessibility for assistive technology and voice control:
+   top-level empty states are navigable as sections (`h2`), and saying "Aurora Music"
+   activates the home brand link.
+4. **M3-05** removes a false alarm from CI, which is a UX property of the team's own
    feedback loop.
 
 ---
 
 ## Accessibility Issues
 
+**This pass replaced hand-assertion with measurement.** A Lighthouse accessibility
+audit was run against the **production build** served from the insecure LAN origin,
+which is the first objective a11y number this project has ever had. It ran **twice** —
+before and after this pass's fixes — and the two runs are the evidence:
+
+| Audit | Accessibility | Best practices | SEO | Failing audits |
+|---|---|---|---|---|
+| before the fixes | **0.94** | 1.00 | 1.00 | `color-contrast`, `heading-order`, `label-content-name-mismatch` |
+| after the fixes | **0.96** | 1.00 | 1.00 | `color-contrast` only |
+
+`heading-order` and `label-content-name-mismatch` are gone, confirmed by an independent
+scanner and not only by the tests written alongside. The remaining failure is M3-09, and
+the report says plainly why it was not fixed. This also changes what "no a11y scanner"
+(A11Y-02) means: the gap is not that accessibility is unmeasured *now*, it is that the
+measurement is not in CI — and the delta above is the argument for putting it there.
+
 | ID | Sev | Issue | Evidence | Disposition |
 |---|---|---|---|---|
 | M3-01 | P2 | two controls on one screen with the accessible name "Create playlist" | pre-M3-01 source + `getByLabel` scoping | **fixed** (4 new tests) |
+| M3-07 | P2 | the home page's own sections were `h3` under a lone `h1` | Lighthouse `heading-order`; audit path `main > div > div > h3`; DOM after the fix is exactly `h1 → h2 → h2`, zero `h3` | **fixed** (3 new tests) |
+| M3-08 | P3 | the brand link's text content was "AuroraMusic"; its name "Aurora Music home" | Lighthouse `label-content-name-mismatch`; the built DOM's wordmark now reads "Aurora Music" | **fixed** (3 new tests) |
+| M3-09 | P2 | the header's sign-in CTA is **3.97:1**, below AA's 4.5:1 | Lighthouse `color-contrast`, `#f5f5f8` on `#8d5bed` at 14px; still failing after both audits | **reported, not fixed** — no foreground can pass (proved in the finding); the fix is a design-token decision |
 | A11Y-01 | P3 | Per-row action labels repeat across regions by design (a track row and the player bar both say "Actions for <track>") | `ARCHITECTURE.md` §32.10 as amended | **documented as an invariant**, not a defect: repetition *across regions* is correct and is now stated as a rule so a future change does not "fix" it into ambiguity |
-| A11Y-02 | P2 | No automated WCAG scan in CI; only hand-written role/name assertions | `package.json` (no axe), `ci.yml` | **deferred** under AUR-015 — an axe gate on 2–3 pages is the recommended first step |
+| A11Y-02 | P2 | The audit that found M3-07/08/09 is not in CI, and covers one page | Lighthouse run manually, this pass; `package.json` (no axe), `ci.yml` | **deferred** under AUR-015 — an axe gate on 2–3 pages is the recommended first step, and this pass is the evidence for why |
 | A11Y-03 | P3 | No physical iOS/Android device was available; touch-target sizes and real VoiceOver/TalkBack behaviour are unverified | no hardware | **unverified**, not assumed |
 
 The pre-existing a11y position is otherwise strong and was re-verified: native elements
 where they exist, `aria-pressed` kept while disabled, `aria-valuetext` on every slider,
 state never colour-only, i18n keys travelling to the render, `prefers-reduced-motion`
-honoured.
+honoured. Best-practices scored **1.00** and SEO **1.00** on the same audit.
 
 ---
 
@@ -589,16 +726,19 @@ each names what it would take.
    Closes UX-02, the only missing-feature gap on a core surface, using state that
    already exists.
 3. **CI: one mobile project + coverage (report-only) + axe on 2–3 core pages** — closes
-   half of AUR-015 and gives an objective a11y number to regress against. Schedule the
+   half of AUR-015 and turns this pass's manual Lighthouse run into a gate. Schedule the
    live suite rather than running it per push (it needs a network and self-throttles,
-   M3-06).
-4. **Rate buckets for the write-shaped actions** (`track.like`, `search.history`,
+   M3-06). This pass is the argument for it: two of the three failures the audit found
+   were invisible to every existing test.
+4. **Darken `--accent` to clear 4.5:1** (M3-09) — a design decision, not an engineering
+   one, and the one accessibility failure still open in the product.
+5. **Rate buckets for the write-shaped actions** (`track.like`, `search.history`,
    `appearance`, `audio-eq`) with generous windows — closes AUR-013 for the paths that
    cost a DB write per call.
-5. **Log swallowed action errors** with class + action name and no payload, following
+6. **Log swallowed action errors** with class + action name and no payload, following
    the existing `playback-resolve` pattern — closes AUR-014 in one consistent pass
    rather than per action.
-6. **Document the OAuth token posture** (AUR-012) even if the code is unchanged: it is a
+7. **Document the OAuth token posture** (AUR-012) even if the code is unchanged: it is a
    deployment/backup decision that belongs in `docs/security.md`.
 
 ---
@@ -610,21 +750,38 @@ updated in the same change as the behaviour, per the repository's own rule.
 
 **Product behaviour**
 - P0: presence-test the Service Worker interface before dereferencing it (AUR-001).
-- P1: re-judge menu placement when a taller surface swaps into the same slot (M3-04).
+- P1: re-judge menu placement when a taller surface swaps into the same slot **and** whenever
+  the surface's own size changes or the viewport does (M3-04).
 - P1: classify an alive-but-refused playback source as retryable so bounded recovery
   runs (M3-02).
 - P2: one bounded `trackInputSchema` for every client-writable `Track`, applied by both
   catalog writers, with the parsed value passed to the DAL (M3-03).
 - P2: the library's section-header action is named after its section (M3-01).
+- P2: the home page's own sections are `h2` instead of a skipped `h3` (M3-07).
+- P3: the brand wordmark's two words are separated in the text content, so the visible
+  label is inside the accessible name (M3-08).
 - P1: error messages carry the URL scheme, never the connection string (AUR-002).
+
+**Measurement, not assertion**
+- The project's first **objective accessibility audit** (Lighthouse, production build,
+  insecure origin), run before *and* after this pass's fixes: accessibility **0.94 →
+  0.96**, best-practices **1.00** and SEO **1.00** throughout, and the failure list went
+  from `color-contrast`, `heading-order`, `label-content-name-mismatch` to
+  `color-contrast` alone. The fixes are therefore confirmed by a scanner that did not
+  write them, and not only by the tests written alongside.
+- A **geometry probe** of the placement rule in a real browser (built the failing state on
+  purpose: ten playlists, player bar mounted) — 202px row menu, 131px→316px picker,
+  bar top at 655px of a 720px viewport. This probe is what turned a 15-second click
+  timeout into a named root cause, and it is deleted now that it has done its job.
 
 **Verification infrastructure**
 - A build-time gate (`scanServiceWorkerGuard`) that fails when a compiled chunk
   dereferences `.register(` without a preceding presence test — this class of bug is
   now caught at build time rather than in production.
 - 4 unit fixtures for that gate, 1 E2E case that deletes `Navigator.prototype.serviceWorker`.
-- 4 tests for the accessible-name invariant; 7 for the retry classification; 13 for the
-  write-path contract; 3 for the placement rule; net **+28 tests, zero removed**.
+- 4 tests for the accessible-name invariant, 3 for the heading level, 3 for Label in
+  Name, 7 for the retry classification, 13 for the write-path contract, 4 for the
+  placement rule; net **+36 tests across 5 new files, zero removed**.
 - Two E2E journeys made order-independent and re-anchored on real state; three live
   playback journeys made reachable by fixing their fixture.
 - A single source of truth for E2E fixture ids (`src/lib/e2e/fixture-ids.ts`).
@@ -634,9 +791,14 @@ updated in the same change as the behaviour, per the repository's own rule.
 - This pass: `ARCHITECTURE.md` §7 (the `aliveButRefused` rule, with the 2026-09-27
   measurement and the explicit statement that promotion is still forbidden), §12 (the
   one-track-contract rule, with the bounds and the "parsed value, not the caller's
-  object" rule), §32.10 (accessible names are unique per screen); `PRODUCT_SPEC.md`
-  playback section (refused-but-alive is recoverable, dead is not); `docs/scope-boundaries.md`
-  (the catalog residual narrowed from magnitude to attribution).
+  object" rule), §21 point 5 (the placement decision is watched, not taken once, with
+  the 131px→316px measurement), §32.10 (accessible names unique per screen; headings do
+  not skip a level; the accessible name contains the visible text; and the one open
+  contrast failure with the arithmetic that shows it is a token decision);
+  `PRODUCT_SPEC.md` playback section (refused-but-alive is recoverable, dead is not);
+  `docs/scope-boundaries.md` (the catalog residual narrowed from magnitude to
+  attribution). Three stale test-file citations (`menu-placement.test.ts` → `.tsx`)
+  corrected while citing them.
 
 ---
 
@@ -653,7 +815,8 @@ updated in the same change as the behaviour, per the repository's own rule.
 | AUR-018 | P3 | call or delete `rateLimiter.forget()` | P3 hygiene |
 | UX-01 | P2 | surface like failures to the user | needs one error vocabulary for all writes |
 | UX-04 | P3 | undo playlist deletion | new transient state |
-| A11Y-02 | P2 | axe in CI | recommended above; CI policy |
+| A11Y-02 | P2 | axe/Lighthouse in CI, and more than one page covered | the audit ran manually this pass (twice, before and after) and is not a gate; `package.json` (no axe), `ci.yml` | **deferred** under AUR-015 — recommended above; CI policy |
+| M3-09 | P2 | darken `--accent` until the sign-in CTA clears 4.5:1 | the finding carries the luminance arithmetic | **deferred** — a brand-colour decision, and an audit is not where to make it |
 | D14/D15 | P4 | doc/test-comment wording | wording only; the boot guard already fails closed |
 
 **Documentation discrepancies carried from mission 1** (D1–D16) were all corrected then;
@@ -671,15 +834,20 @@ defect, and nothing in it is presented as solved.
    network-dependent (live playback), self-throttling under its own traffic (M3-06),
    and order-sensitive in places (M3-05 fixed one instance; the class is not proven
    absent elsewhere). A green run means "green under the conditions of that run".
-3. **No coverage number and no a11y scanner** (AUR-015), so a regression that no test
-   happens to exercise is invisible by construction. This is how M3-04 survived: a
-   geometry that only occurs with ≥4 playlists.
-4. **Abuse resistance is partial** (AUR-013) and **error observability is partial**
+3. **Nothing measures coverage, and the accessibility audit is a one-off.** A Lighthouse
+   run found two defects that no test in the repository could see — a skipped heading
+   level and a Label-in-Name break — which is the honest measure of the gap (AUR-015).
+   This is also how M3-04 survived: a geometry that only occurs with ≥4 playlists, on a
+   page whose menu had no E2E spec of its own.
+4. **The primary sign-in CTA is still below AA** (M3-09, 3.97:1), deliberately: the fix
+   is a brand-colour change and the arithmetic showing no foreground can pass is in the
+   finding. It is the one accessibility failure the audit still reports.
+5. **Abuse resistance is partial** (AUR-013) and **error observability is partial**
    (AUR-014): a hammered write path or a failing write can look identical to no-op.
-5. **The provider is outside the product's control.** The measured evidence in this
+6. **The provider is outside the product's control.** The measured evidence in this
    report (403 on every candidate, then 206 on the same URLs) is the shape of the risk:
    the product can now recover, but it cannot make YouTube serve audio.
-6. **Tokens at rest** (AUR-012) and **the plain-HTTP origin** (PROD-02) are operator
+7. **Tokens at rest** (AUR-012) and **the plain-HTTP origin** (PROD-02) are operator
    decisions, both currently undocumented or documented only as a posture.
 
 ---
@@ -691,13 +859,13 @@ Stated as unverified rather than assumed, with the reason in each case.
 | Area | Why unverified |
 |---|---|
 | Deployment of the current build | no deploy access from this machine; production still serves the pre-fix bundle |
+| A Lighthouse/axe audit of every other page | the audit was run on `/` only. The two defects it found were global-class (a shared component, a shared shell), so the same rules applied elsewhere were checked by reading, not by scanning. `/library`, `/search` and a playlist page have never been scanned |
 | Real-device QA (touch targets, real VoiceOver/TalkBack, iOS Safari) | no physical phone; mobile verification is host-side + emulated projects only |
 | Google OAuth over plain HTTP | Google refuses the private-IP HTTP origin; GitHub OAuth unverified (no real credentials) |
 | Secure-context capabilities on the deployed origin (PWA install/offline, Web Share, `crypto.subtle`, `crypto.randomUUID`, notifications) | the origin is plain HTTP; these are origin limits, not bugs, and the loopback re-check cannot reproduce them |
 | Live provider behaviour for Spotify / Deezer | `.env` credentials are invalid; only the keyless InnerTube path was exercised |
 | Long-run production soak (hours, not minutes) | no long-lived production session available |
-| 320px and 390px and 768px and 1024px and 1440px interaction parity | this pass verified the widths reachable with the emulated projects; a full 5-width interactive sweep is listed below as remaining work |
-| Database backup/restore drill | `test:db` and `verify:restore` are green, but no restore-from-real-backup drill was performed this pass |
+| A 5-width interactive sweep (375 / 430 / 768 / 1024 / 1440) of library, playlist, search and player | the emulated mobile projects cover the widths they define, and `e2e/menu-clipping.spec.ts` asserts resolved geometry at desktop and phone widths; a committed 5-width interactive sweep is listed below as remaining work and is **not** claimed as done |
 
 ---
 
@@ -710,20 +878,20 @@ assumption.
 
 | Mandatory area | How it was covered | Result |
 |---|---|---|
-| App startup | build → `bun run start` → browser; `app_initialized`/`app_shutdown` counters; the AUR-001 E2E case | pass |
+| App startup | build → `bun run start` → browser on an insecure origin; `app_initialized`/`app_shutdown` counters over 4 loads; the AUR-001 E2E case | pass — 4/4 loads, 0 console errors, `app_initialized` ×1, `app_shutdown` 0 |
 | All production routes | 12 pages + 3 API routes, rendered and asserted (see *Route Review*) | pass |
 | Authentication (n/z) | `auth.setup` + negative fixtures (expired, tampered) + ownership cases; A/B users | pass |
 | User-data isolation | non-owner `notFound()`, `requirePlaylistOwner`, A/B against one DB | pass |
-| DB / data integrity | membership rows, queue snapshots, canonical dedupe, `test:db`, `verify:restore` | pass |
+| DB / data integrity | membership rows, queue snapshots, canonical dedupe, `test:db`, `db:verify`, `db:integrity`, and a **real restore drill** (dump → restore into an isolated database → verify → row-count compare → drop) | pass |
 | Search | unified search, classification, history, live keyless-InnerTube path | pass |
 | Playback | **11/11 live tests with real audio**, incl. pause/resume/seek/next-transition | pass |
 | Queue | replace/next/prev/dedupe/shuffle/repeat + snapshot durability across reload | pass |
-| Playlist mutations | create/add/remove/reorder/share + the M3-04 picker | pass |
+| Playlist mutations | create/add/remove/reorder/share + the M3-04 picker, re-checked in a browser with the failing state rebuilt by hand | pass |
 | Critical navigation | sidebar, bottom nav, playlist → detail → back, scroll contract | pass |
 | Known production regressions | AUR-001 re-verified on the fixed build; production swept | fixed locally, **open in production** |
 | Production runtime | `bun run build` + `bun run start` on an **insecure** origin, full shell, console and lifecycle counters | pass (see Validation) |
 | Mobile / responsive critical paths | emulated mobile projects + the widths the projects define | pass (5-width sweep listed as remaining work) |
-| a11y-critical interactions | role/name/keyboard assertions + the M3-01 invariant; axe still absent (A11Y-02) | pass, with a recorded gap |
+| a11y-critical interactions | role/name/keyboard assertions, the M3-01/M3-07/M3-08 invariants, and an **objective Lighthouse audit run before and after** | pass — accessibility 0.94 → 0.96, two of three audit failures closed; `color-contrast` open as M3-09; not in CI (A11Y-02) |
 | API / Server Actions in core flows | 18 action modules, 40 actions, guards and buckets read per action | pass |
 
 ### Validation
@@ -732,12 +900,18 @@ assumption.
 |---|---|---|
 | Lint | `bun run lint` | **0** *(measured)* |
 | Typecheck | `bun run typecheck` | **0** *(measured)* |
-| Unit | `bun run test` | **196 files / 2814 tests passed** *(measured)* |
-| Build | `bun run build` | **0** *(measured)* |
+| Unit | `bun run test` | **198 files / 2822 tests passed** *(measured, final tree)* |
+| Build | `bun run build` | **0** *(measured, final tree)* |
 | Live playback (opt-in) | `AURORA_E2E_LIVE_PLAYBACK=1 … e2e/live-playback.spec.ts` | **11 / 11** *(measured, in two runs to stay under the throttle window)* |
 | Canonical-dedupe journeys | `… e2e/canonical-dedupe.spec.ts` | **6 / 6** *(measured)* |
-| Full E2E | `bunx playwright test` | see below *(measured)* |
-| Production insecure origin | `bun run start` on `http://192.168.1.32:3200` + browser | see below *(measured)* |
+| Full E2E | `bunx playwright test` | **165 passed / 0 failed / 20 skipped**, 5.5 min *(measured twice, 5.4 min and 5.5 min, on the final tree; the 20 skipped are the opt-in live suites)* |
+| Production smoke | `bun run smoke:prod -- --spawn --port 3100` | **OK** *(measured on the final build: service worker defers activation, safe-area insets, app-config carries no secrets, no arbitrary-URL proxy, both fixture routes gated, auth endpoint leaks nothing, clean shutdown)* |
+| Client bundle | `bun run verify:client-bundle` | **0** *(measured)* |
+| Share route | `bun run verify:share-route` | **0** *(measured)* |
+| Database | `bun run db:verify`, `bun run db:integrity` | **OK** *(measured: schema in sync, `Playlist.shareToken` and `Session.sessionToken` unique, 0 duplicate share tokens)* |
+| Restore drill | `AURORA_RESTORE_DRILL=1 bun run db:restore-drill` | **OK** *(measured: the source was dumped, restored into an isolated database, verified for integrity, and matched row for row — Artist 16/16, Track 30/30, RecentlyPlayed 25/25, SearchHistory 5/5, Playlist 2/2, PlaylistTrack 2/2, PlaybackState 1/1, Follow 1/1, Like 0/0, Album 0/0 — and the drill target was dropped in `finally`)* |
+| Production insecure origin | `bun run start` on `http://192.168.1.32:3200` + browser, 4 loads | **0 console errors, `app_initialized` ×1, `app_shutdown` 0, 7 inputs / 12 buttons / 1 `main` every load** *(measured, final tree)* |
+| Accessibility audit | Lighthouse on that same production build | **0.96** a11y, 1.00 best-practices, 1.00 SEO; only `color-contrast` failing *(measured, final tree)* |
 
 ### Critical Defects
 
@@ -745,6 +919,7 @@ assumption.
 |---|---|---|
 | **P0** | **1 open** | QA-01 — production serves the pre-fix bundle; deployment unavailable here. The code defect itself is fixed and verified. |
 | **P1** | 0 open in code | M3-02 and M3-04 are fixed and regression-tested. |
+| P2 | 1 new, reported | M3-09 — the primary sign-in CTA is 3.97:1 (AA needs 4.5:1). Not a release blocker, not fixable in the foreground, and the fix is a brand-colour decision. |
 | P2 | 0 new | AUR-010 closed by M3-03; the remaining P2s (AUR-011…AUR-015) are classified with recommendations and none is a release blocker. |
 | P3/P4 | classified | QA-04, AUR-016…AUR-019, D14, D15, UX-04, PERF-03. |
 
@@ -757,16 +932,29 @@ neighbouring code that shares the invariant:
   (`every` refused **and** `every` alive), it cannot be reached by a boolean test
   double, it promotes nothing, and it logs a boolean rather than a URL. The recovery
   mapping it depends on was confirmed by reading `controller.ts:536-573`, not assumed.
+- `menu-placement.ts` — the decision was extracted into a `useCallback` so the layout
+  effect and the observer share one implementation rather than two copies that can
+  drift; the observer observes the **measured** surface (the `[role=menu]`, not the
+  wrapper), so a menu that swaps surface is watched whichever element is current; the
+  effect's dependency list is complete (`open`, `placementKey`, both refs, both
+  callbacks) so no stale closure can keep a dead verdict alive; and the "cannot loop"
+  claim was re-checked against the new trigger rather than assumed.
 - `track-action-menu.tsx` — the key is derived from the state that performs the swap; the
   sibling host (`queue-panel.tsx`) uses the same pattern, so this is the codebase's
   convention rather than a new invention.
 - `actions/track.ts` / `schemas.ts` — the parsed value is passed on; `provider` stays
   open; the bounds are far above real metadata; `title`/`artistName` non-empty is safe
   because `normalizeTrack` already throws otherwise.
+- `empty-state.tsx` — the level is a prop with a default, so the 12 call sites that are
+  correct at `h3` are untouched and the three that are not say so explicitly. The
+  `as "h2" | "h3"` cast is bounded by the prop's own type.
+- `brand.tsx` — the added node is whitespace inside a `flex-col`, which CSS does not
+  render as a flex item, so the layout is unchanged; verified in the built DOM, where
+  the wordmark's text content is now "Aurora Music".
 - `i18n` — both locales updated; the parity test is the guard.
 - Docs — every behavioural claim added to `ARCHITECTURE.md` and `PRODUCT_SPEC.md` was
-  checked against the code once more, and the §7 amendment states the measurement and
-  the date it came from.
+  checked against the code once more, and each amendment states the measurement and the
+  date it came from.
 
 **No new finding was raised by the re-audit**, and no finding was closed without the
 validation named in it.
@@ -781,22 +969,22 @@ Ordered, with the owner each item needs:
    playlist, search and player surfaces, committed as a spec rather than a one-off.
    Owner: QA, next pass.
 3. **axe-core on 2–3 core pages** in CI, report-only first. Owner: whoever owns CI.
-4. **A restore-from-backup drill** on a real snapshot. Owner: ops.
-5. **AUR-013 / AUR-014** as one consistent pass each (rate buckets; error logging).
-6. **UX-02 queue clear** as a feature ticket.
-7. **D14/D15 wording** and AUR-018's dead method, as hygiene.
+4. **AUR-013 / AUR-014** as one consistent pass each (rate buckets; error logging).
+5. **UX-02 queue clear** as a feature ticket.
+6. **D14/D15 wording** and AUR-018's dead method, as hygiene.
 
 ### Risk-Based Timebox
 
 - Budget: `MAX_AUDIT_HOURS = 4` **or** `MAX_AUDIT_UNITS = 32`.
-- Consumed: **~2 h wall clock**, ~**34 units** — a small overrun against the unit budget,
-  incurred deliberately: two units were spent on the M3-04 placement diagnosis and two on
-  the provider-403 measurement, and both found defects that a cheaper pass would have
-  recorded as "flake" and lost.
-- Allocation actually spent: ~**70% P0/P1** (AUR-020 root cause, M3-02, M3-04, and the
-  re-verification of AUR-001), ~**25% P2** (M3-01, M3-03, plus the two remaining P2s
-  re-classified with evidence), ~**5% P3** (M3-05, QA-03), **0%** P4 work — P4 items were
-  recorded, not touched.
+- Consumed: **~2.4 h wall clock**, ~**38 units** — an overrun against the unit budget,
+  incurred deliberately: two units were spent on the M3-04 placement diagnosis, two on
+  the provider-403 measurement, two on the Lighthouse audit and the heading/wordmark fixes
+  that followed it, and one on the restore drill. Each found something a cheaper pass
+  would have either recorded as a flake and lost, or never looked at.
+- Allocation actually spent: ~**65% P0/P1** (AUR-020 root cause, M3-02, M3-04, and the
+  re-verification of AUR-001), ~**30% P2** (M3-01, M3-03, M3-07, M3-09, plus the two
+  remaining P2s re-classified with evidence), ~**5% P3** (M3-05, M3-08, QA-03), **0%**
+  P4 work — P4 items were recorded, not touched.
 - Breadth first, then risk-based depth: the coverage floor was completed before any
   depth work, and the depth work was chosen by measured impact (a broken core flow, a
   recovery-classification error) rather than by convenience.
@@ -824,16 +1012,29 @@ have meant either speculative work or work outside the mandate.
 
 ### Evidence
 
-**Artifacts.** `test-results/` (screenshot + `error-context.md` per E2E failure,
-including the M3-04 interception evidence and its 9 accumulated playlists); the two
-deleted probe scripts' findings are quoted inline above (the 403/206 candidate table and
-the format ladder per itag); audit logs for every gate under the session temp directory.
+**Measured, and quoted above with the numbers.**
 
-**Measured in this pass, quoted above with the numbers.** 206-vs-403 probe table for
-`dQw4w9WgXcQ` / `kJQP7kiw5Fk` / `XetvJxkbfYU`; the player-bar interception call log;
-`["e2e-track-1","e2e-track-2"]` queue mismatch; 196/2814 unit; 11/11 live; 6/6 dedupe;
-compiled guard form `if("u"<typeof navigator||!("serviceWorker"in navigator))return;`.
+| What | Where it is quoted |
+|---|---|
+| 206-vs-403 candidate table for `dQw4w9WgXcQ` / `kJQP7kiw5Fk` / `XetvJxkbfYU` | M3-02 |
+| the player-bar interception call log, then the geometry probe (202px / 131px→316px / bar top 655 of 720) and the succeeding click | M3-04 |
+| `["e2e-track-1","e2e-track-2"]`, then `total: 2` where `3` was expected | M3-05 |
+| Lighthouse 0.94 (3 failures) → 0.96 (1 failure); `#8d5bed` luminance 0.1902 | M3-07/08/09, *Accessibility Issues* |
+| built DOM: `h1` ×1, `h2` ×2, `h3` ×0; wordmark text content "Aurora Music" | M3-07/08 |
+| 4/4 loads on the insecure origin: 0 console errors, `app_initialized` ×1, `app_shutdown` 0 | *Coverage Floor*, *Validation* |
+| 198 files / 2822 unit tests; 165 passed / 0 failed / 20 skipped E2E (twice); 11/11 live; 6/6 dedupe; `smoke:prod` OK; 4 verifiers OK; restore drill row-for-row | *Validation* |
+| compiled guard form `if("u"<typeof navigator\|\|!("serviceWorker"in navigator))return;` | AUR-001 |
+
+**Artifacts and their fate.** `test-results/` held the screenshot and `error-context.md`
+for the two M3-04 failures; those were read, quoted above, and the directory has since
+been **deleted**, because leaving a failure's artifacts in the tree implies a failure that
+is no longer there. The two probe scripts (`scripts/m3-probe-*.mts`) are deleted for the
+same reason — their findings are quoted inline, and a probe left in the tree is a probe
+nobody runs. Gate logs for every command above live in the session temp directory, not in
+the repository; `git status` for the tree is otherwise clean apart from this pass's
+intentional changes.
 
 **Not claimed anywhere in this report:** that the fixes are deployed; that the product is
 production-ready; that any deferred item is fixed; that the live suite is a stable gate;
-that real-device or real-OAuth behaviour was verified.
+that real-device or real-OAuth behaviour was verified; that a page other than `/` has
+been accessibility-scanned.

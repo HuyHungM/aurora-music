@@ -62,8 +62,14 @@ export function Brand({ compact = false }: { compact?: boolean }) {
         // ellipsizes rather than the row scrolling sideways or deforming a
         // declared 44px touch target. A threshold that is slightly early now
         // degrades instead of breaking.
+        // The space between the two words is real, not decorative. They are
+        // two elements, so without it the element's text content is
+        // "AuroraMusic" - one word - and a voice-control user cannot say what
+        // is on screen to get what is on screen (WCAG 2.5.3, Label in Name).
+        // A whitespace-only run is not rendered as a flex item, so naming the
+        // wordmark "Aurora Music" costs the layout nothing.
         <span className="flex min-w-0 flex-col leading-none max-[392px]:hidden">
-          <span className="truncate text-[15px] font-bold tracking-tight">Aurora</span>
+          <span className="truncate text-[15px] font-bold tracking-tight">Aurora</span>{" "}
           <span className="truncate text-[10px] font-medium uppercase tracking-[0.18em] text-text-muted">
             Music
           </span>

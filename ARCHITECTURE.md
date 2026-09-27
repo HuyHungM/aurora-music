@@ -1247,6 +1247,26 @@ anchored, not whether the box survives the trip:
    decided in a `useLayoutEffect`, before paint, so the surface never appears
    on one side and then jumps; and it depends on its own inputs rather than
    its own output, so it cannot flip in a loop.
+5. **The decision is watched, not taken once** (2026-09-27). Point 4 above was
+   read as "measure once, on open", and a menu whose *content arrives after it
+   opens* breaks that reading: the playlist picker mounts with a header and an
+   empty list and then fills in, because the list is a server action. Measured
+   in a real browser with the failing state built on purpose — ten playlists,
+   the player bar mounted — the picker is **131px with one playlist and 316px
+   with ten**, the row menu it replaced in the same slot is 202px, and the bar's
+   top edge is 655px up a 720px viewport. A verdict computed against 131px says
+   "there is room below"; by the time the tenth playlist lands the surface is
+   185px taller and its lower items are under the player bar, where they are
+   visible, unclickable, and block the add for exactly the users with the most
+   playlists. So the surface's **size** is an input that invalidates the
+   answer, and the rule watches it (`ResizeObserver`) and re-decides on a
+   viewport `resize` (a rotation re-derives both numbers without resizing the
+   menu). A flip moves a surface without resizing it, so watching its size
+   cannot re-trigger itself. The two signals do not subsume each other:
+   `placementKey` covers a host swapping a *different* surface into the same
+   slot (the queue panel's `showPlaylistMenu ? "playlist" : "actions"` is the
+   worked example), and the size signal covers one surface growing where it
+   stands. Both are asserted in `ui/__tests__/menu-placement.test.tsx`.
 
 **Where the queue is different, and why it portals.** The queue's list is a
 scroll container, and a scroll container clips: the list is 419px tall and a
@@ -1282,7 +1302,7 @@ dismissed but Escape. The portaled create-playlist dialog, a *different*
 dialog, remains exempt exactly as intended.
 
 Asserted at three levels: the rule by unit test
-(`ui/__tests__/menu-placement.test.ts`), the class-level "this box does not
+(`ui/__tests__/menu-placement.test.tsx`), the class-level "this box does not
 clip a menu" claim by `ui/__tests__/menu-clipping.test.ts`, and the resolved
 geometry — no clipping ancestor, nothing outside the viewport, every
 non-disabled item the topmost thing at its own centre — by
@@ -1960,6 +1980,27 @@ the property is asserted.
   rule applies to per-row action labels, which are scoped by the region they
   belong to rather than being globally unique — a track row and the player bar
   legitimately both say "Actions for <track>".
+- **Headings do not skip a level, and an empty state says which level it is.**
+  A skipped level breaks the outline a screen-reader user navigates by, and an
+  empty state's title is `h3` inside a section that already has a heading and
+  `h2` when the empty state *is* the section — so `EmptyState` takes
+  `headingLevel` (`2 | 3`, default `3`) and the home page's three top-level
+  states pass `2`. Measured 2026-09-27 with a Lighthouse `heading-order`
+  failure: the home page read `h1` then `h3` with nothing between.
+- **The accessible name contains the visible text** (WCAG 2.5.3, Label in
+  Name), so a voice-control user can say what is on screen and get it. This is
+  a DOM-text rule, not a visual one: the brand wordmark is two sibling spans
+  rendered as "Aurora" over "Music", and with nothing between them the element's
+  text content was the single word "AuroraMusic" — not inside the name "Aurora
+  Music home", which Lighthouse's `label-content-name-mismatch` reported. A
+  whitespace-only run fixes it and is not rendered as a flex item, so it costs
+  the layout nothing.
+- **Known and open:** the header's primary sign-in control is
+  `accent-foreground` on `--accent` (`#f5f5f8` on `#8d5bed`) at 14px, measured
+  at **3.97:1** where AA needs 4.5:1. It cannot be fixed in the foreground:
+  `#8d5bed`'s relative luminance is 0.1902, so 4.5:1 would need a foreground
+  luminance of 1.0309 and white is 1.0. Darkening `--accent` is a brand-colour
+  decision, so it is recorded here rather than made in an audit pass.
 
 ## 33. Aurora V-Shape and the equalizer (Phase 53 addendum)
 
@@ -2671,7 +2712,7 @@ engagement and on a mode change.
     see is a menu about the wrong row. "Outside click" is scoped to the dialog
     that *hosts* the trigger, so a panel that is itself a dialog does not
     exempt its own contents. Enforced by
-    `src/components/ui/__tests__/menu-placement.test.ts` (the rule),
+    `src/components/ui/__tests__/menu-placement.test.tsx` (the rule),
     `src/components/ui/__tests__/menu-clipping.test.ts` (the clip classes),
     `src/components/player/__tests__/queue-panel.test.tsx` (the layer and the
     three dismissals), `e2e/menu-clipping.spec.ts` (the resolved geometry), and

@@ -168,6 +168,23 @@ function expectQueueHas(
     .toEqual(expected);
 }
 
+/**
+ * The queue length after adding `ids` to a queue that already holds `before`.
+ *
+ * Not `before.length + ids.length`: the queue is shared with every other
+ * authenticated spec in the run, so an id under test may ALREADY be in it. The
+ * product then correctly refuses the add (that is the dedupe this spec
+ * exists to test) and the length does not move — which an offset expectation
+ * would report as a failure, i.e. as the very defect it is looking for. This
+ * is the invariant itself: one entry per distinct song, whatever the queue held
+ * when the journey started.
+ */
+function totalAfter(before: string[], ids: string[]): number {
+  const set = new Set(before);
+  for (const id of ids) set.add(id);
+  return set.size;
+}
+
 authTest.describe("canonical duplicates", () => {
   authTest("playlist holds one membership after the same track is added twice", async ({
     pageA,
@@ -236,14 +253,14 @@ authTest.describe("canonical duplicates", () => {
     await addToQueueViaUI(pageA, TRACK_ONE);
     await expectQueueHas(USER_A, {
       occurrences: { [TRACK_ONE_ID]: 1 },
-      total: before.length + 1,
+      total: totalAfter(before, [TRACK_ONE_ID]),
     });
 
     // The same track again, from the same row. Nothing about the queue moves.
     await addToQueueViaUI(pageA, TRACK_ONE);
     await expectQueueHas(USER_A, {
       occurrences: { [TRACK_ONE_ID]: 1 },
-      total: before.length + 1,
+      total: totalAfter(before, [TRACK_ONE_ID]),
     });
 
     // Both provider renderings of one recording, added in that order. The
@@ -259,12 +276,12 @@ authTest.describe("canonical duplicates", () => {
     await addToQueueViaUI(pageA, CROSS_TITLE);
     await expectQueueHas(USER_A, {
       occurrences: { [TRACK_ONE_ID]: 1, [DEEZER_ID]: 1 },
-      total: before.length + 2,
+      total: totalAfter(before, [TRACK_ONE_ID, DEEZER_ID]),
     });
     await addToQueueViaUI(pageA, CROSS_TITLE);
     await expectQueueHas(USER_A, {
       occurrences: { [TRACK_ONE_ID]: 1, [DEEZER_ID]: 1 },
-      total: before.length + 2,
+      total: totalAfter(before, [TRACK_ONE_ID, DEEZER_ID]),
     });
 
     // Across a full reload the repair is the same invariant: the persisted
@@ -277,7 +294,7 @@ authTest.describe("canonical duplicates", () => {
     const after = snapshotEntryIds(USER_A);
     expect(after.filter((id) => id === TRACK_ONE_ID)).toHaveLength(1);
     expect(after.filter((id) => id === DEEZER_ID)).toHaveLength(1);
-    expect(after).toHaveLength(before.length + 2);
+    expect(after).toHaveLength(totalAfter(before, [TRACK_ONE_ID, DEEZER_ID]));
   });
 
   authTest("the cross-provider pair stays two rows on the fixture library itself", async ({

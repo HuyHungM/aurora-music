@@ -10,7 +10,7 @@
  * is trying to ask.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { useRef } from "react";
 import { useMenuOpenUp } from "@/components/ui/menu-placement";
 
@@ -51,12 +51,14 @@ function setup({
   document.body.appendChild(container);
   const triggerEl = document.createElement("button");
   const surfaceEl = document.createElement("div");
+  let menuEl = surfaceEl;
   if (surfaceIsHost) surfaceEl.setAttribute("role", "menu");
   else {
     const child = document.createElement("div");
     child.setAttribute("role", "menu");
     surfaceEl.appendChild(child);
     stubRect(child, { height });
+    menuEl = child;
   }
   stubRect(triggerEl, { top: trigger[0], bottom: trigger[1] });
   if (surfaceIsHost) stubRect(surfaceEl, { height });
@@ -72,7 +74,35 @@ function setup({
     },
     { initialProps: { isOpen: open } },
   );
-  return { ...view, triggerEl, surfaceEl };
+  return { ...view, triggerEl, surfaceEl, menuEl };
+}
+
+/**
+ * jsdom has no `ResizeObserver` and no layout, so the platform's "your size
+ * changed" signal has to be stood in for. The hook asks for it by name, so
+ * this is the same seam a browser provides - and firing `fire()` is exactly
+ * what a browser does when a menu's content loads and it grows.
+ */
+function stubResizeObserver() {
+  const callbacks: Array<() => void> = [];
+  class FakeResizeObserver {
+    constructor(private readonly callback: () => void) {
+      callbacks.push(callback);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+  return {
+    /** How many surfaces are being watched. */
+    get observed() {
+      return callbacks.length;
+    },
+    fire() {
+      for (const callback of callbacks) callback();
+    },
+  };
 }
 
 describe("useMenuOpenUp", () => {
@@ -239,6 +269,58 @@ describe("useMenuOpenUp", () => {
       view.rerender({ key: "row-menu" });
 
       expect(view.result.current).toBe(false);
+    });
+  });
+
+  describe("when the surface changes size after the decision", () => {
+    /**
+     * The playlist picker mounts with a header and an empty list and then
+     * fills in, because the list is a server action. Measured 2026-09-27: 131px
+     * with one playlist, ~330px with nine. A verdict taken against the 131px
+     * version says there is room below, and by the time the ninth playlist
+     * lands the lower items are under the fixed player bar - visible,
+     * unclickable, and blocking "add to playlist" for exactly the users with
+     * the most playlists.
+     *
+     * `placementKey` cannot see this, which is why the swap case above needed
+     * it and this one still failed after it: the surface here never changes
+     * identity, only size. The decision has to be re-made when the SIZE
+     * changes, which is what the platform's size signal is for.
+     */
+    it("re-judges when the surface grows past the clearance", () => {
+      const observer = stubResizeObserver();
+      // The empty picker clears the 120px transport clearance from here.
+      const view = setup({ trigger: [400, 440], height: 131 });
+      expect(view.result.current).toBe(false);
+      expect(observer.observed).toBe(1);
+
+      // The list arrives; the surface is 200px taller and no longer fits.
+      stubRect(view.menuEl, { height: 330 });
+      act(() => observer.fire());
+
+      expect(view.result.current).toBe(true);
+    });
+
+    it("re-judges when the viewport changes", () => {
+      // A phone rotation re-derives both numbers while the menu keeps its size,
+      // so the size signal stays silent and the decision would be stale in the
+      // one direction that matters: a short landscape viewport leaves a menu
+      // that fitted in portrait resting on the transport.
+      stubResizeObserver();
+      const view = setup({ trigger: [400, 440], height: 200 });
+      expect(view.result.current).toBe(false);
+      expect(window.innerHeight).toBe(VIEWPORT_HEIGHT);
+
+      act(() => {
+        Object.defineProperty(window, "innerHeight", {
+          value: 520,
+          configurable: true,
+        });
+        window.dispatchEvent(new Event("resize"));
+      });
+
+      // 520 - 440 - 200 = -120px of room below, against 200px above.
+      expect(view.result.current).toBe(true);
     });
   });
 });

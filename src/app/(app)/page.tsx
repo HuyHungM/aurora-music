@@ -163,6 +163,7 @@ export default async function HomePage() {
           title={t("home.catalogQuietTitle")}
           description={t("home.catalogQuietDescription")}
           action={<ButtonLink href="/search" variant="secondary" size="sm">{t("nav.browse")}</ButtonLink>}
+          headingLevel={2}
         />
       ) : null}
 
@@ -217,6 +218,7 @@ export default async function HomePage() {
               title={t("home.nothingPlayedTitle")}
               description={t("home.nothingPlayedDescription")}
               action={<ButtonLink href="/radio" variant="secondary" size="sm">{t("artist.startRadio")}</ButtonLink>}
+              headingLevel={2}
             />
           ) : null}
         </>
@@ -226,6 +228,7 @@ export default async function HomePage() {
           title={t("home.signInTitle")}
           description={t("home.signInDescription")}
           action={<ButtonLink href="/search" variant="secondary" size="sm">{t("nav.browse")}</ButtonLink>}
+          headingLevel={2}
         />
       )}
     </div>

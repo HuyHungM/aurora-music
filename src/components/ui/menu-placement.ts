@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useState, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useState, type RefObject } from "react";
 
 /**
  * Which way a menu opens. One rule, one place (§30).
@@ -33,7 +33,9 @@ import { useLayoutEffect, useState, type RefObject } from "react";
  * WHY IT CANNOT LOOP. The effect depends on when the surface is opened and
  * which surface is in the slot - not on the value it produces. A flip
  * therefore re-renders the menu without re-running the decision, so there
- * is no oscillation to defend against.
+ * is no oscillation to defend against. The `ResizeObserver` below does add a
+ * second trigger, and it is bounded for the same reason: a flip moves the
+ * surface without resizing it, so watching its size cannot re-trigger itself.
  */
 
 /**
@@ -83,24 +85,33 @@ export function useMenuOpenUp({
 }): boolean {
   const [openUp, setOpenUp] = useState(false);
 
-  useLayoutEffect(() => {
-    if (!open) return;
+  /**
+   * The `[role="menu"]` the decision is about: whichever surface is in the
+   * slot right now.
+   */
+  const surface = useCallback((): HTMLElement | null => {
     const host = surfaceRef.current;
-    const trigger = triggerRef.current;
-    if (!host || !trigger) return;
-    const surface = host.matches("[role='menu']")
+    if (!host) return null;
+    return host.matches("[role='menu']")
       ? host
       : host.querySelector("[role='menu']");
-    if (!surface) return;
-    // The trigger's rect and the surface's HEIGHT, deliberately not the
-    // surface's own rect: whichever way the surface happens to be rendered
-    // right now would otherwise decide the question, and a menu already
-    // sitting below the trigger would report itself as cramped and flip -
-    // to a place it never needed to be. Height plus the trigger's position
-    // answers "how much room would each side give me" without reference to
-    // the answer.
+  }, [surfaceRef]);
+
+  /**
+   * One decision, made from the surface that is actually rendered. The
+   * trigger's rect and the surface's HEIGHT, deliberately not the surface's
+   * own rect: whichever way the surface happens to be rendered right now
+   * would otherwise decide the question, and a menu already sitting below the
+   * trigger would report itself as cramped and flip - to a place it never
+   * needed to be. Height plus the trigger's position answers "how much room
+   * would each side give me" without reference to the answer.
+   */
+  const decide = useCallback(() => {
+    const element = surface();
+    const trigger = triggerRef.current;
+    if (!element || !trigger) return;
     const triggerRect = trigger.getBoundingClientRect();
-    const height = surface.getBoundingClientRect().height;
+    const height = element.getBoundingClientRect().height;
     const gapBelow = window.innerHeight - triggerRect.bottom - height;
     if (gapBelow >= BOTTOM_CLEARANCE_PX) {
       // Room below, so down it goes - and this branch is what CLEARS a
@@ -116,7 +127,38 @@ export function useMenuOpenUp({
     // is only worth flipping when it is the roomier of the two - a flip into
     // a worse gap would trade a clipped bottom for a clipped top.
     setOpenUp(triggerRect.top - height > gapBelow);
-  }, [open, placementKey, surfaceRef, triggerRef]);
+  }, [surface, triggerRef]);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    decide();
+
+    /**
+     * WHY THE DECISION IS WATCHED, NOT TAKEN ONCE. It was taken once, and that
+     * is the bug this exists to close. The playlist picker mounts with a header
+     * and an empty list and then fills in, because the list is a server action
+     * (measured 2026-09-27: 131px with one item, ~330px with nine). A verdict
+     * computed against the 131px version says "there is room below", and by the
+     * time the ninth playlist lands the surface is 200px taller and its lower
+     * items are under the fixed player bar - visible, unclickable, and blocking
+     * the add for exactly the users with the most playlists. So the surface's
+     * own size is the input that invalidates the answer, and `ResizeObserver`
+     * is the platform's way of saying it changed. A flip changes the surface's
+     * POSITION, never its size, so this cannot oscillate: one flip, no loop.
+     *
+     * A viewport resize is the same invalidation by another route - a phone
+     * rotation re-derives both numbers - so it re-decides for the same reason.
+     */
+    const element = surface();
+    if (!element) return;
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => decide());
+    observer.observe(element);
+    window.addEventListener("resize", decide);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", decide);
+    };
+  }, [open, placementKey, surfaceRef, triggerRef, decide, surface]);
   return openUp;
 }
