@@ -747,7 +747,7 @@ until the rollback analysis is redone.
   from the hostname and port the server was **booted** with, and the only proxy
   headers that could stand in for the public hostname are headers a
   misconfigured proxy gets wrong. So a deployment with a public hostname
-  declares it once (`https://auroramuzik.dpdns.org`) and the application stops
+  declares it once (`https://app.auroramuzik.dpdns.org`) and the application stops
   reading the origin off the wire. Validated and normalized to a bare
   `URL#origin` by `parsePublicOrigin` (`src/lib/config/public-origin.ts`) at
   the `parseEnv` boundary; a **path is rejected**, because Auth.js derives
@@ -767,6 +767,18 @@ until the rollback analysis is redone.
 - Server data access: `auth()` → `getCurrentUser()` (nullable) /
   `requireUser()` (throws `AuthenticationError`) / `getSessionUserId()`.
   Mutations require a user; the DAL rechecks ownership per resource.
+- **The verified-user gate matters because the session is a JWT, not a DB
+  lookup.** A cookie can outlive its `User` row — a local DB reset/reseed or an
+  account deletion leaves the token intact — and `getSessionUserId()` reads the
+  id straight from that token. On a read a stale id is harmless: every
+  per-resource query simply returns nothing. On a write it is a foreign-key
+  violation, so a mutation must resolve the session against the database first
+  and skip the write when the row is gone. `recordSearchAction`/`clearSearchHistoryAction`
+  (`src/app/actions/search.ts`) are the pinned example: `SearchHistory.userId`
+  is a foreign key, the action is fire-and-forget and must never reject, so it
+  takes `getCurrentUser()` (nullable, `.catch(() => null)`) rather than
+  `getSessionUserId()`. The same rule governs every write action above — the
+  like/playlist/playback paths take `requireUser()`.
 - Sign-out redirects to fixed `/`; no open redirects anywhere.
 - **The auth route re-anchors its request origin before Auth.js sees it.**
   `src/app/api/auth/[...nextauth]/route.ts` wraps `handlers.GET`/`POST` in

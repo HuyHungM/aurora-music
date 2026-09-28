@@ -121,9 +121,9 @@ caret ranges on the origin (e.g. `@typescript-eslint/*` `8.70.0 → 8.70.1`,
 - The official `start.js` deploys with **Bun**: `bun install --frozen-lockfile` →
   `bun next build` → `bun next start` (cloudflared + migrations around it).
 - The origin nonetheless contains an **npm-generated `package-lock.json`** and
-  `.npm/_logs/` entries for plain `npm install` (npm 12.1.0 / node 24.21.0, cwd
-  `/home/container`, exit 0) — so `npm install` has been run on the host in
-  addition to Bun.
+  `.npm/_logs/` entries for a plain Node package-manager install (npm 12.1.0 /
+  node 24.21.0, cwd `/home/container`, exit 0) — so a Node package-manager
+  install has been run on the host in addition to Bun.
 - npm 12 blocks dependency lifecycle scripts by default; the logs report **7
   blocked** (`esbuild@0.25.4/0.28.1/0.28.2`, `@prisma/engines@7.10.0`,
   `prisma@7.10.0`, `unrs-resolver@1.12.2`, `workerd@…`). The **root** project
@@ -139,10 +139,10 @@ caret ranges on the origin (e.g. `@typescript-eslint/*` `8.70.0 → 8.70.1`,
 | Event | Evidence |
 | --- | --- |
 | Previous source pull | source files (`package.json`, `ARCHITECTURE.md`, …) `Sep 28 11:52:30` |
-| `npm install` (log 1) | `/.npm/_logs/2026-09-28T04_52_30_406Z-…` |
-| `npm install` (log 2, pre-build) | `/.npm/_logs/2026-09-28T10_29_46_115Z-…`; `package-lock.json` `17:29:49` |
+| Node package-manager install (log 1) | `/.npm/_logs/2026-09-28T04_52_30_406Z-…` |
+| Node package-manager install (log 2, pre-build) | `/.npm/_logs/2026-09-28T10_29_46_115Z-…`; `package-lock.json` `17:29:49` |
 | first build this day | `.next` `17:30:55` (served buildId later observed as `Wybxp71HRetJUj52Euu_p`) |
-| `git pull 0ffa93e → dfc35f7` + `npm install` + build | `.git` `19:56:39`, `package-lock.json` `19:56:36`, `node_modules` `19:56:39`, `src/generated/prisma` `19:56:40`, `.next/BUILD_ID` `19:57:53` |
+| `git pull 0ffa93e → dfc35f7` + Node package-manager install + build | `.git` `19:56:39`, `package-lock.json` `19:56:36`, `node_modules` `19:56:39`, `src/generated/prisma` `19:56:40`, `.next/BUILD_ID` `19:57:53` |
 | current deployed buildId | **`bacbgrFwvhwDhH7ItZ2_9`** |
 
 > The origin was redeployed mid-session (pull to `dfc35f7`, the repository's
@@ -216,8 +216,8 @@ valid-format counts are still only in origin-side diagnostic logs (no shell).
    change with its own security surface.
 3. **Do not** rewrite the resolver, rotate clients, add retries/cookies/PO
    tokens, or weaken TLS to hide the egress condition.
-4. Hygiene (not the bug): eliminate the extra `npm install` on the host so only
-   `bun install --frozen-lockfile` owns the tree; remove the stray
+4. Hygiene (not the bug): eliminate the extra Node package-manager install on the
+   host so only `bun install --frozen-lockfile` owns the tree; remove the stray
    `package-lock.json` once its cause is understood.
 
 ## 12. FINAL STATUS

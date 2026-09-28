@@ -91,7 +91,7 @@ Mechanics:
   (`http://<lan-ip>:3000`) starts OAuth against that same origin instead of
   `localhost` — which would try to return the token to the phone itself.
 - **A deployment with a public hostname declares it** as
-  `AURORA_PUBLIC_URL` (`https://auroramuzik.dpdns.org`), and that declaration —
+  `AURORA_PUBLIC_URL` (`https://app.auroramuzik.dpdns.org`), and that declaration —
   not the `Host` header — decides the `redirect_uri`. Two things make this
   necessary rather than cosmetic. The internal origin the process listens on
   (`http://127.0.0.1:24584`) must never reach Google: with the port attached,

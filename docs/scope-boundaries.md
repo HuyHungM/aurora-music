@@ -201,7 +201,7 @@ things on that origin are left unsolved on purpose:
   authorized here.
 - **TLS exists at the public origin but not at the origin the process listens
   on, and the two must never be treated as the same host.** The deployed
-  public origin (`https://auroramuzik.dpdns.org`) terminates TLS at the edge,
+  public origin (`https://app.auroramuzik.dpdns.org`) terminates TLS at the edge,
   so it *is* a secure context; the origin Next.js is bound to
   (`http://127.0.0.1:24584`) is not. This was previously recorded the other way
   round — the claim that the deployed URL is reached over plain HTTP was

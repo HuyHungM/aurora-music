@@ -176,6 +176,39 @@ values.
 > **Hyperdrive**, or a PostgreSQL endpoint with a publicly trusted certificate.
 > See `docs/scope-boundaries.md` ("Cloudflare Workers DB TLS").
 
+### Production Worker variables and secrets
+
+Declare the canonical origin as a **non-secret Worker variable** (`wrangler.jsonc`
+`vars`, committed, or the dashboard) — never infer it:
+
+| Non-secret variable | Value |
+| --- | --- |
+| `AURORA_PUBLIC_URL` | `https://app.auroramuzik.dpdns.org` |
+| `AUTH_TRUST_HOST` | `true` |
+
+Public OAuth client IDs (`AUTH_GOOGLE_ID`, `AUTH_GITHUB_ID`,
+`SPOTIFY_CLIENT_ID`) are not secret and may be set the same way when required.
+
+Everything sensitive is a **Worker secret**, never `vars` and never committed:
+
+```bash
+bunx wrangler secret put DATABASE_URL
+bunx wrangler secret put AUTH_SECRET
+bunx wrangler secret put AUTH_GOOGLE_SECRET
+bunx wrangler secret put AUTH_GITHUB_SECRET
+bunx wrangler secret put SPOTIFY_CLIENT_SECRET
+bunx wrangler secret put YOUTUBE_API_KEY
+```
+
+`SERVER_PORT`, `CLOUDFLARED_TOKEN`, `CLOUDFLARED_PROTOCOL` and
+`AURORA_DATABASE_CA_CERT_PATH` are **Node-host only** (consumed by `start.js`
+and `db-tls.ts` on the server) and must not be moved into the Worker.
+
+The production Worker serves `app.auroramuzik.dpdns.org`; attach that hostname
+as a Worker custom domain in Cloudflare. Do not change the legacy
+`auroramuzik.dpdns.org` routing as part of this without inspecting it first
+(see the legacy-origin note above).
+
 ## Canonical release order
 
 ```text
@@ -393,15 +426,25 @@ Set the public origin. It is what Google's registered redirect URI must match,
 and the only way to get there is to stop deriving it from the request:
 
 ```env
-AURORA_PUBLIC_URL="https://auroramuzik.dpdns.org"
+AURORA_PUBLIC_URL="https://app.auroramuzik.dpdns.org"
 ```
+
+`https://app.auroramuzik.dpdns.org` is the canonical production origin. The
+previous `https://auroramuzik.dpdns.org` host is the legacy deployment and must
+not be treated as canonical anywhere.
 
 Google Cloud Console → Credentials → the OAuth client:
 
 | Field | Value |
 | --- | --- |
-| Authorized JavaScript origin | `https://auroramuzik.dpdns.org` |
-| Authorized redirect URI | `https://auroramuzik.dpdns.org/api/auth/callback/google` |
+| Authorized JavaScript origin | `https://app.auroramuzik.dpdns.org` |
+| Authorized redirect URI | `https://app.auroramuzik.dpdns.org/api/auth/callback/google` |
+
+GitHub OAuth app → Authorization callback URL:
+
+| Field | Value |
+| --- | --- |
+| Authorization callback URL | `https://app.auroramuzik.dpdns.org/api/auth/callback/github` |
 
 No port, no trailing slash, and no `http://`. The origin the *process* listens
 on stays internal and is not part of OAuth:
@@ -420,11 +463,11 @@ Tunnel route:
 
 | Field | Value |
 | --- | --- |
-| Hostname | `auroramuzik.dpdns.org` |
+| Hostname | `app.auroramuzik.dpdns.org` |
 | Path | `*` |
 | Service type | HTTP |
 | URL | `http://127.0.0.1:24584` |
-| HTTP Host Header | **unset** — or exactly `auroramuzik.dpdns.org` |
+| HTTP Host Header | **unset** — or exactly `app.auroramuzik.dpdns.org` |
 
 Never `127.0.0.1:24584`, `localhost:24584` or `<public-host>:24584` in the
 Host Header override. `AURORA_PUBLIC_URL` makes the application ignore that
@@ -435,14 +478,24 @@ Verify the generated URI rather than the configuration, because the two can
 disagree:
 
 ```bash
-curl -s https://auroramuzik.dpdns.org/api/auth/providers
+curl -s https://app.auroramuzik.dpdns.org/api/auth/providers
 # callbackUrl must be exactly:
-#   https://auroramuzik.dpdns.org/api/auth/callback/google
+#   https://app.auroramuzik.dpdns.org/api/auth/callback/google
 ```
 
 If `AURORA_PUBLIC_URL` and `AUTH_URL` (or `NEXTAUTH_URL`) are both set and
 disagree, the server refuses to boot. Do not resolve that by deleting one —
 they are one declaration in two places, and the disagreement is the bug.
+
+### Legacy origin (`auroramuzik.dpdns.org`)
+
+`app.auroramuzik.dpdns.org` is the canonical production origin. The previous
+`auroramuzik.dpdns.org` host is the legacy deployment and must not be treated
+as canonical in configuration, naming, monitoring or reports. It may still
+exist during the migration; do not delete it, and do not change how it routes,
+without first inspecting the current Cloudflare routing configuration. Once the
+Worker at `app.auroramuzik.dpdns.org` is verified, turning the legacy host into
+a redirect (or retiring it) is a separate, reviewed change.
 
 ## Edge responsibilities (not in-app)
 
