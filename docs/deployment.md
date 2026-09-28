@@ -116,6 +116,66 @@ pins it and the tracer/OpenNext copy is what matters.
   as `CLOUDFLARED_TOKEN` out of `.env` when building for Cloudflare, and prefer
   `wrangler secret put` for everything the Worker needs.
 
+### Cloudflare Workers Builds (dashboard configuration)
+
+When the repository is connected to **Cloudflare Workers Builds**, the
+build/deploy commands are configured in the Cloudflare dashboard (Worker →
+**Settings** → **Build**), not in `wrangler.jsonc`. Workers Builds does **not**
+honour a custom build command configured inside the Wrangler file, so the
+command below belongs in the dashboard.
+
+Recommended configuration:
+
+| Setting | Value |
+| --- | --- |
+| Build command | `bunx opennextjs-cloudflare build` |
+| Deploy command | `bunx wrangler deploy` |
+
+- `bun run build` only runs `next build` and produces `.next/`. That is not
+  sufficient: deploying through OpenNext requires the `.open-next/` output.
+- `bunx opennextjs-cloudflare build` performs the required OpenNext
+  transformation on top of `next build` (it invokes the package's `build`
+  script internally).
+- `bunx wrangler deploy` then deploys the generated `.open-next/worker.js`.
+- Do **not** point `package.json`'s `build` script at
+  `opennextjs-cloudflare build`: OpenNext invokes the package build script, so
+  that would recurse. `build` stays `next build`.
+
+Alternative configuration — let the deploy script own the whole flow:
+
+| Setting | Value |
+| --- | --- |
+| Build command | *(empty)* |
+| Deploy command | `bun run deploy` |
+
+`bun run deploy` already performs:
+
+```text
+opennextjs-cloudflare build
+→
+opennextjs-cloudflare deploy
+```
+
+Because the deploy script runs the OpenNext build itself, the dashboard must
+**not** also run `next build` separately in this configuration — leave the
+build command empty.
+
+**Workers Builds does not automatically use the repository's local `.env`.**
+Build-time variables and secrets the build needs must be configured through the
+Cloudflare Workers/Build settings (Build variables and secrets); values needed
+at runtime belong in the Worker's Variables & Secrets. Never commit secret
+values.
+
+> **Warning — a successful Workers build/deploy does not mean the Aurora
+> production database architecture is supported by Workers.** The current Aiven
+> PostgreSQL deployment uses a private per-project CA, and the Workers runtime
+> (`pg-cloudflare` → `cloudflare:sockets`) cannot currently supply that CA while
+> preserving certificate verification. A green OpenNext build therefore only
+> proves the artifact bundles; it does **not** prove database connectivity. The
+> supported production paths remain **Node + cloudflared**, or — for Workers —
+> **Hyperdrive**, or a PostgreSQL endpoint with a publicly trusted certificate.
+> See `docs/scope-boundaries.md` ("Cloudflare Workers DB TLS").
+
 ## Canonical release order
 
 ```text
