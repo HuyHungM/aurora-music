@@ -61,6 +61,12 @@ const EnvSchema = z.object({
   // the connection is left exactly as `DATABASE_URL` wrote it and `pg` verifies
   // against the system trust store. Never carries a private key.
   AURORA_DATABASE_CA_CERT_PATH: z.string().optional(),
+  // Server-only, Workers-compatible alternative to the path above: the same
+  // public CA certificate(s) as inline PEM text, for runtimes with no
+  // filesystem (Cloudflare Workers / OpenNext). Set as a Worker secret or in
+  // `.dev.vars`; never carries a private key, and never weakens verification.
+  // Takes precedence over the path when both are set.
+  AURORA_DATABASE_CA_CERT: z.string().optional(),
   // Server-only. Enables the YouTube metadata provider (search/lookup).
   // Absent key = YouTube provider stays unregistered; never NEXT_PUBLIC.
   YOUTUBE_API_KEY: z.string().optional(),
@@ -101,6 +107,7 @@ export const envVarRequirements = {
   AUTH_GITHUB_SECRET: "optional",
   AURORA_PUBLIC_URL: "optional",
   AURORA_DATABASE_CA_CERT_PATH: "optional",
+  AURORA_DATABASE_CA_CERT: "optional",
   YOUTUBE_API_KEY: "optional",
   SPOTIFY_CLIENT_ID: "optional",
   SPOTIFY_CLIENT_SECRET: "optional",

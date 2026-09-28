@@ -26,6 +26,7 @@ export function Artwork({
   rounded = "rounded-lg",
   className = "",
   eager = false,
+  fill = false,
 }: {
   src?: string | null;
   alt: string;
@@ -34,6 +35,15 @@ export function Artwork({
   rounded?: string;
   className?: string;
   eager?: boolean;
+  /**
+   * Fill the nearest positioned ancestor instead of reserving a `px` square.
+   * Use when CSS (not the intrinsic `px`) defines the box: the caller supplies
+   * a `relative` wrapper with an explicit size and the image is cropped with
+   * `object-cover`. This keeps a deliberately non-square box from tripping
+   * next/image's single-axis width/height-modified warning when one CSS axis
+   * happens to equal the intrinsic `px`.
+   */
+  fill?: boolean;
 }) {
   const px = pixelSize ?? SIZE_PX[size];
   if (!src) {
@@ -52,6 +62,19 @@ export function Artwork({
       </span>
     );
   }
+  if (fill) {
+    return (
+      <Image
+        src={src}
+        alt={alt}
+        fill
+        unoptimized
+        loading={eager ? "eager" : "lazy"}
+        decoding="async"
+        className={`bg-surface-3 object-cover ${rounded} ${className}`}
+      />
+    );
+  }
   return (
     <Image
       src={src}
@@ -61,7 +84,16 @@ export function Artwork({
       unoptimized
       loading={eager ? "eager" : "lazy"}
       decoding="async"
-      className={`shrink-0 bg-surface-3 object-cover ${rounded} ${className}`}
+      // `aspect-square` is load-bearing, not decoration. Tailwind's preflight
+      // sets `img { height: auto }`, which beats the `height` attribute, so the
+      // browser derives the rendered height from the source image's intrinsic
+      // aspect ratio (Visually: a 44x44 square came back 44x25 for a 16:9
+      // video thumbnail). The CSS `aspect-ratio` re-establishes the intended
+      // square and silences next/image's single-axis-modified warning. Callers
+      // that size the box themselves (`w-full`, `max-w-*`, `h-auto`) still
+      // win: they set both axes, and `aspect-square` is idempotent with the
+      // card pattern already used in `album-card`/`artist-card`.
+      className={`aspect-square shrink-0 bg-surface-3 object-cover ${rounded} ${className}`}
     />
   );
 }

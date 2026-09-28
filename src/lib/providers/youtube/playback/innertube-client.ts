@@ -26,6 +26,7 @@
 
 import type { Innertube, Types } from "youtubei.js";
 import { ExtractorError } from "@/lib/domain";
+import { logger } from "@/lib/diagnostics/logger";
 import type {
   PlaybackFormatCandidate,
   PlaybackMediaInfo,
@@ -108,15 +109,29 @@ export interface InnertubeClientOptions {
  */
 const PRIMARY_PLAYER_CLIENT: PlayerRequestClient = "MWEB";
 
+/**
+ * Explicit fallback player-request context.
+ *
+ * The session default (WEB) is NOT a viable fallback: measured on the same
+ * videos, its adaptive formats carry neither a direct URL nor a cipher, so
+ * `toFormatCandidate` rejects every one and extraction yields zero candidates
+ * (exactly the production `candidateCount: 0`). `undefined` must therefore
+ * never be passed as a client — that silently reverts to WEB.
+ *
+ * `IOS` was verified to materialize usable (decipherable) audio formats for
+ * every video in the regression set (yuuWdm5tBD0, dQw4w9WgXcQ, jNQXAC9IVRw,
+ * kJQP7kiw5Fk, 9bZkp7q19f0, JGwWNGJdvx8, OPf0YbXqDm0, fJ9rUzIMcZQ). It is a
+ * single, deterministic fallback, not a client sweep.
+ */
+const FALLBACK_PLAYER_CLIENT: PlayerRequestClient = "IOS";
+
 async function requestPlayerInfo(
   session: Innertube,
   videoId: string,
-  client: PlayerRequestClient | undefined,
+  client: PlayerRequestClient,
 ): Promise<VideoInfo> {
   try {
-    return client === undefined
-      ? await withTimeout(session.getInfo(videoId), OPERATION)
-      : await withTimeout(session.getInfo(videoId, { client }), OPERATION);
+    return await withTimeout(session.getInfo(videoId, { client }), OPERATION);
   } catch (error) {
     mapInfoError(videoId, error);
   }
@@ -129,6 +144,15 @@ export function createInnertubePlaybackClient(
   const sessionFactory = options.sessionFactory ?? sharedInnertubeSession;
   const inflight = new Map<string, Promise<PlaybackMediaInfo>>();
 
+  async function attempt(
+    session: Innertube,
+    videoId: string,
+    client: PlayerRequestClient,
+  ): Promise<PlaybackMediaInfo> {
+    const info = await requestPlayerInfo(session, videoId, client);
+    return normalizeMediaInfo(session, info, videoId, client);
+  }
+
   async function fetchInfo(videoId: string): Promise<PlaybackMediaInfo> {
     let session: Innertube;
     try {
@@ -137,23 +161,24 @@ export function createInnertubePlaybackClient(
       mapInfoError(videoId, error);
     }
 
-    // Primary: MWEB player context. Fallback: default context (previous
-    // behavior) when MWEB yields zero usable candidates or fails
-    // retryably. Genuinely unavailable videos throw non-retryably and
-    // never fall back.
-    let info: VideoInfo;
+    // Primary MWEB, then ONE explicit verified fallback (IOS). The session
+    // default (WEB) is never used: it yields zero usable formats, and passing
+    // `undefined` as a client would silently select it. If MWEB answers but
+    // materialized no usable candidate, the explicit fallback is tried once.
+    // Genuinely unavailable videos throw non-retryably and never fall back.
+    let attemptedFallback = false;
+    let media: PlaybackMediaInfo;
     try {
-      info = await requestPlayerInfo(session, videoId, PRIMARY_PLAYER_CLIENT);
+      media = await attempt(session, videoId, PRIMARY_PLAYER_CLIENT);
     } catch (error) {
       if (error instanceof ExtractorError && error.retryable === false) {
         throw error;
       }
-      info = await requestPlayerInfo(session, videoId, undefined);
+      attemptedFallback = true;
+      media = await attempt(session, videoId, FALLBACK_PLAYER_CLIENT);
     }
-    let media = await normalizeMediaInfo(session, info, videoId);
-    if (media.formats.length === 0) {
-      info = await requestPlayerInfo(session, videoId, undefined);
-      media = await normalizeMediaInfo(session, info, videoId);
+    if (media.formats.length === 0 && !attemptedFallback) {
+      media = await attempt(session, videoId, FALLBACK_PLAYER_CLIENT);
     }
     return media;
   }
@@ -162,6 +187,7 @@ export function createInnertubePlaybackClient(
     session: Innertube,
     info: VideoInfo,
     videoId: string,
+    client: PlayerRequestClient,
   ): Promise<PlaybackMediaInfo> {
     // Typed access, runtime-validated: library payloads are untrusted.
     const details = asRecord(info.basic_info);
@@ -182,17 +208,58 @@ export function createInnertubePlaybackClient(
     const rawFormats = [...adaptive, ...regular];
     const player = sessionPlayer(session);
     const formats: PlaybackFormatCandidate[] = [];
-    for (const raw of rawFormats) {
+    // Extraction diagnostics: these are the values that make an empty
+    // candidate set explainable instead of a bare zero.
+    let formatsSeen = 0;
+    let formatsWithPlayablePayload = 0;
+    let decipherAttempts = 0;
+    let decipherSuccesses = 0;
+    let decipherFailures = 0;
+    for (let index = 0; index < rawFormats.length; index++) {
+      const raw = rawFormats[index];
+      formatsSeen++;
       const base = toFormatCandidate(raw as Format);
       if (!base) {
         continue;
       }
+      formatsWithPlayablePayload++;
+      const { directUrlPresent, cipherPresent, ...candidateFields } = base;
       // URLs from adaptive formats may require deciphering; formats that
-      // cannot produce a usable URL are skipped, never surfaced.
-      const url = await decipherFormatUrl(raw as Format, player);
-      if (url) {
-        formats.push({ ...base, url });
+      // cannot produce a usable URL are skipped, never surfaced. A failure is
+      // recorded (reason/class/message) rather than swallowed into nothing.
+      const outcome = await decipherFormatUrl(raw as Format, player);
+      decipherAttempts++;
+      if (outcome.url) {
+        decipherSuccesses++;
+        formats.push({ ...candidateFields, url: outcome.url });
+      } else {
+        decipherFailures++;
+        logger.debug("Playback format decipher failed", {
+          event: "playback_decipher_failed",
+          videoId,
+          client,
+          formatIndex: index,
+          mimeType: candidateFields.mimeType ?? null,
+          itag: candidateFields.itag ?? null,
+          directUrlPresent,
+          cipherPresent,
+          reason: outcome.failure?.reason ?? null,
+          errorName: outcome.failure?.errorName ?? null,
+          errorMessage: outcome.failure?.errorMessage ?? null,
+        });
       }
+    }
+    if (formats.length === 0) {
+      logger.warn("Playback extraction produced no usable format", {
+        event: "playback_extraction_empty",
+        videoId,
+        client,
+        formatsSeen,
+        formatsWithPlayablePayload,
+        decipherAttempts,
+        decipherSuccesses,
+        decipherFailures,
+      });
     }
 
     const expiresRaw = streaming?.expires;

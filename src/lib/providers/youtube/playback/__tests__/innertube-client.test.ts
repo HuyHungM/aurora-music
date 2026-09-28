@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ExtractorError } from "@/lib/domain";
+import { setLogLevel, setLogSink, type LogRecord } from "@/lib/diagnostics/logger";
 import { createInnertubePlaybackClient } from "@/lib/providers/youtube/playback/innertube-client";
 
 const VIDEO_ID = "dQw4w9WgXcQ";
@@ -8,6 +9,8 @@ interface FakeFormat {
   has_audio: boolean;
   has_video: boolean;
   url?: string;
+  signature_cipher?: string;
+  cipher?: string;
   mime_type?: string;
   bitrate?: number;
   approx_duration_ms?: number;
@@ -96,10 +99,14 @@ describe("Innertube playback client", () => {
     });
   });
 
-  it("skips formats that cannot produce a url", async () => {
+  it("skips cipher formats whose deciphering yields no url", async () => {
     const session = sessionWith({
       formats: [
-        format({ url: undefined, decipher: async () => "" }),
+        format({
+          url: undefined,
+          signature_cipher: "s=abc&sp=sig",
+          decipher: async () => "",
+        }),
         format({ has_audio: false, has_video: true }),
       ],
     });
@@ -118,6 +125,7 @@ describe("Innertube playback client", () => {
       formats: [
         format({
           url: undefined,
+          signature_cipher: "s=abc&sp=sig",
           decipher: async () => "https://cdn.example/ciphered.m4a",
         }),
       ],
@@ -138,13 +146,19 @@ describe("Innertube playback client", () => {
     ]);
   });
 
-  it("falls back to the default context when MWEB yields no usable candidates", async () => {
-    // Cipherless adaptive formats carry no url and no decipher hook, so
-    // toCandidate drops them before deciphering is ever attempted.
-    const cipherless = format({ url: undefined, decipher: undefined });
+  it("falls back to the explicit IOS context when MWEB yields no usable candidates", async () => {
+    // A format with neither a URL nor a cipher payload is not usable; if MWEB
+    // materializes only those, extraction is empty and the explicit fallback
+    // (never the session-default WEB via `undefined`) is used.
+    const cipherless = format({
+      url: undefined,
+      signature_cipher: undefined,
+      cipher: undefined,
+    });
     const muxed = format({
       has_video: true,
       url: undefined,
+      signature_cipher: "s=abc&sp=sig",
       mime_type: "video/mp4",
       decipher: async () => "https://cdn.example/muxed.mp4",
     });
@@ -174,8 +188,8 @@ describe("Innertube playback client", () => {
     const info = await client.getMediaInfo(VIDEO_ID);
     expect(getInfo).toHaveBeenCalledTimes(2);
     expect(getInfo).toHaveBeenNthCalledWith(1, VIDEO_ID, { client: "MWEB" });
-    // Fallback uses the bare call: byte-for-byte previous behavior.
-    expect(getInfo.mock.calls[1]).toEqual([VIDEO_ID]);
+    // The fallback is an explicit verified client, never `undefined` (WEB).
+    expect(getInfo).toHaveBeenNthCalledWith(2, VIDEO_ID, { client: "IOS" });
     expect(info.formats).toEqual([
       {
         url: "https://cdn.example/muxed.mp4",
@@ -326,5 +340,99 @@ describe("player script evaluator", () => {
       ensureJsEvaluator();
       ensureJsEvaluator();
     }).not.toThrow();
+  });
+});
+
+describe("format gate and extraction diagnostics", () => {
+  it("rejects a format whose decipher method exists but that carries no URL or cipher payload", async () => {
+    // `decipher` is a prototype method on every Format, so its existence says
+    // nothing about this entry. With no url and no cipher it must be rejected.
+    const session = sessionWith({
+      formats: [
+        format({ url: undefined, signature_cipher: undefined, cipher: undefined }),
+      ],
+    });
+    const client = createInnertubePlaybackClient({
+      sessionFactory: async () => session as never,
+    });
+    const info = await client.getMediaInfo(VIDEO_ID);
+    expect(info.formats).toEqual([]);
+  });
+
+  it("records a thrown decipher failure in structured diagnostics", async () => {
+    const records: LogRecord[] = [];
+    setLogLevel("debug");
+    const restore = setLogSink((record) => records.push(record));
+    try {
+      const session = sessionWith({
+        formats: [
+          format({
+            url: undefined,
+            signature_cipher: "s=abc&sp=sig",
+            decipher: async () => {
+              throw new Error("No valid URL to decipher");
+            },
+          }),
+        ],
+      });
+      const client = createInnertubePlaybackClient({
+        sessionFactory: async () => session as never,
+      });
+      const info = await client.getMediaInfo(VIDEO_ID);
+      expect(info.formats).toEqual([]);
+    } finally {
+      restore();
+      setLogLevel("error");
+    }
+    const failure = records.find(
+      (record) => record.event === "playback_decipher_failed",
+    );
+    expect(failure).toBeDefined();
+    expect(failure?.fields).toMatchObject({
+      client: "MWEB",
+      directUrlPresent: false,
+      cipherPresent: true,
+      reason: "decipher_threw",
+    });
+    expect(String(failure?.fields.errorMessage)).toContain("No valid URL");
+    // No signed media URL may reach the log.
+    expect(JSON.stringify(records)).not.toContain("cdn.example");
+  });
+
+  it("summarizes an empty extraction with counts, not a bare zero", async () => {
+    const records: LogRecord[] = [];
+    setLogLevel("debug");
+    const restore = setLogSink((record) => records.push(record));
+    try {
+      const session = sessionWith({
+        formats: [
+          format({
+            url: undefined,
+            signature_cipher: "s=abc&sp=sig",
+            decipher: async () => "",
+          }),
+          format({ has_audio: false, has_video: true }),
+        ],
+      });
+      const client = createInnertubePlaybackClient({
+        sessionFactory: async () => session as never,
+      });
+      await client.getMediaInfo(VIDEO_ID);
+    } finally {
+      restore();
+      setLogLevel("error");
+    }
+    const summary = records.find(
+      (record) => record.event === "playback_extraction_empty",
+    );
+    expect(summary).toBeDefined();
+    expect(summary?.fields).toMatchObject({
+      client: "MWEB",
+      formatsSeen: 2,
+      formatsWithPlayablePayload: 1,
+      decipherAttempts: 1,
+      decipherSuccesses: 0,
+      decipherFailures: 1,
+    });
   });
 });

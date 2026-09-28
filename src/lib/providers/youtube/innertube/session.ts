@@ -221,7 +221,7 @@ export function sessionPlayer(session: unknown): unknown {
 // Format handling
 // ---------------------------------------------------------------------------
 
-export function toFormatCandidate(format: Format): {
+export interface FormatCandidate {
   url: string;
   hasAudio: boolean;
   hasVideo: boolean;
@@ -229,30 +229,42 @@ export function toFormatCandidate(format: Format): {
   mimeType?: string;
   bitrate?: number;
   durationMs?: number;
-} | null {
+  /** Diagnostics: the raw format already carried a usable direct URL. */
+  directUrlPresent: boolean;
+  /** Diagnostics: the raw format carried a signature/cipher payload to decipher. */
+  cipherPresent: boolean;
+}
+
+/**
+ * Admits a format only when it actually carries something usable.
+ *
+ * The previous gate treated `typeof format.decipher === "function"` as proof
+ * of a decipherable payload. That is wrong: `decipher` is a prototype method
+ * that exists on every `Format` whether or not this specific entry has a URL
+ * or a cipher. A format with neither passed the gate and then failed inside
+ * `decipherFormatUrl` (swallowed), which is how a response with formats still
+ * produced zero candidates with no reason. The honest test is the payload
+ * youtubei.js@18.0.0 actually exposes: a direct `url`, a `signature_cipher`,
+ * or a `cipher` (Format.js copies `data.url`, `data.signatureCipher`, and
+ * `data.cipher` verbatim).
+ */
+export function toFormatCandidate(format: Format): FormatCandidate | null {
   const record = asRecord(format);
   const hasAudio = record?.has_audio === true;
   const hasVideo = record?.has_video === true;
-  const url = asNonEmptyString(record?.url);
-  // Ciphered formats carry no direct URL until deciphered (YouTube serves
-  // `signature_cipher` + a decipher hook instead). They must pass the gate
-  // here — the caller below deciphers and only usable URLs are surfaced.
-  const decipherable = typeof record?.decipher === "function";
-  if (!hasAudio || (!url && !decipherable)) {
+  const directUrl = asNonEmptyString(record?.url);
+  const signatureCipher = asNonEmptyString(record?.signature_cipher);
+  const cipher = asNonEmptyString(record?.cipher);
+  const cipherPresent = signatureCipher !== undefined || cipher !== undefined;
+  if (!hasAudio || (directUrl === undefined && !cipherPresent)) {
     return null;
   }
-  const candidate: {
-    url: string;
-    hasAudio: boolean;
-    hasVideo: boolean;
-    itag?: number;
-    mimeType?: string;
-    bitrate?: number;
-    durationMs?: number;
-  } = {
-    url: url ?? "",
+  const candidate: FormatCandidate = {
+    url: directUrl ?? "",
     hasAudio,
     hasVideo,
+    directUrlPresent: directUrl !== undefined,
+    cipherPresent,
   };
   const itag = asPositiveInt(record?.itag);
   if (itag !== undefined) {
@@ -273,22 +285,57 @@ export function toFormatCandidate(format: Format): {
   return candidate;
 }
 
+/** Why a ciphered format produced no direct URL. */
+export type DecipherFailureReason =
+  | "no_decipher_method"
+  | "decipher_threw"
+  | "empty_url";
+
+export interface DecipherOutcome {
+  url?: string;
+  failure?: {
+    reason: DecipherFailureReason;
+    errorName?: string;
+    errorMessage?: string;
+  };
+}
+
+/**
+ * Resolves a format's playable URL through youtubei.js's supported decipher
+ * mechanism (`format.decipher(player)`), which returns a direct URL unchanged
+ * or performs the signature/`n` transform for a ciphered format.
+ *
+ * A failure is returned as data, never swallowed into `undefined` with no
+ * provenance: the caller records the reason/class/message in structured
+ * diagnostics. The message is never a media URL on success; on failure it is
+ * the library's own error text, which the logger additionally URL-redacts.
+ */
 export async function decipherFormatUrl(
   format: Format,
   player: unknown,
-): Promise<string | undefined> {
+): Promise<DecipherOutcome> {
+  const decipher = (format as unknown as { decipher?: unknown }).decipher;
+  if (typeof decipher !== "function") {
+    return { failure: { reason: "no_decipher_method" } };
+  }
   try {
-    const decipher = (format as unknown as { decipher?: unknown }).decipher;
-    if (typeof decipher !== "function") {
-      return undefined;
-    }
     const url = await (decipher as (player?: unknown) => Promise<unknown>).call(
       format,
       player,
     );
-    return asNonEmptyString(url);
-  } catch {
-    return undefined;
+    const resolved = asNonEmptyString(url);
+    if (!resolved) {
+      return { failure: { reason: "empty_url" } };
+    }
+    return { url: resolved };
+  } catch (error) {
+    return {
+      failure: {
+        reason: "decipher_threw",
+        errorName: error instanceof Error ? error.name : undefined,
+        errorMessage: error instanceof Error ? error.message : undefined,
+      },
+    };
   }
 }
 

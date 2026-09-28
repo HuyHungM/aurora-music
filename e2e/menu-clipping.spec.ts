@@ -197,7 +197,12 @@ async function enqueueFixtureTracks(page: Page) {
   await expect(page.getByRole("heading", { name: "E2E fixture library" })).toBeVisible();
 
   for (const title of [TRACK_ONE, TRACK_TWO]) {
-    await page.getByRole("button", { name: `Actions for ${title}` }).click();
+    // Scoped to the list: once a track is playing, the player bar renders its
+    // own "Actions for <title>" button and an unscoped query matches both.
+    await page
+      .getByRole("main")
+      .getByRole("button", { name: `Actions for ${title}` })
+      .click();
     await page.getByRole("menuitem", { name: "Add to queue" }).click();
     await expect(page.getByRole("menuitem", { name: "Add to queue" })).toHaveCount(0);
   }
@@ -306,6 +311,40 @@ authTest("the playlist picker, the tallest thing in the slot, is whole too", asy
 
   await expect(pageA.getByRole("menu", { name: MENU_PICKER })).toBeVisible();
   expectHealthy(await auditMenu(pageA, MENU_PICKER), "playlist picker");
+});
+
+authTest("the row-level playlist picker is whole, not pushed off-screen", async ({ pageA }) => {
+  // AUR-QA-03 lived entirely in this branch: the row action menu's
+  // "Add to playlist" picker is 240px wide and every row trigger sits at the
+  // RIGHT edge of its row, so the no-`placement` default must be `right-0`.
+  // When that class was lost, the picker opened 138px past the right edge at
+  // desktop width (162px on a phone) - visible, half off-screen, and the
+  // existing spec only covered the queue path, which passes an explicit
+  // placement and so never saw it. This asserts the row path directly.
+  await pageA.goto("/e2e-library");
+  // Scoped to the list for the same reason as `enqueueFixtureTracks`: a
+  // playing track puts an identically named button in the player bar.
+  await pageA
+    .getByRole("main")
+    .getByRole("button", { name: `Actions for ${TRACK_ONE}` })
+    .click();
+  await pageA.getByRole("menuitem", { name: MENU_PICKER }).click();
+
+  await expect(pageA.getByRole("menu", { name: MENU_PICKER })).toBeVisible();
+  expectHealthy(await auditMenu(pageA, MENU_PICKER), "row playlist picker");
+});
+
+authTest("the row-level playlist picker is whole on a phone-width list", async ({ pageA }) => {
+  await pageA.setViewportSize(PHONE);
+  await pageA.goto("/e2e-library");
+  await pageA
+    .getByRole("main")
+    .getByRole("button", { name: `Actions for ${TRACK_ONE}` })
+    .click();
+  await pageA.getByRole("menuitem", { name: MENU_PICKER }).click();
+
+  await expect(pageA.getByRole("menu", { name: MENU_PICKER })).toBeVisible();
+  expectHealthy(await auditMenu(pageA, MENU_PICKER), "phone row playlist picker");
 });
 
 authTest("a click elsewhere in the queue dismisses the row menu", async ({ pageA }) => {

@@ -13,6 +13,109 @@
 - `AUTH_SECRET` set when `NODE_ENV=production` (dummy values only ever in
   CI placeholders, never real secrets in logs or VCS).
 
+## Cloudflare Workers (OpenNext)
+
+Aurora deploys to **Cloudflare Workers** through
+[`@opennextjs/cloudflare`](https://opennext.js.org/cloudflare). The
+server-rendered Next.js application is bundled into a Worker; it is **not**
+converted to a static site. API routes, Auth.js, Prisma/PostgreSQL, the
+YouTube playback resolver and server actions all keep running server-side.
+
+```text
+next build → @opennextjs/cloudflare build → wrangler deploy → Cloudflare Worker
+```
+
+### Committed configuration (no interactive migration)
+
+The deployment is driven entirely by files in the repository. The Cloudflare
+build must **not** be allowed to auto-run `@opennextjs/cloudflare migrate`
+(which `wrangler deploy` can trigger): that command rewrites `next.config.ts`,
+`package.json`, `.dev.vars` and `public/_headers` on the build machine, so the
+artifact depends on an ephemeral mutation instead of a review.
+
+| File | Purpose |
+| --- | --- |
+| `open-next.config.ts` | OpenNext adapter config (`defineCloudflareConfig()`). No R2/ISR override — Aurora is dynamic. |
+| `wrangler.jsonc` | Worker name, entry (`.open-next/worker.js`), assets, `nodejs_compat`, `IMAGES` binding. |
+| `next.config.ts` | `serverExternalPackages` (see below). |
+
+### Scripts
+
+```bash
+bun run build      # next build — the low-level build only
+bun run preview    # opennextjs-cloudflare build && opennextjs-cloudflare preview
+bun run deploy     # opennextjs-cloudflare build && opennextjs-cloudflare deploy
+bun run upload     # opennextjs-cloudflare build && opennextjs-cloudflare upload
+bun run cf-typegen # wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts
+```
+
+`build` stays `next build`. `opennextjs-cloudflare build` runs the package's
+`build` script internally, so pointing `build` at `opennextjs-cloudflare build`
+would recurse. `preview`/`deploy` call the OpenNext **binary**, not the `build`
+script, so they do not recurse either.
+
+### `pg` / `pg-cloudflare` on workerd
+
+`pg` reaches Cloudflare's native TCP sockets through its optional
+`pg-cloudflare` dependency, which exposes a `workerd` export condition:
+
+```jsonc
+// node_modules/pg-cloudflare/package.json
+"exports": { ".": {
+  "workerd": { "import": "./esm/index.mjs", "require": "./dist/index.js" },
+  "default": "./dist/empty.js"
+} }
+```
+
+Next's dependency tracer follows only the `default` condition, so the
+standalone output would keep `dist/empty.js` and drop the real socket files.
+OpenNext restores the full package **only for names listed in Next's
+`serverExternalPackages`** (`copyWorkerdPackages`). `next.config.ts` therefore
+declares:
+
+```ts
+serverExternalPackages: ["pg", "pg-cloudflare"],
+```
+
+Removing either entry breaks PostgreSQL on Workers (bundling resolves/keeps
+`pg-cloudflare`'s missing `dist/index.js`, and the runtime TCP socket is not
+available). `pg-cloudflare` is a transitive *optional* dependency of `pg`; it
+is deliberately not added as a direct dependency, because the lockfile already
+pins it and the tracer/OpenNext copy is what matters.
+
+### Runtime compatibility
+
+- `nodejs_compat` is required by `pg`, `@prisma/adapter-pg` and Auth.js.
+- `IMAGES` enables optimised `next/image`; `ASSETS` serves `.open-next/assets`.
+- Secrets are set with `wrangler secret put NAME` (or the dashboard) — never in
+  `wrangler.jsonc`, `open-next.config.ts` or a committed `.dev.vars`. `.dev.vars`
+  is gitignored.
+- **Database TLS on Workers — private CAs are a deployment prerequisite, not
+  an env var.** The Node-host mechanism `AURORA_DATABASE_CA_CERT_PATH` reads a
+  file from disk, which Workers do not have; `AURORA_DATABASE_CA_CERT` supplies
+  the same public CA inline for a **filesystem-less Node** runtime (takes
+  precedence over the path, fails closed on a non-PEM value, keeps verification
+  ON). It does **not** work on Workers: `pg` uses `pg-cloudflare`, whose
+  `startTls` hands the caller's options to `cloudflare:sockets`, which accepts
+  only `expectedServerHostname` and therefore cannot be given the provider's
+  CA. Workerd verifies against Cloudflare's own trust store, which cannot hold
+  Aiven's per-project CA, so the TLS upgrade to the database fails
+  (`Network connection lost`) while TCP and publicly-trusted TLS succeed.
+  Verification must stay ON, so the fix is a trust boundary outside the app:
+  use [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) (Cloudflare's
+  Postgres connector, which owns the origin TLS and CA — the vendor's
+  documented recommendation), or point the service at a publicly-trusted
+  certificate. Do not deploy the Workers target against a private-CA database
+  until one of those is configured. See `docs/scope-boundaries.md`.
+- **What ends up in the build artifact:** `opennextjs-cloudflare build`
+  compiles the values from `.env` / `.env.local` into the generated
+  `.open-next/cloudflare/next-env.mjs`. Cloudflare bindings and secrets are
+  applied to `process.env` first, so a real Worker secret always wins over the
+  compiled fallback — but any secret sitting in a local env file at build time
+  is still written into the (gitignored) bundle. Keep infra-only secrets such
+  as `CLOUDFLARED_TOKEN` out of `.env` when building for Cloudflare, and prefer
+  `wrangler secret put` for everything the Worker needs.
+
 ## Canonical release order
 
 ```text

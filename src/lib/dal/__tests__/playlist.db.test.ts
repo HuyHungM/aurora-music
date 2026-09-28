@@ -161,6 +161,25 @@ describe("removeTrackFromPlaylist", () => {
     ).rejects.toBeInstanceOf(ResourceNotFoundError);
   });
 
+  it("does not delete another track when the ref names no catalog row", async () => {
+    // Regression: an unknown provider track id resolves to a null internal id.
+    // Passing that null through as `trackId: undefined` made Prisma drop the
+    // filter and delete the playlist's FIRST membership instead of failing.
+    const id = await seedPlaylist();
+    await addTrackToPlaylist(ownerId, id, trackOne, prisma);
+    await expect(
+      removeTrackFromPlaylist(
+        ownerId,
+        id,
+        { provider: namespace, providerTrackId: "no-such-catalog-track" },
+        prisma,
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
+
+    const playlist = await getOwnedPlaylist(ownerId, id, prisma);
+    expect(playlist?.items.map((item) => item.trackId)).toEqual([trackOne.id]);
+  });
+
   it("does not delete the underlying Track when removing from playlist", async () => {
     const id = await seedPlaylist();
     await addTrackToPlaylist(ownerId, id, trackOne, prisma);

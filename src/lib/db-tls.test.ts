@@ -3,6 +3,7 @@ import { Client } from "pg";
 import {
   buildDatabaseAdapterConfig,
   DATABASE_CA_CERT_PATH_VAR,
+  DATABASE_CA_CERT_VAR,
   type PgConnectionConfig,
 } from "./db-tls";
 import { ConfigError } from "./errors";
@@ -164,6 +165,60 @@ describe("buildDatabaseAdapterConfig", () => {
         readFile: () => "  \n",
       }),
     ).toThrow(ConfigError);
+  });
+
+  it("attaches an inline CA (Workers, no filesystem) and keeps verification enabled", () => {
+    const config = buildDatabaseAdapterConfig({
+      url: "postgresql://u:p@db.internal:5432/aurora?sslmode=require",
+      caCert: PEM,
+      nodeEnv: "production",
+      // No readFile: a filesystem-less runtime must not need one.
+      readFile: () => {
+        throw new Error("must not read a file when an inline CA is supplied");
+      },
+    });
+
+    expect(config.ssl).toEqual({ ca: PEM, rejectUnauthorized: true });
+    expect(config.connectionString).not.toContain("sslmode");
+  });
+
+  it("prefers the inline CA over the file path when both are set", () => {
+    const config = buildDatabaseAdapterConfig({
+      url: "postgresql://u:p@db.internal:5432/aurora?sslmode=require",
+      caCert: PEM,
+      caCertPath: "/etc/aurora/other-ca.pem",
+      nodeEnv: "production",
+      readFile: () => "-----BEGIN CERTIFICATE-----\nOTHER\n-----END CERTIFICATE-----",
+    });
+
+    expect(config.ssl).toEqual({ ca: PEM, rejectUnauthorized: true });
+  });
+
+  it("falls back to the file path when the inline value is blank", () => {
+    const config = buildDatabaseAdapterConfig({
+      url: "postgresql://u:p@db.internal:5432/aurora?sslmode=require",
+      caCert: "   ",
+      caCertPath: "/etc/aurora/postgres-ca.pem",
+      nodeEnv: "production",
+      readFile: readPem,
+    });
+
+    expect(config.ssl).toEqual({ ca: PEM, rejectUnauthorized: true });
+  });
+
+  it("rejects an inline value that is not a PEM certificate, naming the variable", () => {
+    try {
+      buildDatabaseAdapterConfig({
+        url: "postgresql://u:p@db.internal:5432/aurora?sslmode=require",
+        caCert: "/etc/aurora/postgres-ca.pem",
+        nodeEnv: "production",
+      });
+      throw new Error("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).message).toContain(DATABASE_CA_CERT_VAR);
+      expect((error as ConfigError).message).not.toContain("/etc/aurora");
+    }
   });
 
   it("rejects a non-postgres scheme with only the scheme in the message", () => {

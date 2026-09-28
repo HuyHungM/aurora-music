@@ -116,7 +116,19 @@ export function LocaleSwitcher({ compact = false }: { compact?: boolean }) {
           aria-label={t("settings.languageLabel")}
           {...presenceProps}
           className={`${compact ? "presence-menu" : "presence-menu-up"} aurora-glass-float absolute z-dropdown w-48 overflow-hidden rounded-xl border border-border-subtle ${
-            compact ? "right-0 top-full mt-1" : "bottom-full mb-1 w-full"
+            // `left-0`, not `right-0` (Phase 55, responsive QA). The compact
+            // trigger lives in the mobile header to the LEFT of the account
+            // group, so it is not near the right edge of the viewport. A
+            // 192px menu right-aligned to a 44px trigger 96-140px from the
+            // left edge (320-360px phones) overflowed the LEFT edge by up to
+            // 52px, clipping its border, padding and the selected checkmark.
+            // Measured anchor=left across every compact width (320-1023):
+            // the menu's right edge lands at triggerX+192, which stays inside
+            // the viewport because ≥~150px of controls always follow the
+            // trigger. Left overflow adds no width to the document, so the
+            // overflow harness never saw it; it is caught by
+            // `getBoundingClientRect`.
+            compact ? "left-0 top-full mt-1" : "bottom-full mb-1 w-full"
           }`}
         >
           {LOCALES.map((code) => {

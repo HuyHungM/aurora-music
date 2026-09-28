@@ -65,15 +65,17 @@ export function HeroSection({ track }: { track: Track }) {
             )}
           </button>
         </div>
-        <Artwork
-          src={track.artworkUrl}
-          alt={track.title}
-          size="large"
-          pixelSize={208}
-          rounded="rounded-xl"
-          eager
-          className="h-52 w-full object-cover shadow-lg md:h-52 md:w-52"
-        />
+        <span className="relative block h-52 w-full overflow-hidden rounded-xl shadow-lg md:h-52 md:w-52">
+          <Artwork
+            src={track.artworkUrl}
+            alt={track.title}
+            size="large"
+            pixelSize={208}
+            rounded="rounded-xl"
+            eager
+            fill
+          />
+        </span>
       </div>
     </section>
   );

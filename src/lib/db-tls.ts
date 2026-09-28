@@ -20,6 +20,23 @@ import { ConfigError } from "./errors";
  */
 export const DATABASE_CA_CERT_PATH_VAR = "AURORA_DATABASE_CA_CERT_PATH";
 
+/**
+ * Name of the optional variable that carries the PEM CA **inline**, as text.
+ *
+ * The path variable above is a Node-host mechanism: it reads a file from disk.
+ * Cloudflare Workers (the OpenNext target) and any other filesystem-less
+ * runtime have no disk, so a provider with a private CA (Aiven's per-project
+ * CA is the known case) needs the same trust anchor supplied as a value. The
+ * CA is a **public** certificate — it carries no private key — so a Worker
+ * secret/binding is a safe place for it.
+ *
+ * This is the Workers-compatible half of the pair, not a replacement: keep the
+ * file path on a Node host (it is easier to provision and review) and the
+ * inline value where there is no filesystem. Either way, TLS keeps certificate
+ * and hostname verification ON — supplying a CA never weakens a connection.
+ */
+export const DATABASE_CA_CERT_VAR = "AURORA_DATABASE_CA_CERT";
+
 export type DatabaseNodeEnv = "development" | "test" | "production";
 
 /** The subset of `pg.PoolConfig` this module builds. */
@@ -31,9 +48,62 @@ export interface PgConnectionConfig {
 export interface BuildDatabaseConfigInput {
   url: string;
   caCertPath?: string;
+  /** Inline PEM certificate(s). Takes precedence over `caCertPath` when set. */
+  caCert?: string;
   nodeEnv: DatabaseNodeEnv;
   /** Injected for tests. Defaults to reading the path as UTF-8 text. */
   readFile?: (path: string) => string;
+}
+
+/**
+ * Resolves the trust anchor from the inline value or the file path.
+ *
+ * Inline wins when both are present: it is the value the operator placed
+ * directly in this environment, and on a filesystem-less runtime the path is
+ * meaningless anyway. An inline value that is not a PEM certificate fails
+ * closed with the variable's name, so a path pasted into the wrong variable
+ * (or a truncated secret) is a named configuration error rather than a
+ * connection that silently ignores the CA.
+ */
+function resolveCaCertificate(input: {
+  caCert?: string;
+  caCertPath?: string;
+  readFile: (path: string) => string;
+}): string | undefined {
+  const inline = input.caCert?.trim();
+  if (inline !== undefined && inline !== "") {
+    if (!inline.includes("BEGIN CERTIFICATE")) {
+      throw new ConfigError(
+        `The value of ${DATABASE_CA_CERT_VAR} is not a PEM certificate`,
+        [
+          `Expected PEM text containing "BEGIN CERTIFICATE".`,
+          `Use ${DATABASE_CA_CERT_PATH_VAR} instead when pointing at a file.`,
+        ],
+      );
+    }
+    return inline;
+  }
+
+  if (input.caCertPath === undefined || input.caCertPath === "") {
+    return undefined;
+  }
+
+  let ca: string;
+  try {
+    ca = input.readFile(input.caCertPath).trim();
+  } catch {
+    // The path is not a secret, but the failure is reported as a configuration
+    // error and never as a raw filesystem error, which could carry more.
+    throw new ConfigError(
+      `Could not read the CA certificate file named by ${DATABASE_CA_CERT_PATH_VAR}`,
+    );
+  }
+  if (ca === "") {
+    throw new ConfigError(
+      `The CA certificate file named by ${DATABASE_CA_CERT_PATH_VAR} is empty`,
+    );
+  }
+  return ca;
 }
 
 /**
@@ -118,7 +188,7 @@ function stripSslParams(parsed: URL): string {
 export function buildDatabaseAdapterConfig(
   input: BuildDatabaseConfigInput,
 ): PgConnectionConfig {
-  const { url, caCertPath, nodeEnv } = input;
+  const { url, caCertPath, caCert, nodeEnv } = input;
   const readFile = input.readFile ?? ((path: string) => readFileSync(path, "utf8"));
 
   if (!url.startsWith("postgresql://") && !url.startsWith("postgres://")) {
@@ -146,27 +216,12 @@ export function buildDatabaseAdapterConfig(
     }
   }
 
-  if (caCertPath === undefined || caCertPath === "") {
+  const ca = resolveCaCertificate({ caCert, caCertPath, readFile });
+  if (ca === undefined) {
     // No explicit trust anchor: leave the connection string exactly as the
     // operator wrote it, so an existing deployment is unchanged and `pg` keeps
     // its own (system-trust-store) verification.
     return { connectionString: url };
-  }
-
-  let ca: string;
-  try {
-    ca = readFile(caCertPath).trim();
-  } catch {
-    // The path is not a secret, but the failure is reported as a configuration
-    // error and never as a raw filesystem error, which could carry more.
-    throw new ConfigError(
-      `Could not read the CA certificate file named by ${DATABASE_CA_CERT_PATH_VAR}`,
-    );
-  }
-  if (ca === "") {
-    throw new ConfigError(
-      `The CA certificate file named by ${DATABASE_CA_CERT_PATH_VAR} is empty`,
-    );
   }
 
   return {

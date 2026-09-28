@@ -25,6 +25,24 @@ import type { TrackRef } from "@/lib/domain";
  */
 const playlistInclude = playlistTracksInclude;
 
+/**
+ * Interactive-transaction budget shared by every playlist mutation.
+ *
+ * Prisma defaults an interactive transaction to a 5 000 ms timeout and a
+ * 2 000 ms `maxWait`. That default assumes a low-latency database. On a
+ * managed Postgres reached over the public internet, a reorder issues
+ * `1 + N + N + 1` sequential round trips inside the transaction, so a
+ * three-track reorder intermittently exceeded 5 s and failed with a raw
+ * Prisma transaction-timeout error (observed against Aiven at ~50 ms RTT;
+ * it never reproduces against a local database).
+ *
+ * Raising the wall-clock budget changes no transaction semantics: every
+ * statement, constraint and validation is the same, and each still runs in
+ * one ACID transaction. Only the time allowed for the network round trips is
+ * raised, which is what the default was measuring.
+ */
+const PLAYLIST_TRANSACTION_OPTIONS = { timeout: 20_000, maxWait: 15_000 } as const;
+
 export async function createPlaylist(
   userId: string,
   input: { title: string; description?: string; artwork?: string },
@@ -315,7 +333,7 @@ export async function addTrackToPlaylist(
         where: { id: playlistId },
         include: playlistInclude,
       });
-    });
+    }, PLAYLIST_TRANSACTION_OPTIONS);
   } catch (error) {
     // Lost a concurrent-insert race after passing the membership check:
     // re-read once to report the duplicate correctly instead of leaking
@@ -352,9 +370,18 @@ export async function removeTrackFromPlaylist(
 ): Promise<Playlist> {
   await requirePlaylistOwner(userId, playlistId, db);
   const trackId = await findTrackInternalId(db, ref);
+  // A ref that names no catalog row cannot match any membership. Returning
+  // early is load-bearing: passing `trackId: undefined` into the `where`
+  // clause makes Prisma DROP that filter entirely, so the lookup below would
+  // return the playlist's FIRST membership and this function would delete a
+  // track the caller never referenced. The catalog miss is a not-found, not
+  // an instruction to remove something else.
+  if (trackId === null) {
+    throw new ResourceNotFoundError("This track is not in the playlist", "playlistTrack");
+  }
   return db.$transaction(async (tx) => {
     const row = await tx.playlistTrack.findFirst({
-      where: { playlistId, trackId: trackId ?? undefined },
+      where: { playlistId, trackId },
     });
     if (!row) {
       throw new ResourceNotFoundError("This track is not in the playlist", "playlistTrack");
@@ -366,7 +393,7 @@ export async function removeTrackFromPlaylist(
       include: playlistInclude,
     });
     return mapPlaylist(updated);
-  });
+  }, PLAYLIST_TRANSACTION_OPTIONS);
 }
 
 export async function reorderPlaylist(
@@ -430,7 +457,7 @@ export async function reorderPlaylist(
       include: playlistInclude,
     });
     return mapPlaylist(updated);
-  });
+  }, PLAYLIST_TRANSACTION_OPTIONS);
 }
 
 async function compactPositions(

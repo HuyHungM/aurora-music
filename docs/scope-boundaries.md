@@ -109,6 +109,57 @@ the static labels were removed in favor of real seed-based stations).
 Converting a deferred item into work requires a new phase authorization —
 this file never authorizes it.
 
+### Cloudflare Workers DB TLS: private-CA trust is not solved on workerd
+
+The Cloudflare Workers deployment (docs/deployment.md → "Cloudflare Workers
+(OpenNext)") bundles and runs `pg` / `@prisma/adapter-pg` correctly. The
+remaining gap is only the **private-CA trust anchor**:
+
+- The Node-host mechanism `AURORA_DATABASE_CA_CERT_PATH` reads a PEM from the
+  filesystem (`src/lib/db-tls.ts`). Workers have no filesystem, so that path is
+  meaningless there.
+- A provider that signs with a private CA (Aiven's per-project CA is the known
+  case) therefore needs its CA supplied by a Workers-compatible means before a
+  deployment can complete TLS verification.
+- Certificate and hostname verification must stay ON: `sslmode=disable`,
+  `no-verify`, `ssl=false` and `NODE_TLS_REJECT_UNAUTHORIZED=0` are and remain
+  refused in production, on every target.
+
+**Investigated further, still not solvable in-app on workerd (2026-09-28).**
+An inline-CA mechanism was added — `AURORA_DATABASE_CA_CERT` carries the same
+public CA as PEM text, is read by the shared TLS builder (`src/lib/db-tls.ts`),
+takes precedence over the file path when both are set, fails closed on a value
+that is not a PEM certificate, and keeps verification ON. It is the correct
+mechanism for a **filesystem-less Node** runtime, and it is proven to connect to
+the Aiven database with verification on (system trust store fails with
+`SELF_SIGNED_CERT_IN_CHAIN`; the inline CA succeeds).
+
+It does **not** fix the Workers target, and no in-app change can. Measured on
+`wrangler dev` (workerd) against the real database:
+
+- `pg` selects `pg-cloudflare`'s `CloudflareSocket`, whose `startTls(options)`
+  forwards the caller's options to `cloudflare:sockets`'
+  `Socket.startTls`, which accepts **only** `expectedServerHostname`. `pg`'s
+  `ca` and `rejectUnauthorized` are dropped, and the `servername` `pg` supplies
+  is not the name Cloudflare's API reads (source:
+  `pg-cloudflare/dist/index.js`, `pg-cloudflare/src/types.d.ts`).
+- `cloudflare:sockets` therefore verifies the server against Cloudflare's own
+  trust store, which cannot contain Aiven's per-project CA. The Postgres
+  `SSLRequest`/StartTLS upgrade closes with `Network connection lost` (plain TCP
+  and the same upgrade to a publicly-trusted host succeed, so this is CA trust,
+  not reachability).
+- `sslmode=disable`/`no-verify`, `ssl=false` and `NODE_TLS_REJECT_UNAUTHORIZED=0`
+  remain refused, so "make it connect" cannot mean "drop verification".
+
+**The supported Workers path is a trust boundary outside the app:** use
+[Hyperdrive](https://developers.cloudflare.com/hyperdrive/) (Cloudflare's
+connection pooler and the vendor's documented recommendation for Postgres on
+Workers), which terminates the origin TLS and owns the CA, or point the service
+at a publicly-trusted certificate. The build/bundling half
+(`serverExternalPackages`) is solved; only the trust anchor is not, and it is
+not an application code change. Do not deploy the Workers target against this
+private-CA database until one of those is configured.
+
 ### Phase 48 deferral: no mobile bottom sheet for the playlist picker
 
 The add-to-playlist picker is a viewport-anchored popover at every width,

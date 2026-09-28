@@ -315,7 +315,15 @@ export function AddToPlaylistMenu({
         aria-label={t("playlist.addToPlaylistTitle")}
         {...presenceProps}
         className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float absolute z-dropdown w-60 overflow-hidden rounded-lg border border-border-subtle ${
-          placement ? "" : openUp ? "bottom-full mb-1" : "top-full mt-1"
+          // `right-0` is load-bearing and was lost from the no-`placement`
+          // branch. This picker is 240px wide and every trigger that opens it
+          // from a row sits at the RIGHT edge of that row, so the default
+          // static-position left edge (x = trigger left) pushed it 138-162px
+          // past the viewport on both phone and desktop - "Add to playlist"
+          // opened half off-screen. The docstring above already names
+          // `absolute right-0 top-full` as the contract; this restores it.
+          // The queue passes explicit `placement`, so it is untouched.
+          placement ? "" : `right-0 ${openUp ? "bottom-full mb-1" : "top-full mt-1"}`
         }`}
         style={placement}
       >

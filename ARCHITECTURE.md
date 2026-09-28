@@ -242,6 +242,18 @@ not merely as a convention. See §8a.
   acceptable last resort; video-carrying formats never outrank audio-only;
   MIME `audio/mp4` > `audio/webm` > other; higher bitrate wins;
   URL-lexicographic tie-break.
+- **Player-context selection:** the primary InnerTube player context is `MWEB`
+  (the session default `WEB` withholds URL material for adaptive formats and
+  yields zero candidates). A single explicit fallback, `IOS` (verified to
+  materialize decipherable audio formats for every regression video), is used
+  when `MWEB` yields no usable candidate or fails retryably. The session
+  default is never used, not even as a fallback. A format is admitted only
+  when it carries a direct `url` or a non-empty `signature_cipher`/`cipher`
+  payload; the existence of the `decipher` prototype method is **not** treated
+  as evidence of decipherable media. Decipher failures are recorded
+  (`playback_decipher_failed`) and an empty extraction is summarized
+  (`playback_extraction_empty`) with `formatsSeen` / payload / decipher
+  counts, so `candidateCount: 0` is explainable rather than a bare zero.
 - **Browser-shaped range validation (critical rule):**
 
   ```text
@@ -1069,6 +1081,22 @@ instrumentation boot validation → next start → health → smoke
   service worker (production smoke: 16/16; E2E: 77 passed under Bun).
   `typecheck` depends on `.next/types`, so a build precedes it on a clean
   tree.
+- **Cloudflare Workers (OpenNext):** the same server-rendered application
+  (API routes, Auth.js, Prisma/PostgreSQL, the YouTube resolver and server
+  actions — not a static export) deploys through the committed
+  `open-next.config.ts` and `wrangler.jsonc` and the
+  `preview`/`deploy`/`upload` scripts, which wrap `opennextjs-cloudflare`.
+  The Cloudflare build starts from those committed files and never
+  auto-runs `@opennextjs/cloudflare migrate`; `build` stays `next build`
+  because `opennextjs-cloudflare build` invokes it internally (pointing
+  `build` at the OpenNext command would recurse). Workers run with the
+  `nodejs_compat` compatibility flag so `pg`, `@prisma/adapter-pg` and
+  Auth.js execute server-side. `next.config.ts` lists `pg` and
+  `pg-cloudflare` in `serverExternalPackages`: `pg-cloudflare` exposes a
+  `workerd` export condition whose real socket files (`dist/index.js`,
+  `esm/index.mjs`) Next's tracer does not follow by default, and OpenNext
+  only restores them for packages named there. See
+  docs/deployment.md → "Cloudflare Workers (OpenNext)".
 
 ## 20. Design system
 

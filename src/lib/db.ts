@@ -16,6 +16,7 @@ function createClient(): PrismaClient {
   const config = buildDatabaseAdapterConfig({
     url: env.DATABASE_URL,
     caCertPath: env.AURORA_DATABASE_CA_CERT_PATH,
+    caCert: env.AURORA_DATABASE_CA_CERT,
     nodeEnv: env.NODE_ENV,
   });
 
