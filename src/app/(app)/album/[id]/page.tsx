@@ -64,12 +64,15 @@ export default async function AlbumDetailPage({
           <section aria-label={t("album.tracklist")}>
             <SectionHeader
               title={t("album.tracklist")}
+              icon={<MusicNoteIcon size={16} />}
               aside={plural(locale, tracksResult.data.length, {
                 one: t("album.tracksCountOne", { count: formatNumber(locale, tracksResult.data.length) }),
                 other: t("album.tracksCount", { count: formatNumber(locale, tracksResult.data.length) }),
               })}
             />
-            <TrackList tracks={tracksResult.data} showMenu={true} numbered />
+            <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+              <TrackList tracks={tracksResult.data} showMenu={true} numbered />
+            </div>
           </section>
         ) : null}
 
@@ -83,7 +86,7 @@ export default async function AlbumDetailPage({
         ) : null}
 
         {tracksResult.kind === "failed" ? (
-          <div className="flex items-center gap-2 rounded-xl border border-border-subtle bg-surface-1 px-4 py-3 text-sm text-text-muted">
+          <div className="aurora-glass-edge flex items-center gap-2 rounded-xl border border-border-subtle bg-surface-1/60 px-4 py-3 text-sm text-text-muted">
             <AlertCircleIcon size={16} className="shrink-0" />
             <span>{t("album.tracksUnavailable")}</span>
           </div>

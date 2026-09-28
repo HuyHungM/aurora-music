@@ -28,10 +28,12 @@ import {
   checkBackgroundUrl,
   sniffImageFormat,
   validateBackgroundImage,
+  validateLocalBackgroundFile,
   type BackgroundImageElement,
   type BackgroundImageEnvironment,
   type BackgroundImageFetch,
   type BackgroundImageResult,
+  type LocalBackgroundEnvironment,
 } from "@/lib/appearance/background-image";
 import en from "@/lib/i18n/en";
 import vi from "@/lib/i18n/vi";
@@ -641,5 +643,104 @@ describe("the rejection set", () => {
         "unsupportedType",
       ].sort(),
     );
+  });
+});
+
+/* ==========================================================================
+   LOCAL PREVIEW
+   ========================================================================== */
+
+describe("validateLocalBackgroundFile", () => {
+  function makeBlob(length = 64, type = "image/png"): Blob {
+    return new Blob([new Uint8Array(length)], { type });
+  }
+
+  function buildEnvironment(overrides: Partial<LocalBackgroundEnvironment> = {}) {
+    const revoked: string[] = [];
+    let created = 0;
+    const environment: LocalBackgroundEnvironment = {
+      createObjectURL: () => {
+        created += 1;
+        return `blob:aurora-${created}`;
+      },
+      revokeObjectURL: (url) => {
+        revoked.push(url);
+      },
+      createImage: () => sizedImage(1920, 1080),
+      ...overrides,
+    };
+    return { environment, revoked, createdCount: () => created };
+  }
+
+  it("refuses a declared type that is not an image, before minting a URL", async () => {
+    const { environment, createdCount } = buildEnvironment();
+    const result = await validateLocalBackgroundFile(
+      makeBlob(64, "text/html"),
+      environment,
+    );
+    expect(result).toEqual({ ok: false, reason: "unsupportedType" });
+    expect(createdCount()).toBe(0);
+  });
+
+  it("lets the decode decide when the browser withheld a MIME type", async () => {
+    // Plenty of files arrive with an empty `type`; the honest check is the
+    // decode, and refusing on an absent hint would reject ordinary files.
+    const { environment } = buildEnvironment();
+    const result = await validateLocalBackgroundFile(makeBlob(64, ""), environment);
+    expect(result.ok).toBe(true);
+  });
+
+  it("refuses a file over the byte cap before loading it", async () => {
+    const { environment, createdCount } = buildEnvironment();
+    const result = await validateLocalBackgroundFile(
+      makeBlob(BACKGROUND_MAX_BYTES + 1),
+      environment,
+    );
+    expect(result).toEqual({ ok: false, reason: "tooLarge" });
+    expect(createdCount()).toBe(0);
+  });
+
+  it("reports unavailable when the browser cannot mint object URLs", async () => {
+    const { environment } = buildEnvironment({ createObjectURL: undefined });
+    const result = await validateLocalBackgroundFile(makeBlob(), environment);
+    expect(result).toEqual({ ok: false, reason: "unavailable" });
+  });
+
+  it("refuses a file that will not decode, and revokes the URL it made", async () => {
+    const { environment, revoked } = buildEnvironment({
+      createImage: () => ({
+        naturalWidth: 0,
+        naturalHeight: 0,
+        decode: async () => {
+          throw new Error("broken");
+        },
+      }),
+    });
+    const result = await validateLocalBackgroundFile(makeBlob(), environment);
+    expect(result).toEqual({ ok: false, reason: "decodeFailed" });
+    // No leak: a refused file must not leave a live Blob behind.
+    expect(revoked).toEqual(["blob:aurora-1"]);
+  });
+
+  it("applies the same dimension floor as a remote image, then revokes", async () => {
+    const { environment, revoked } = buildEnvironment({
+      createImage: () => sizedImage(64, 64),
+    });
+    const result = await validateLocalBackgroundFile(makeBlob(), environment);
+    expect(result).toEqual({ ok: false, reason: "tooSmall" });
+    expect(revoked).toEqual(["blob:aurora-1"]);
+  });
+
+  it("accepts a real file and hands back the URL, unrevoked", async () => {
+    const { environment, revoked } = buildEnvironment();
+    const result = await validateLocalBackgroundFile(makeBlob(), environment);
+    expect(result).toEqual({
+      ok: true,
+      objectUrl: "blob:aurora-1",
+      width: 1920,
+      height: 1080,
+    });
+    // Success releases nothing: the caller owns the URL until it replaces it.
+    expect(revoked).toEqual([]);
   });
 });

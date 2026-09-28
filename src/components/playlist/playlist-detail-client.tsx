@@ -121,41 +121,43 @@ export function PlaylistDetailClient({
 
       {currentTracks.length > 0 ? (
         <section aria-label={t("playlist.tracksSection")}>
-          <div className="flex flex-col gap-0.5">
-            {currentTracks.map((track, index) => (
-              // Occurrence identity: playlist membership rows are keyed by
-              // playlist-item id, so the same track could appear in
-              // multiple positions without colliding.
-              <div
-                key={
-                  currentPlaylist.items[index]?.id ??
-                  `${catalogTrackKey(track)}#${index + 1}`
-                }
-                className="flex items-center gap-1"
-              >
-                {isOwner ? (
-                  <PlaylistTrackActions
-                    playlistId={playlist.id}
-                    tracks={currentTracks}
-                    trackIndex={index}
-                    onReorder={handleReorder}
-                  />
-                ) : null}
-                <div className="min-w-0 flex-1">
-                  <TrackRow
-                    track={track}
-                    collectionTracks={currentTracks}
-                    collectionIndex={index}
-                    showMenu={true}
-                    showAddToPlaylist={true}
-                    position={index + 1}
-                    onRemoveFromPlaylist={
-                      isOwner ? () => handleRemoveTrack(track) : undefined
-                    }
-                  />
+          <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+            <div className="flex flex-col gap-0.5">
+              {currentTracks.map((track, index) => (
+                // Occurrence identity: playlist membership rows are keyed by
+                // playlist-item id, so the same track could appear in
+                // multiple positions without colliding.
+                <div
+                  key={
+                    currentPlaylist.items[index]?.id ??
+                    `${catalogTrackKey(track)}#${index + 1}`
+                  }
+                  className="flex items-center gap-1"
+                >
+                  {isOwner ? (
+                    <PlaylistTrackActions
+                      playlistId={playlist.id}
+                      tracks={currentTracks}
+                      trackIndex={index}
+                      onReorder={handleReorder}
+                    />
+                  ) : null}
+                  <div className="min-w-0 flex-1">
+                    <TrackRow
+                      track={track}
+                      collectionTracks={currentTracks}
+                      collectionIndex={index}
+                      showMenu={true}
+                      showAddToPlaylist={true}
+                      position={index + 1}
+                      onRemoveFromPlaylist={
+                        isOwner ? () => handleRemoveTrack(track) : undefined
+                      }
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </section>
       ) : (

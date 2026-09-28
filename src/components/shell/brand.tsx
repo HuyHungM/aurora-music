@@ -8,7 +8,11 @@ export function Brand({ compact = false }: { compact?: boolean }) {
       aria-label="Aurora Music home"
       className="aurora-press aurora-touch inline-flex items-center gap-2.5 rounded-xl outline-none"
     >
-      <span className="aurora-fill relative grid h-9 w-9 place-items-center overflow-hidden rounded-xl text-background shadow-md">
+      {/* The mark: a pastel-lit squircle with a hairline rim and a soft
+          electric-violet bloom (Stitch logo). The gradient is the canonical
+          aurora fill, so the mark is the same violet light as the primary
+          action, not a second brand colour. */}
+      <span className="aurora-fill relative grid h-9 w-9 place-items-center overflow-hidden rounded-xl text-background ring-1 ring-inset ring-white/20 shadow-[0_0_22px_-6px_var(--aurora-electric-violet)]">
         <SparkleIcon size={18} />
       </span>
       {!compact ? (

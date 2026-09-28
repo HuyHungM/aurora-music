@@ -9,18 +9,20 @@ export function TrackListSkeleton({ rows = 5, header = false }: { rows?: number;
   return (
     <div aria-busy="true" className="flex flex-col gap-2">
       {header ? <Skeleton className="h-5 w-32" /> : null}
-      <ul className="flex flex-col gap-0.5">
-        {Array.from({ length: rows }, (_, index) => (
-          <li key={index} className="flex items-center gap-3 rounded-xl px-2 py-2">
-            <Skeleton className="h-11 w-11 shrink-0" />
-            <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <Skeleton className="h-3.5 w-2/5" />
-              <Skeleton className="h-3 w-1/4" />
-            </span>
-            <Skeleton className="h-11 w-11 rounded-full" />
-          </li>
-        ))}
-      </ul>
+      <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+        <ul className="flex flex-col gap-0.5">
+          {Array.from({ length: rows }, (_, index) => (
+            <li key={index} className="flex items-center gap-3 rounded-xl px-2 py-2">
+              <Skeleton className="h-11 w-11 shrink-0 ring-1 ring-white/10" />
+              <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <Skeleton className="h-3.5 w-2/5" />
+                <Skeleton className="h-3 w-1/4" />
+              </span>
+              <Skeleton className="h-11 w-11 rounded-full" />
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -29,7 +31,7 @@ export function HeroSkeleton() {
   return (
     <div
       aria-busy="true"
-      className="relative overflow-hidden rounded-2xl border border-border-subtle bg-surface-1 p-6 sm:p-8"
+      className="aurora-glass-edge relative overflow-hidden rounded-2xl border border-border-subtle bg-surface-1/60 p-6 sm:p-8"
     >
       <div className="grid gap-6 md:grid-cols-[1fr_auto] md:items-center">
         <div className="flex flex-col gap-3">
@@ -46,8 +48,8 @@ export function HeroSkeleton() {
 
 function EntityHeaderSkeleton() {
   return (
-    <div className="flex flex-col gap-5 rounded-2xl border border-border-subtle bg-surface-1 p-5 sm:flex-row sm:items-end sm:gap-6 sm:p-7">
-      <Skeleton className="h-48 w-48 shrink-0 rounded-xl" />
+    <div className="aurora-glass-edge flex flex-col gap-5 rounded-2xl border border-border-subtle bg-surface-1/60 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] sm:flex-row sm:items-end sm:gap-6 sm:p-7">
+      <Skeleton className="h-48 w-48 shrink-0 rounded-xl ring-1 ring-white/10" />
       <div className="flex flex-1 flex-col gap-3">
         <Skeleton className="h-3 w-16" />
         <Skeleton className="h-9 w-2/3" />
@@ -165,7 +167,7 @@ export function RadioSkeleton() {
         <Skeleton className="h-5 w-32" />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {Array.from({ length: 3 }, (_, index) => (
-            <div key={index} className="flex flex-col gap-2 rounded-2xl border border-border-subtle p-5">
+            <div key={index} className="aurora-glass-edge flex flex-col gap-2 rounded-2xl border border-border-subtle bg-surface-1/60 p-5">
               <Skeleton className="h-4 w-24" />
               <Skeleton className="h-3 w-full" />
             </div>

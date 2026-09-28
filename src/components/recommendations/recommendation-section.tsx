@@ -7,6 +7,7 @@ import type {
 } from "@/lib/recommendations/service";
 import { TrackList } from "@/components/tracks/track-list";
 import { SectionHeader } from "@/components/home/section-header";
+import { SparkleIcon } from "@/components/ui/icons";
 
 /**
  * A real, deterministic recommendation section (Phase 47).
@@ -65,7 +66,7 @@ export async function RecommendationSection({
   const title = t(titleKey ?? headingKey(section.categories));
   return (
     <section aria-label={title}>
-      <SectionHeader title={title} />
+      <SectionHeader title={title} icon={<SparkleIcon size={16} />} />
       <TrackList tracks={section.tracks} showMenu={true} />
     </section>
   );

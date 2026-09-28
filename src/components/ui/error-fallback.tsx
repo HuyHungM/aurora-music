@@ -34,38 +34,40 @@ export function ErrorFallback({
   return (
     <div
       role="alert"
-      className="flex flex-col items-center justify-center gap-4 px-6 py-24 text-center"
+      className="flex flex-col items-center justify-center px-6 py-24 text-center"
     >
-      <h1 className="text-2xl font-bold tracking-tight text-text-primary">
-        {t("errors.title")}
-      </h1>
-      <p className="max-w-sm text-sm leading-relaxed text-text-muted">
-        {t("errors.description")}
-      </p>
-      <p aria-live="polite" className="max-w-sm text-sm text-text-secondary">
-        {message}
-      </p>
-      {offline ? (
-        <p className="max-w-sm text-sm text-text-secondary">
-          {t("errors.offlineHint")}
+      <div className="aurora-glass-edge flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border-subtle bg-surface-1/60 px-6 py-12 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+        <h1 className="text-2xl font-bold tracking-tight text-text-primary">
+          {t("errors.title")}
+        </h1>
+        <p className="max-w-sm text-sm leading-relaxed text-text-muted">
+          {t("errors.description")}
         </p>
-      ) : null}
-      {digest ? (
-        <p className="text-xs text-text-muted/60">
-          {t("errors.reference", { id: digest })}
+        <p aria-live="polite" className="max-w-sm text-sm text-text-secondary">
+          {message}
         </p>
-      ) : (
-        <p className="text-xs text-text-muted/60">
-          {t("errors.errorCode", { code })}
-        </p>
-      )}
-      <div className="flex gap-3">
-        <Button type="button" onClick={onRetry}>
-          {t("errors.tryAgain")}
-        </Button>
-        <Button type="button" variant="secondary" onClick={onHome}>
-          {t("errors.backHome")}
-        </Button>
+        {offline ? (
+          <p className="max-w-sm text-sm text-text-secondary">
+            {t("errors.offlineHint")}
+          </p>
+        ) : null}
+        {digest ? (
+          <p className="text-xs text-text-muted/60">
+            {t("errors.reference", { id: digest })}
+          </p>
+        ) : (
+          <p className="text-xs text-text-muted/60">
+            {t("errors.errorCode", { code })}
+          </p>
+        )}
+        <div className="flex gap-3">
+          <Button type="button" onClick={onRetry}>
+            {t("errors.tryAgain")}
+          </Button>
+          <Button type="button" variant="secondary" onClick={onHome}>
+            {t("errors.backHome")}
+          </Button>
+        </div>
       </div>
     </div>
   );

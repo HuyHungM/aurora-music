@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import { ServiceWorkerRegister } from "@/components/pwa/service-worker-register";
 import { OfflineIndicator } from "@/components/ui/offline-indicator";
 import { LocaleProvider } from "@/components/i18n/locale-provider";
@@ -14,8 +14,11 @@ import {
 } from "@/lib/app-metadata";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// Stitch display/body voice. Plus Jakarta Sans is a variable font, so no
+// `weight` list is needed; the whole 200-800 range ships in one file and the
+// typography tokens pick the weight per role.
+const jakarta = Plus_Jakarta_Sans({
+  variable: "--font-jakarta",
   subsets: ["latin"],
 });
 
@@ -105,7 +108,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang={locale}
-      className={`${geistSans.variable} ${geistMono.variable} h-full bg-background text-text-primary antialiased`}
+      className={`${jakarta.variable} ${geistMono.variable} h-full bg-background text-text-primary antialiased`}
     >
       <body className="min-h-full flex flex-col">
         <LocaleProvider initialLocale={locale}>

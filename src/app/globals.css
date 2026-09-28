@@ -47,10 +47,12 @@
    silently drops out of the cascade, which is exactly the class of bug
    this convention makes unrepresentable.
 
-   Palette direction: deep blue-violet neutrals, a single violet accent
-   for interactive state, and an "aurora" triad (violet / indigo / cyan)
-   reserved for atmospheric blends. The triad is never used for text,
-   borders, or controls — only for ambient light.
+   Palette direction: deep blue-violet neutrals, a single PASTEL-violet
+   accent for interactive state, and an "aurora" triad (violet / indigo /
+   cyan) reserved for atmospheric blends. The triad is never used for text,
+   borders, or controls — only for ambient light. A separate electric ramp
+   (violet / indigo / cyan / blue / neon-pink) exists for glow, reflection
+   and background energy, and is likewise never a large solid surface.
 
    The legacy alias block near the bottom is a MIGRATION SHIM, not a
    second system: it is a set of pure aliases with no literal values, and
@@ -62,11 +64,13 @@
      LAYER 1 — PRIMITIVES
      ====================================================================== */
 
-  /* --- Neutral ramp: cool, violet-tinted -------------------------------
-     Hue is held at 285° with very low chroma so surfaces read as
-     near-neutral while still belonging to the same family as the accent.
-     Chroma rises slightly through the mid-tones so text carries warmth
-     without becoming colorful.
+  /* --- Neutral ramp: cool, blue-violet-tinted --------------------------
+     Hue is held at 272° — a touch bluer than the accent — with very low
+     chroma, so surfaces read as near-neutral obsidian while still
+     belonging to the same family as the accent. Chroma rises slightly
+     through the mid-tones so text carries warmth without becoming
+     colorful. The darkest stop is the deep obsidian canvas (§4, §5), and
+     it is pinned to `APP_THEME_COLOR` by `app-metadata.test.ts`.
 
      Indices are CANONICAL: they are positions in an 11-stop tonal ramp,
      not a dense sequence, so a stop always means the same lightness no
@@ -75,27 +79,49 @@
      claimed yet is dead weight and is left out on purpose. A later
      semantic token that needs a new stop should add that stop
      deliberately rather than reaching for a raw literal. */
-  --p-neutral-0: oklch(0.145 0.012 285);
-  --p-neutral-1: oklch(0.185 0.014 285);
-  --p-neutral-2: oklch(0.225 0.016 285);
-  --p-neutral-3: oklch(0.275 0.018 285);
-  --p-neutral-4: oklch(0.335 0.018 285);
-  --p-neutral-5: oklch(0.435 0.016 285);
-  --p-neutral-7: oklch(0.655 0.012 285);
-  --p-neutral-8: oklch(0.775 0.01 285);
-  --p-neutral-10: oklch(0.972 0.004 285);
+  --p-neutral-0: oklch(0.145 0.014 272);
+  --p-neutral-1: oklch(0.185 0.016 272);
+  --p-neutral-2: oklch(0.225 0.02 272);
+  --p-neutral-3: oklch(0.275 0.024 272);
+  --p-neutral-4: oklch(0.335 0.026 272);
+  --p-neutral-5: oklch(0.435 0.02 272);
+  --p-neutral-7: oklch(0.655 0.014 272);
+  --p-neutral-8: oklch(0.775 0.012 272);
+  --p-neutral-10: oklch(0.972 0.005 272);
 
   /* --- Accent ramp: the one interactive hue ----------------------------
-     Canonical 7-stop ramp; only the stops interactive states claim are
-     defined. */
-  --p-accent-4: oklch(0.7 0.17 295);
-  --p-accent-5: oklch(0.6 0.21 295);
-  --p-accent-6: oklch(0.52 0.2 295);
+     PASTEL violet, and deliberately not the saturated electric violet the
+     electric ramp below holds. Purple behaves like LIGHT in Aurora (§5):
+     the primary is a light lavender (#C4B5FD) and the ink that sits on it
+     is deep violet, so a filled button reads as a lit surface rather than
+     a painted one. Canonical 7-stop ramp; only the stops interactive
+     states claim are defined — `4` is hover (lighter), `5` is the resting
+     primary, `6` is active/pressed (deeper). */
+  --p-accent-4: oklch(0.88 0.06 294);
+  --p-accent-5: oklch(0.81 0.11 294);
+  --p-accent-6: oklch(0.71 0.16 294);
+
+  /* The dark ink for text/icons sitting ON the pastel primary. A whole
+     primitive rather than an alias, because it is a *colour*, not a
+     position on the neutral ramp: `--fg-on-accent` points here. */
+  --p-on-accent: oklch(0.22 0.05 294);
 
   /* --- Aurora triad: ambient light only, never UI state --------------- */
-  --p-aurora-violet: oklch(0.66 0.2 300);
-  --p-aurora-indigo: oklch(0.63 0.16 275);
-  --p-aurora-cyan: oklch(0.78 0.12 210);
+  --p-aurora-violet: oklch(0.72 0.16 300);
+  --p-aurora-indigo: oklch(0.65 0.18 277);
+  --p-aurora-cyan: oklch(0.8 0.13 212);
+
+  /* --- Electric layer: glow, reflection, ambient bloom (§5) -----------
+     SECONDARY BY CONSTRUCTION. Electric colours are never promoted to a
+     large solid surface; they exist for edge lighting, specular
+     highlights, reflections and the background's energy. Kept as their own
+     ramp so the pastel primary can stay pastel without the atmosphere
+     going flat. */
+  --p-electric-violet: oklch(0.63 0.26 304);
+  --p-electric-indigo: oklch(0.59 0.23 277);
+  --p-electric-cyan: oklch(0.79 0.15 212);
+  --p-electric-blue: oklch(0.71 0.165 255);
+  --p-neon-pink: oklch(0.83 0.145 321);
 
   /* --- Status hues ---------------------------------------------------- */
   --p-success: oklch(0.77 0.15 160);
@@ -103,12 +129,14 @@
   --p-danger: oklch(0.7 0.17 25);
   --p-info: oklch(0.73 0.12 230);
 
-  /* --- Canonical aurora gradient, composed from the triad -------------- */
+  /* --- Canonical aurora gradient, composed from the pastel accent ------
+     The brand fill (§5): pastel violet light, not the saturated electric
+     ramp. This is what the wordmark tile and any brand-lit surface use. */
   --p-gradient-aurora: linear-gradient(
     135deg,
-    var(--p-aurora-cyan) 0%,
-    var(--p-aurora-indigo) 45%,
-    var(--p-aurora-violet) 100%
+    var(--p-accent-4) 0%,
+    var(--p-accent-5) 45%,
+    var(--p-accent-6) 100%
   );
 
   /* --- Spacing rhythm --------------------------------------------------
@@ -146,10 +174,12 @@
 
   /* --- Type families ---------------------------------------------------
      Display and body are separate tokens so the typographic voice can
-     change without touching a component. Both currently resolve to
-     Geist; swapping either is a single-line edit here. */
-  --p-font-display: var(--font-geist-sans);
-  --p-font-body: var(--font-geist-sans);
+     change without touching a component. Display and body resolve to Plus
+     Jakarta Sans (the Stitch display voice); mono stays on Geist Mono for
+     durations and technical metadata. Swapping either is a single-line
+     edit here, and `next/font` supplies `--font-jakarta` / `--font-geist-mono`. */
+  --p-font-display: var(--font-jakarta);
+  --p-font-body: var(--font-jakarta);
   --p-font-mono: var(--font-geist-mono);
 
   /* --- Type scale: size / line-height / tracking, per role ------------- */
@@ -208,7 +238,7 @@
   --p-shadow-2: 0 4px 12px oklch(0 0 0 / 0.42);
   --p-shadow-3: 0 12px 32px oklch(0 0 0 / 0.5);
   --p-shadow-4: 0 24px 64px oklch(0 0 0 / 0.58);
-  --p-shadow-glow: 0 0 24px oklch(0.6 0.21 295 / 0.35);
+  --p-shadow-glow: 0 0 24px oklch(0.81 0.11 294 / 0.4);
 
   /* --- Motion ---------------------------------------------------------- */
   --p-duration-fast: 140ms;
@@ -378,8 +408,15 @@
      and the header cannot share a value even when the user has picked one.
      Bigger surface, more opaque - which is also the opposite of what raw
      glassmorphism does, and the reason Aurora's chrome stays readable with
-     content scrolling behind it. */
+     content scrolling behind it.
+
+     LIQUID LIFT sits between chrome and float on purpose, so the full order
+     is `nested < chrome < liquid < float` at every slider position: Liquid
+     Glass is always firmer than plain chrome and always lighter than a
+     dialog, which is what keeps it a distinct LEVEL rather than a fourth,
+     unordered look. */
   --p-appearance-chrome-lift: 0.14;
+  --p-appearance-liquid-lift: 0.18;
   --p-appearance-float-lift: 0.22;
 
   /* Glass elevation. A shadow is still a shadow: a blurred border gives a
@@ -440,7 +477,7 @@
   /* Canvas: the page itself, receding from the content. */
   --canvas-base: var(--p-neutral-0);
   --canvas-raised: var(--p-neutral-1);
-  --canvas-sunken: oklch(0.115 0.01 285);
+  --canvas-sunken: oklch(0.115 0.012 272);
 
   /* Surfaces: anything holding content. Depth comes from a small
      lightness step plus a border, never from shadow alone. */
@@ -462,7 +499,7 @@
   --fg-secondary: var(--p-neutral-8);
   --fg-muted: var(--p-neutral-7);
   --fg-disabled: var(--p-neutral-5);
-  --fg-on-accent: var(--p-neutral-10);
+  --fg-on-accent: var(--p-on-accent);
 
   /* Borders. */
   --border-subtle: oklch(1 0 0 / 0.08);
@@ -489,6 +526,16 @@
   --aurora-indigo: var(--p-aurora-indigo);
   --aurora-cyan: var(--p-aurora-cyan);
   --aurora-gradient: var(--p-gradient-aurora);
+
+  /* Electric layer promoted to a usable role (§5, §28). Same rule as the
+     triad: ambient energy and glow only, never text, borders or a large
+     solid fill. These are the colours Liquid Glass reflects and the
+     backdrop blooms with. */
+  --aurora-electric-violet: var(--p-electric-violet);
+  --aurora-electric-indigo: var(--p-electric-indigo);
+  --aurora-electric-cyan: var(--p-electric-cyan);
+  --aurora-electric-blue: var(--p-electric-blue);
+  --aurora-neon-pink: var(--p-neon-pink);
 
   /* Backdrop for dialogs / sheets / drawers (§43). */
   --overlay-background: oklch(0.1 0.01 285 / var(--p-opacity-overlay));
@@ -652,6 +699,46 @@
   --glass-filter-float: blur(min(36px, calc(var(--p-appearance-blur) * 1.6)))
     saturate(var(--p-appearance-saturation));
 
+  /* --- Liquid Glass (Level 3): the strongest material (§8, §9) ---------
+     A distinct LEVEL, not a bigger Aurora Glass. It is the material for
+     the surfaces that ARE the experience - the full player, the player
+     bar, the queue, sheets and dialogs, focused search - and it is
+     deliberately NOT the default, because a page where everything is
+     Liquid Glass has no hierarchy left (§8).
+
+     Over Aurora Glass it adds three things: a firmer fill, a stronger
+     blur/vibrancy, and a specular sheen with a lavender edge and an
+     electric-violet bloom. The sheen is STATIC, not animated, so the
+     material costs no frames during playback; the ambient drift behind it
+     is the only motion in the system (§9, §31). */
+  --glass-liquid-alpha: min(
+    97%,
+    calc((var(--p-appearance-alpha) + var(--p-appearance-liquid-lift)) * 100%)
+  );
+  --glass-liquid: color-mix(
+    in oklab,
+    var(--p-neutral-2) var(--glass-liquid-alpha),
+    transparent
+  );
+  --glass-liquid-border: oklch(
+    1 0 0 / calc(0.09 + var(--p-appearance-border) * 0.38)
+  );
+  --glass-liquid-filter: blur(min(40px, calc(var(--p-appearance-blur) * 1.8)))
+    saturate(calc(var(--p-appearance-saturation) * 1.05));
+  /* The specular sheen: one diagonal highlight from the top-left, alpha-
+     based white so it reads as reflected light over any fill and never as
+     a colour of its own. */
+  --glass-liquid-sheen: linear-gradient(
+    135deg,
+    oklch(1 0 0 / 0.14) 0%,
+    transparent 42%,
+    oklch(1 0 0 / 0.04) 100%
+  );
+  /* Lavender edge lighting with an electric-violet bloom (§9). Electric,
+     never a solid: it is a shadow, so it lights the edge and nothing else. */
+  --glass-liquid-glow: 0 0 40px
+    color-mix(in oklab, var(--aurora-electric-violet) 28%, transparent);
+
   /* ======================================================================
      LAYER 3 — COMPONENT TOKENS
      Bindings for surfaces that must diverge from the general system.
@@ -754,13 +841,17 @@
   /* The aurora wash. Two very large, very low-frequency, very dim radial
      gradients anchored to opposite corners, so the room has a direction
      rather than an even fog. At the default intensity this peaks around
-     alpha 0.10 - visible as atmosphere, never as a colour. */
+     alpha 0.10 - visible as atmosphere, never as a colour. The hues are
+     taken from the ELECTRIC ramp rather than the triad, because this is
+     exactly the "background energy / ambient bloom" role §5 assigns to
+     electric, and the pastel primary is deliberately kept out of the
+     full-viewport wash so it stays a light rather than a paint. */
   --aurora-ambient-layer:
     radial-gradient(
       120% 80% at 10% -10%,
       color-mix(
           in oklab,
-          var(--aurora-violet) calc(var(--p-appearance-aurora) * 26%),
+          var(--aurora-electric-violet) calc(var(--p-appearance-aurora) * 26%),
           transparent
         )
         0%,
@@ -770,7 +861,7 @@
       100% 70% at 92% 104%,
       color-mix(
           in oklab,
-          var(--aurora-cyan) calc(var(--p-appearance-aurora) * 18%),
+          var(--aurora-electric-cyan) calc(var(--p-appearance-aurora) * 18%),
           transparent
         )
         0%,
@@ -791,9 +882,9 @@
      the only thing that ever changes them; the gradients themselves stay
      here, because gradient syntax in a string built in JavaScript is a
      second place for the visual system to live. */
-  --aurora-artwork-primary: var(--aurora-indigo);
-  --aurora-artwork-secondary: var(--aurora-cyan);
-  --aurora-artwork-glow: var(--aurora-violet);
+  --aurora-artwork-primary: var(--aurora-electric-indigo);
+  --aurora-artwork-secondary: var(--aurora-electric-cyan);
+  --aurora-artwork-glow: var(--aurora-electric-violet);
   --aurora-artwork-tint: var(--p-neutral-2);
   --aurora-artwork-strength: 0;
   --aurora-artwork-layer:
@@ -974,6 +1065,15 @@
   --color-aurora-violet: var(--aurora-violet);
   --color-aurora-indigo: var(--aurora-indigo);
   --color-aurora-cyan: var(--aurora-cyan);
+
+  /* Electric layer (§5, §28). Ambient/glow only — the utilities exist so a
+     surface can light an edge or bloom without reaching for a raw colour,
+     not so a page can be painted electric. */
+  --color-aurora-electric-violet: var(--aurora-electric-violet);
+  --color-aurora-electric-indigo: var(--aurora-electric-indigo);
+  --color-aurora-electric-cyan: var(--aurora-electric-cyan);
+  --color-aurora-electric-blue: var(--aurora-electric-blue);
+  --color-aurora-neon-pink: var(--aurora-neon-pink);
 
   /* Component tokens exposed as utilities. */
   --color-player: var(--player-background);
@@ -1252,12 +1352,18 @@ body {
    to be kept correct, and it would drift the first time someone adjusted an
    off-state value for a reason that only made sense off-state.
 
-   FOUR CLASSES, FOUR JOBS, AND NO FIFTH.
+   FIVE CLASSES, FIVE JOBS, AND NO SIXTH.
 
-     .aurora-glass         chrome: header, sidebar, bottom nav, player.
+     .aurora-glass         chrome: header, sidebar, bottom nav, mini player.
+     .aurora-liquid-glass  Level 3: the player bar, the queue, sheets,
+                           dialogs — the surfaces that are the experience.
      .aurora-glass-float   dialogs, sheets, popovers, menus, the queue.
      .aurora-glass-nested  controls inside an already-blurred surface.
      .aurora-glass-edge    border only: cards, rows, list sections.
+
+   `liquid` is a distinct LEVEL, not a heavier `float`: it is scoped to the
+   same attribute, obeys the same no-stacking rule, and is chosen per surface
+   because that surface IS the experience, never because it looked flat.
 
    `edge` exists because the most tempting mistake in a glass system is to
    make everything a panel. A track row that is a translucent card turns a
@@ -1274,9 +1380,11 @@ body {
 
    THE BLUR BUDGET, IN FULL. There are at most three `backdrop-filter` layers
    anywhere in the application and they are never nested inside each other:
-   the chrome, the floating panels, and the dialog's own scrim. The
-   background layer uses `filter`, not `backdrop-filter`, and only when a
-   background image has actually been chosen.
+   the chrome (or its Liquid Glass replacement, never both), the floating
+   panels, and the dialog's own scrim. `liquid` substitutes for `chrome` on
+   one surface, so it does not add a fourth root. The background layer uses
+   `filter`, not `backdrop-filter`, and only when a background image has
+   actually been chosen.
    ========================================================================== */
 
 /* The layer. Fixed, full-viewport, and inert: `pointer-events: none` is what
@@ -1393,6 +1501,25 @@ body {
   border-color: var(--glass-border-subtle);
 }
 
+/* LIQUID GLASS — LEVEL 3, the strongest material (§8, §9).
+   A fifth surface class, and the only one that carries a specular sheen and
+   an electric bloom. It still obeys the same two rules as every other glass
+   surface: it is scoped to the attribute (so Glass Mode off removes it
+   entirely), and it never stacks two backdrop-roots. Used for the surfaces
+   that are the experience itself — the player, the queue, sheets, dialogs —
+   never for ordinary content (§8's "do not make everything Liquid Glass"). */
+[data-aurora-glass="on"] .aurora-liquid-glass {
+  background-color: var(--glass-liquid);
+  background-image: var(--glass-liquid-sheen);
+  border-color: var(--glass-liquid-border);
+  backdrop-filter: var(--glass-liquid-filter);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 oklch(1 0 0 / 0.03),
+    var(--glass-liquid-glow),
+    var(--glass-shadow);
+}
+
 /* `data-aurora-blur="off"` is set when the user's blur control is at zero,
    which the "Minimal" preset does. The declarations are then *removed*
    rather than set to `blur(0px)`: a zero-radius `backdrop-filter` still
@@ -1401,6 +1528,7 @@ body {
    to have no filter at all. This is the mechanism behind the claim that the
    Minimal preset removes every backdrop-filter in the application. */
 [data-aurora-glass="on"][data-aurora-blur="off"] .aurora-glass,
+[data-aurora-glass="on"][data-aurora-blur="off"] .aurora-liquid-glass,
 [data-aurora-glass="on"][data-aurora-blur="off"] .aurora-glass-float {
   backdrop-filter: none;
 }
@@ -1427,11 +1555,19 @@ body {
   [data-aurora-glass="on"] .aurora-glass-nested {
     background-color: var(--surface-base);
   }
+  /* Liquid Glass falls back one step stronger than a float panel: it is the
+     firmest material, so its opaque fallback is the highest surface, and the
+     specular sheen is dropped (a gradient over a flat fill is just paint). */
+  [data-aurora-glass="on"] .aurora-liquid-glass {
+    background-color: var(--surface-overlay);
+    background-image: none;
+  }
   /* The image layer keeps its `filter`, which is a much older property, so a
      background image still dims correctly. The scrim's contrast floor is
      unchanged and now does the readability work on its own, which is why the
      floor exists independently of the blur. */
   [data-aurora-glass="on"] .aurora-glass,
+  [data-aurora-glass="on"] .aurora-liquid-glass,
   [data-aurora-glass="on"] .aurora-glass-float,
   [data-aurora-glass="on"] .aurora-glass-nested {
     backdrop-filter: none;

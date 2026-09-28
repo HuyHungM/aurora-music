@@ -57,7 +57,9 @@ export function SharedPlaylistView({
         <section aria-label={t("sharedPlaylist.tracksSection")}>
           {/* Like / add-to-own-playlist remain available to the viewer via
               the track row menu; nothing here mutates the shared playlist. */}
-          <TrackList tracks={tracks} showMenu={true} />
+          <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+            <TrackList tracks={tracks} showMenu={true} />
+          </div>
         </section>
       ) : (
         <EmptyState

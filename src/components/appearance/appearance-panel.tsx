@@ -5,7 +5,9 @@ import {
   useId,
   useRef,
   useState,
+  type ChangeEvent,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import {
   APPEARANCE_RANGES,
@@ -19,13 +21,20 @@ import {
 import {
   BACKGROUND_REJECTION_KEYS,
   validateBackgroundImage,
+  validateLocalBackgroundFile,
   type BackgroundImageEnvironment,
 } from "@/lib/appearance/background-image";
 import { useAppearance } from "./appearance-root";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { usePresence } from "@/components/ui/presence";
 import { Button } from "@/components/ui/button";
-import { CheckIcon, ImageIcon } from "@/components/ui/icons";
+import {
+  CheckIcon,
+  CogIcon,
+  ImageIcon,
+  MusicNoteIcon,
+  SparkleIcon,
+} from "@/components/ui/icons";
 
 /**
  * The Appearance section (Phase 53, §5, §6, §17, §20-§25, §46-§48, §54, §57-§60).
@@ -62,46 +71,60 @@ export function AppearancePanel() {
   const { status, reason, dirty, reset } = useAppearance();
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-6">
       {/* --- The switch ------------------------------------------------- */}
-      <section aria-labelledby="appearance-glass" className="flex flex-col gap-3">
-        <h2 id="appearance-glass" className="t-section-title text-text-primary">
-          {t("settings.glassTitle")}
-        </h2>
-        <p className="t-caption max-w-prose">{t("settings.glassDescription")}</p>
+      <PanelCard labelledBy="appearance-glass">
+        <SectionTitle
+          id="appearance-glass"
+          icon={<SparkleIcon size={16} />}
+          title={t("settings.glassTitle")}
+          description={t("settings.glassDescription")}
+        />
         <GlassSwitch />
-      </section>
+      </PanelCard>
 
       {/* --- Presets ---------------------------------------------------- */}
-      <section aria-labelledby="appearance-preset" className="flex flex-col gap-3">
-        <h2 id="appearance-preset" className="t-section-title text-text-primary">
-          {t("settings.presetTitle")}
-        </h2>
-        <p className="t-caption max-w-prose">{t("settings.presetDescription")}</p>
+      <PanelCard labelledBy="appearance-preset">
+        <SectionTitle
+          id="appearance-preset"
+          icon={<MusicNoteIcon size={16} />}
+          title={t("settings.presetTitle")}
+          description={t("settings.presetDescription")}
+        />
         <PresetGroup />
-      </section>
+      </PanelCard>
 
       {/* --- Background ------------------------------------------------- */}
-      <section aria-labelledby="appearance-background" className="flex flex-col gap-3">
-        <h2
+      <PanelCard labelledBy="appearance-background">
+        <SectionTitle
           id="appearance-background"
-          className="t-section-title text-text-primary"
-        >
-          {t("settings.backgroundTitle")}
-        </h2>
-        <p className="t-caption max-w-prose">
-          {t("settings.backgroundDescription")}
-        </p>
+          icon={<ImageIcon size={16} />}
+          title={t("settings.backgroundTitle")}
+          description={t("settings.backgroundDescription")}
+        />
         <BackgroundSection />
-      </section>
+      </PanelCard>
 
       {/* --- Advanced ---------------------------------------------------- */}
-      <section aria-labelledby="appearance-advanced" className="flex flex-col gap-3">
+      <PanelCard labelledBy="appearance-advanced">
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2.5">
+            <span
+              aria-hidden="true"
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-accent/12 text-accent"
+            >
+              <CogIcon size={16} />
+            </span>
+            <h2 id="appearance-advanced" className="t-section-title text-text-primary">
+              {t("settings.advanced")}
+            </h2>
+          </div>
+          <p className="t-caption max-w-prose">
+            {t("settings.advancedDescription")}
+          </p>
+        </div>
         <AdvancedDisclosure />
-        <p id="appearance-advanced" className="sr-only">
-          {t("settings.advancedDescription")}
-        </p>
-      </section>
+      </PanelCard>
 
       {/* --- Reset -------------------------------------------------------- */}
       <section className="flex flex-col gap-3 border-t border-border-subtle pt-6">
@@ -130,6 +153,70 @@ export function AppearancePanel() {
         </div>
         <p className="t-caption max-w-prose">{t("settings.resetDescription")}</p>
       </section>
+    </div>
+  );
+}
+
+/* ==========================================================================
+   CARD CHASSIS
+   ========================================================================== */
+
+/**
+ * One section of the panel, in the Stitch card material.
+ *
+ * The `aria-labelledby` still points at the real heading inside, so the card is
+ * a landmark with the section's own name; the wrapper adds only the rim, the
+ * fill and the padding, never a second label.
+ */
+function PanelCard({
+  labelledBy,
+  children,
+}: {
+  labelledBy: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      aria-labelledby={labelledBy}
+      className="aurora-glass-edge flex flex-col gap-4 rounded-2xl border border-border-subtle bg-surface-1/60 p-5 sm:p-6"
+    >
+      {children}
+    </section>
+  );
+}
+
+/**
+ * A section heading with the Stitch leading glyph.
+ *
+ * The glyph lives in an accent-tinted disc and is `aria-hidden`, because the
+ * heading text already names the section and a decorative icon that a screen
+ * reader read twice would be noise.
+ */
+function SectionTitle({
+  id,
+  icon,
+  title,
+  description,
+}: {
+  id: string;
+  icon: ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2.5">
+        <span
+          aria-hidden="true"
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-accent/12 text-accent"
+        >
+          {icon}
+        </span>
+        <h2 id={id} className="t-section-title text-text-primary">
+          {title}
+        </h2>
+      </div>
+      <p className="t-caption max-w-prose">{description}</p>
     </div>
   );
 }
@@ -231,16 +318,16 @@ function PresetGroup() {
                 move(index, -1);
               }
             }}
-            className={`aurora-press aurora-touch flex items-center gap-2 rounded-xl border px-3 py-2.5 text-sm transition-colors aurora-glass-nested ${
+            className={`aurora-press aurora-touch flex items-center justify-between gap-2 rounded-xl border px-3 py-3 text-sm transition-colors aurora-glass-nested ${
               active
-                ? "border-accent text-text-primary"
-                : "border-border-subtle text-text-secondary hover:text-text-primary"
+                ? "border-accent text-text-primary shadow-glow"
+                : "border-border-subtle text-text-secondary hover:border-accent/40 hover:text-text-primary"
             }`}
           >
-            <span className="grid h-4 w-4 shrink-0 place-items-center">
+            <span className="truncate font-medium">{t(`settings.preset.${id}`)}</span>
+            <span aria-hidden="true" className="grid h-4 w-4 shrink-0 place-items-center">
               {active ? <CheckIcon size={16} className="text-accent" /> : null}
             </span>
-            <span className="truncate font-medium">{t(`settings.preset.${id}`)}</span>
           </button>
         );
       })}
@@ -254,7 +341,14 @@ function PresetGroup() {
 
 function BackgroundSection() {
   const { t } = useLocale();
-  const { appearance, setBackground, reason, backgroundImage } = useAppearance();
+  const {
+    appearance,
+    setBackground,
+    reason,
+    backgroundImage,
+    localBackground,
+    setLocalBackground,
+  } = useAppearance();
   const [url, setUrl] = useState("");
   const [checking, setChecking] = useState(false);
   const [localError, setLocalError] = useState<string | undefined>(undefined);
@@ -276,6 +370,9 @@ function BackgroundSection() {
     event.preventDefault();
     const candidate = url.trim();
     if (candidate.length === 0) {
+      // Submitting nothing means "no image", not an error. A session-only
+      // preview is part of "the background", so clearing it belongs here too.
+      setLocalBackground(null);
       setBackground({ kind: "none" });
       setUrl("");
       setPreview(undefined);
@@ -310,9 +407,51 @@ function BackgroundSection() {
     // Store the trimmed, re-parsed address the validator returned rather than
     // what was typed, so the persisted value is exactly the one that was
     // checked.
+    //
+    // A validated address wins over a session-only preview: the user asked for
+    // this image explicitly, and it is the one that survives a reload, so
+    // leaving the local preview on top would hide the choice they just made.
+    setLocalBackground(null);
     setBackground({ kind: "url", url: result.info.url });
     setUrl("");
     setPreview(undefined);
+  };
+
+  /**
+   * Adopt a file from the device as a session-only preview.
+   *
+   * NOT AN UPLOAD. The file is validated locally (declared type, byte cap,
+   * decode, dimensions), turned into an in-memory `blob:` URL, and handed to
+   * the root, which owns revoking it. Nothing is sent anywhere and nothing is
+   * written to a cookie or a database; a reload drops it and the persisted
+   * background returns. That is why a refusal here is non-blocking: it only
+   * reports why, leaving whatever was there before untouched.
+   */
+  const submitFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    // Clear the field so choosing the SAME file again still fires `change`.
+    input.value = "";
+    if (!file) {
+      return;
+    }
+    setChecking(true);
+    setLocalError(undefined);
+    const result = await validateLocalBackgroundFile(file, {
+      createObjectURL: (blob) => URL.createObjectURL(blob),
+      revokeObjectURL: (objectUrl) => URL.revokeObjectURL(objectUrl),
+      createImage: (src) => {
+        const image = new Image();
+        image.src = src;
+        return image;
+      },
+    });
+    setChecking(false);
+    if (!result.ok) {
+      setLocalError(BACKGROUND_REJECTION_KEYS[result.reason]);
+      return;
+    }
+    setLocalBackground(result.objectUrl);
   };
 
   return (
@@ -321,7 +460,7 @@ function BackgroundSection() {
           place to live and the section does not change height when a
           background is applied. */}
       <div
-        className="aurora-glass-edge relative h-40 overflow-hidden rounded-2xl border border-border-subtle"
+        className="aurora-glass-edge relative h-44 overflow-hidden rounded-2xl border border-border-subtle sm:h-52"
         data-testid="background-preview"
         data-background={applied.kind}
         style={
@@ -339,11 +478,19 @@ function BackgroundSection() {
             <ImageIcon size={22} />
           </span>
         )}
+        {localBackground ? (
+          <span
+            className="absolute left-3 top-3 rounded-full bg-black/55 px-2.5 py-1 text-[0.7rem] font-medium text-white"
+            data-testid="background-preview-source"
+          >
+            {t("settings.backgroundUploadSessionOnly")}
+          </span>
+        ) : null}
       </div>
 
       <fieldset className="flex flex-col gap-2">
         <legend className="t-label">{t("settings.backgroundPresets")}</legend>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
           {BACKGROUND_PRESET_IDS.map((id) => {
             const active =
               applied.kind === "preset" && applied.id === id;
@@ -353,24 +500,32 @@ function BackgroundSection() {
                 type="button"
                 aria-pressed={active}
                 data-testid={`background-preset-${id}`}
-                onClick={() => setBackground({ kind: "preset", id })}
-                className={`aurora-press aurora-touch flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition-colors aurora-glass-nested ${
+                onClick={() => {
+                  // Choosing a shipped preset is a persisted choice, so any
+                  // session-only preview is cleared rather than left on top.
+                  setLocalBackground(null);
+                  setBackground({ kind: "preset", id });
+                }}
+                className={`aurora-press aurora-touch relative flex h-24 flex-col justify-end overflow-hidden rounded-xl border p-3 text-left text-sm transition-colors ${
                   active
-                    ? "border-accent text-text-primary"
-                    : "border-border-subtle text-text-secondary hover:text-text-primary"
+                    ? "border-accent"
+                    : "border-border-subtle hover:border-accent/40"
                 }`}
+                style={{
+                  backgroundImage: `url("/backgrounds/${id}.svg")`,
+                  backgroundSize: "cover",
+                  backgroundPosition: "center",
+                }}
               >
                 <span
                   aria-hidden="true"
-                  className="h-6 w-6 shrink-0 rounded-md border border-border-subtle"
-                  style={{
-                    backgroundImage: `url("/backgrounds/${id}.svg")`,
-                    backgroundSize: "cover",
-                    backgroundPosition: "center",
-                  }}
+                  className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent"
                 />
-                <span className="truncate font-medium">
-                  {t(`settings.backgroundPreset.${id}`)}
+                <span className="relative flex items-center gap-1.5 font-medium text-white">
+                  {active ? <CheckIcon size={15} className="text-accent" /> : null}
+                  <span className="truncate">
+                    {t(`settings.backgroundPreset.${id}`)}
+                  </span>
                 </span>
               </button>
             );
@@ -379,9 +534,17 @@ function BackgroundSection() {
       </fieldset>
 
       <form onSubmit={submit} className="flex flex-col gap-2">
-        <label htmlFor={fieldId} className="t-label">
-          {t("settings.backgroundUrlLabel")}
-        </label>
+        <div className="flex items-center gap-2">
+          <label htmlFor={fieldId} className="t-label">
+            {t("settings.backgroundUrlLabel")}
+          </label>
+          <span
+            className="rounded-full border border-border-subtle px-2 py-0.5 text-[0.7rem] text-text-muted"
+            data-testid="background-persisted"
+          >
+            {t("settings.backgroundPersistedLabel")}
+          </span>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <input
             id={fieldId}
@@ -414,6 +577,7 @@ function BackgroundSection() {
             type="button"
             variant="ghost"
             onClick={() => {
+              setLocalBackground(null);
               setBackground({ kind: "none" });
               setUrl("");
               setPreview(undefined);
@@ -426,6 +590,48 @@ function BackgroundSection() {
         </div>
         <p className="t-caption max-w-prose">{t("settings.backgroundHint")}</p>
       </form>
+
+      {/* Local preview. Session-only and never persisted: the file is
+          validated in the browser and held as an in-memory object URL. See
+          `validateLocalBackgroundFile` and `docs/scope-boundaries.md`. */}
+      <div className="flex flex-col gap-2">
+        <span className="t-label">{t("settings.backgroundUploadLabel")}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="aurora-press aurora-touch inline-flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-border-subtle px-3 text-sm font-medium text-text-primary transition-colors hover:border-accent/50 aurora-glass-nested">
+            <ImageIcon size={16} />
+            {t("settings.backgroundUploadAction")}
+            <input
+              type="file"
+              accept="image/*"
+              disabled={checking}
+              onChange={submitFile}
+              data-testid="background-upload"
+              className="sr-only"
+            />
+          </label>
+          {localBackground ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setLocalBackground(null)}
+              data-testid="background-upload-remove"
+            >
+              {t("settings.backgroundUploadRemove")}
+            </Button>
+          ) : null}
+          {localBackground ? (
+            <span
+              className="rounded-full bg-accent/12 px-2.5 py-1 text-[0.7rem] font-medium text-accent"
+              data-testid="background-upload-active"
+            >
+              {t("settings.backgroundUploadSessionOnly")}
+            </span>
+          ) : null}
+        </div>
+        <p className="t-caption max-w-prose">
+          {t("settings.backgroundUploadHint")}
+        </p>
+      </div>
 
       {localError || (reason && reason.startsWith("settings.backgroundError.")) ? (
         <p role="alert" className="t-caption text-danger" data-testid="background-error">

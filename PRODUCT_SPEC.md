@@ -591,8 +591,15 @@ screenshot.
 
 ## 11. Responsive model
 
-- **Desktop shell:** fixed sidebar (`lg:flex w-60`), main content area,
+- **Desktop shell:** fixed sidebar (`lg:flex w-66`), main content area,
   desktop player bar (`hidden lg:flex`, bottom, offset for sidebar).
+- **The sidebar rail carries the four primary destinations, and — when signed
+  in — the listener's own playlists.** The playlist group is real data read
+  from the owner-scoped playlist table, never a curated or suggested list; it
+  is omitted entirely (not shown empty) when the listener has none or is
+  signed out. Each entry is a `Link` to `/library/playlists/<id>`, so a
+  playlist is deep-linkable and survives a new tab, a copy and the back
+  button. The rail never names a destination the app cannot open.
 - **Mobile navigation:** bottom nav bar (`lg:hidden`), safe-area padding.
 - **Mobile mini player** (`lg:hidden`, above bottom nav, shown only when a
   track is loaded) expands to the **mobile full player** (modal dialog with
@@ -951,15 +958,25 @@ place, and the Settings route was already reachable from the shell.
 ### 17.2 Backgrounds
 
 - Five shipped presets, one of which is the current default look, and a custom
-  **https image address**. There is no upload.
+  **https image address**. The address is the persisted choice and is labelled
+  as such in the settings UI.
 - A custom address is checked before it is applied: https only, no embedded
   credentials, at most 4 MiB, at least 480×320, at most 16 MP, and the type is
   determined from the bytes rather than the extension. An address that fails is
   never stored and never shown.
+- **A local file can also be previewed, for the session only.** Nothing is
+  uploaded: the file is validated in the browser (declared type, the same 4 MiB
+  cap, decode success, and the same 480×320 / 16 MP dimension rules) and held as
+  an in-memory object URL that is released when it is replaced, removed, or the
+  tab closes. It is never written to the cookie or the account, it is labelled
+  "Local upload — session only", and a reload returns to the persisted
+  background (or to Aurora Default). A refused file reports why and leaves the
+  persisted background untouched.
 - Typing previews; **applying is a separate act.** A half-typed address never
   drives the application.
-- Remove and Reset both clear it. The background sits behind the whole
-  application, is fixed, and does not move while the page scrolls.
+- Remove and Reset both clear the background, including a session-only preview.
+  The background sits behind the whole application, is fixed, and does not move
+  while the page scrolls.
 
 ### 17.3 What is guaranteed
 
@@ -984,7 +1001,9 @@ place, and the Settings route was already reachable from the shell.
 
 ### 17.4 What is deliberately absent
 
-- Upload-based backgrounds, and multi-megabyte binaries in the database.
+- Upload-based backgrounds (a file that is transmitted or stored), object
+  storage, and multi-megabyte binaries in the database. A local file may be
+  previewed in-session, but it is never sent anywhere or persisted.
 - Automatic quality downgrade based on the device.
 - Per-track colour schemes driven by a faithful reproduction of the cover: the
   ambience is a restrained wash, opt-in, and off by default.

@@ -11,9 +11,9 @@ export function AlbumCard({ album, locale = DEFAULT_LOCALE }: { album: Album; lo
   return (
     <Link
       href={href}
-      className="aurora-rise group flex min-w-0 flex-col gap-2.5 rounded-xl border border-transparent p-2 transition-colors hover:border-border-subtle hover:bg-surface-1"
+      className="aurora-rise aurora-glass-edge group flex min-w-0 flex-col gap-2.5 rounded-xl border border-border-subtle bg-surface-1/60 p-2 transition-colors hover:border-accent/40 hover:bg-surface-1"
     >
-      <span className="relative block overflow-hidden rounded-lg">
+      <span className="relative block overflow-hidden rounded-lg ring-1 ring-white/[0.06]">
         <Artwork
           src={album.artwork}
           alt={album.title}

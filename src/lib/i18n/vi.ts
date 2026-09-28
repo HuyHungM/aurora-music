@@ -543,6 +543,13 @@ const vi = {
     backgroundRemove: "Gỡ ảnh nền",
     backgroundHint:
       "Dán liên kết tới ảnh JPEG, PNG, WebP, AVIF hoặc GIF. Ảnh được kiểm tra ngay trong trình duyệt trước khi dùng: định dạng tệp, kích thước thật, và khả năng tải được. Tối đa 4 MB, nhỏ nhất 480×320.",
+    backgroundPersistedLabel: "Đã lưu",
+    backgroundUploadLabel: "Hoặc tải lên từ thiết bị này",
+    backgroundUploadAction: "Chọn tệp",
+    backgroundUploadRemove: "Gỡ ảnh đã tải lên",
+    backgroundUploadSessionOnly: "Tải lên cục bộ — chỉ trong phiên này",
+    backgroundUploadHint:
+      "Chỉ hiển thị trong trình duyệt này cho tới khi bạn tải lại trang. Tệp không bao giờ được tải lên hay lưu lại; nó vẫn ở trên thiết bị của bạn.",
 
     // --- Từ chối (§7, §49, §74) ---------------------------------------
     backgroundError: {

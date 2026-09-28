@@ -106,7 +106,13 @@ export function TrackRow({
         </span>
       ) : null}
       <span className="relative shrink-0">
-        <Artwork src={track.artworkUrl} alt="" size="small" pixelSize={44} />
+        <Artwork
+          src={track.artworkUrl}
+          alt=""
+          size="small"
+          pixelSize={44}
+          className="ring-1 ring-white/10"
+        />
         {isCurrent ? (
           <span
             aria-hidden="true"

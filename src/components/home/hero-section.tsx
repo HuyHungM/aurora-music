@@ -31,7 +31,7 @@ export function HeroSection({ track }: { track: Track }) {
   return (
     <section
       aria-label={t("home.spotlightSection")}
-      className="relative overflow-hidden rounded-2xl border border-border-subtle bg-surface-1"
+      className="aurora-glass-edge relative overflow-hidden rounded-2xl border border-border-subtle bg-surface-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
     >
       <div
         aria-hidden="true"
@@ -39,7 +39,10 @@ export function HeroSection({ track }: { track: Track }) {
       />
       <div className="relative grid gap-6 p-6 sm:p-8 md:grid-cols-[1fr_auto] md:items-center">
         <div className="flex min-w-0 flex-col items-start gap-3">
-          <span className="t-eyebrow">{t("home.spotlight")}</span>
+          <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-2/70 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-accent ring-2 ring-accent/25" />
+            {t("home.spotlight")}
+          </span>
           <h2 className="t-display break-words">{track.title}</h2>
           <p className="text-sm text-text-secondary">
             {track.artistName}
@@ -52,7 +55,7 @@ export function HeroSection({ track }: { track: Track }) {
             type="button"
             onClick={handlePlay}
             aria-label={isCurrentPlaying ? t("track.pauseLabel", { title: track.title }) : t("track.playLabel", { title: track.title })}
-            className="aurora-press mt-1 inline-flex h-12 items-center gap-2 rounded-full bg-accent px-7 text-sm font-semibold text-accent-foreground transition-colors hover:bg-accent-hover"
+            className="aurora-press mt-1 inline-flex h-12 items-center gap-2 rounded-full bg-accent px-7 text-sm font-semibold text-accent-foreground transition-colors hover:bg-accent-hover hover:shadow-glow active:bg-accent-active"
           >
             {isCurrentPlaying ? (
               <>
@@ -65,7 +68,7 @@ export function HeroSection({ track }: { track: Track }) {
             )}
           </button>
         </div>
-        <span className="relative block h-52 w-full overflow-hidden rounded-xl shadow-lg md:h-52 md:w-52">
+        <span className="relative block h-52 w-full overflow-hidden rounded-xl shadow-lg ring-1 ring-white/10 md:h-52 md:w-52">
           <Artwork
             src={track.artworkUrl}
             alt={track.title}

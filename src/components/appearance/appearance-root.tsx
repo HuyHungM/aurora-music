@@ -13,6 +13,7 @@ import {
 } from "react";
 import {
   backgroundImageValue,
+  cssUrlEscape,
   DEFAULT_APPEARANCE,
   encodeAppearance,
   type Appearance,
@@ -72,6 +73,19 @@ interface AppearanceContextValue {
   reset: () => void;
   /** The resolved `background-image` value, for previews and tests. */
   backgroundImage: string;
+  /**
+   * A session-only local preview as a `blob:` object URL, or `null`. It is an
+   * in-memory override of the persisted background and is never written
+   * anywhere; see `setLocalBackground`.
+   */
+  localBackground: string | null;
+  /**
+   * Adopt or clear the session-only local preview, revoking whatever object
+   * URL is being replaced. The caller passes a URL minted by
+   * `validateLocalBackgroundFile`, or `null` to fall back to the persisted
+   * background.
+   */
+  setLocalBackground: (url: string | null) => void;
 }
 
 const FALLBACK: AppearanceContextValue = {
@@ -84,6 +98,8 @@ const FALLBACK: AppearanceContextValue = {
   setBackground: () => undefined,
   reset: () => undefined,
   backgroundImage: "none",
+  localBackground: null,
+  setLocalBackground: () => undefined,
 };
 
 const AppearanceContext = createContext<AppearanceContextValue | null>(null);
@@ -146,8 +162,26 @@ export function AppearanceRoot({
   const [saved, setSaved] = useState<Appearance>(initial);
   const [status, setStatus] = useState<AppearanceStatus>("idle");
   const [reason, setReason] = useState<string | undefined>(undefined);
+  /**
+   * The session-only local preview, or `null`.
+   *
+   * Deliberately SEPARATE from `appearance`: it is not a preference, it is not
+   * encoded, and it is not written to either sink. It starts `null` on both the
+   * server and the client, so there is no hydration mismatch, and it is gone
+   * the moment the document is reloaded — which is the whole point of the
+   * "session only" label the panel shows beside it.
+   */
+  const [localBackground, setLocalBackgroundState] = useState<string | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * The live local preview URL, mirrored out of state.
+   *
+   * `setLocalBackground` and the unmount cleanup both need the CURRENT URL to
+   * revoke, and both run outside render, so a ref is what lets them read it
+   * without closing over a stale value.
+   */
+  const localBackgroundRef = useRef<string | null>(null);
   /** The newest value not yet written. At most one; later changes replace it. */
   const pendingRef = useRef<Appearance | null>(null);
   /**
@@ -350,19 +384,67 @@ export function AppearanceRoot({
     [commit],
   );
 
+  /**
+   * Adopt or clear the session-only local preview.
+   *
+   * THE ONLY PLACE AN OBJECT URL IS REVOKED, on the replace path — the panel
+   * mints URLs by validating a file and hands the winning one here, and every
+   * URL this function stops pointing at is released immediately rather than
+   * being left for the tab to close. The unmount cleanup below is the second
+   * release point.
+   */
+  const setLocalBackground = useCallback((url: string | null) => {
+    const previous = localBackgroundRef.current;
+    if (previous && previous !== url) {
+      try {
+        URL.revokeObjectURL(previous);
+      } catch {
+        // Best effort: the browser reclaims live object URLs on unload.
+      }
+    }
+    localBackgroundRef.current = url;
+    setLocalBackgroundState(url);
+  }, []);
+
+  // Releasing on unmount matters because the shell can be torn down by a route
+  // change while a local preview is showing. Without this the Blob would stay
+  // alive for the life of the document.
+  useEffect(() => {
+    return () => {
+      const current = localBackgroundRef.current;
+      if (current) {
+        try {
+          URL.revokeObjectURL(current);
+        } catch {
+          // Best effort.
+        }
+      }
+    };
+  }, []);
+
   const reset = useCallback(() => {
     // Appearance only. This is a pure value built from a constant; there is no
     // path from here to the queue, the likes, the playlists or the account
-    // (§60).
+    // (§60). The session-only local preview is cleared too, so "Reset" leaves
+    // the background at the default rather than at a file that was never a
+    // preference.
+    setLocalBackground(null);
     commit(() => ({
       ...DEFAULT_APPEARANCE,
       background: { ...DEFAULT_APPEARANCE.background },
     }));
-  }, [commit]);
+  }, [commit, setLocalBackground]);
 
+  // The effective image: a session-only local preview outranks the persisted
+  // selection, and the persisted selection outranks nothing — which is the
+  // "session upload → persisted appearance → Aurora Default" fallback chain.
+  // Aurora Default is simply `none`.
   const backgroundImage = useMemo(
-    () => backgroundImageValue(appearance),
-    [appearance],
+    () =>
+      localBackground
+        ? `url("${cssUrlEscape(localBackground)}")`
+        : backgroundImageValue(appearance),
+    [appearance, localBackground],
   );
 
   const value = useMemo<AppearanceContextValue>(() => {
@@ -378,8 +460,21 @@ export function AppearanceRoot({
       setBackground,
       reset,
       backgroundImage,
+      localBackground,
+      setLocalBackground,
     };
-  }, [appearance, saved, status, reason, update, setBackground, reset, backgroundImage]);
+  }, [
+    appearance,
+    saved,
+    status,
+    reason,
+    update,
+    setBackground,
+    reset,
+    backgroundImage,
+    localBackground,
+    setLocalBackground,
+  ]);
 
   const style = useMemo(
     () =>
@@ -394,7 +489,12 @@ export function AppearanceRoot({
     <AppearanceContext.Provider value={value}>
       <div
         data-aurora-glass={glassAttributeValue(appearance)}
-        data-aurora-background={backgroundAttributeValue(appearance)}
+        // A session-only local preview reports its own kind so the backdrop
+        // paints the image layer and the scrim (anything but "none"), while the
+        // persisted selection stays untouched underneath.
+        data-aurora-background={
+          localBackground ? "local" : backgroundAttributeValue(appearance)
+        }
         // Zero blur removes the `backdrop-filter` declarations entirely rather
         // than setting them to `blur(0px)`, which still promotes the element
         // and still costs a backdrop copy on every frame. See the

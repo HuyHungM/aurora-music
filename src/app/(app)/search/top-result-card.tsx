@@ -43,7 +43,7 @@ export function TopResultCard({
     // the actions slot holds a menu trigger, and a menu has to be able to
     // leave the card it was opened from. The wash is the only child that could
     // reach a corner, and it rounds itself.
-    <div className="relative flex items-center gap-4 rounded-2xl border border-border-subtle bg-surface-1 p-4 sm:p-5">
+    <div className="aurora-glass-edge relative flex items-center gap-4 rounded-2xl border border-border-subtle bg-surface-1 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] sm:p-5">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-r from-accent/[0.12] via-transparent to-transparent"
@@ -79,7 +79,7 @@ export function TopResultCard({
               else void engine.play(track);
             }}
             aria-label={isCurrentPlaying ? t("track.pauseLabel", { title: track.title }) : t("track.playLabel", { title: track.title })}
-            className="aurora-press relative grid h-12 w-12 shrink-0 place-items-center rounded-full bg-accent text-accent-foreground transition-colors hover:bg-accent-hover"
+            className="aurora-press relative grid h-12 w-12 shrink-0 place-items-center rounded-full bg-accent text-accent-foreground transition-colors hover:bg-accent-hover hover:shadow-glow active:bg-accent-active"
           >
             {isCurrentPlaying ? <PauseIcon size={20} /> : <PlayIcon size={20} />}
           </button>

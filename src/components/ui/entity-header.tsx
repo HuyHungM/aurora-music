@@ -37,10 +37,10 @@ export function EntityHeader({
     // clips this element's own background and border, and the only child that
     // could have poked out of them is the decorative wash, which now rounds
     // itself.
-    <div className="relative rounded-2xl border border-border-subtle bg-surface-1">
+    <div className="aurora-glass-edge relative rounded-2xl border border-border-subtle bg-surface-1/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-accent/[0.13] via-transparent to-aurora-cyan/[0.07]"
+        className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-accent/[0.16] via-transparent to-aurora-cyan/[0.10]"
       />
       <div className="relative flex flex-col gap-5 p-5 sm:flex-row sm:items-end sm:gap-6 sm:p-7">
         <Artwork
@@ -49,7 +49,7 @@ export function EntityHeader({
           size={artworkSize}
           rounded="rounded-xl"
           eager
-          className="shadow-lg"
+          className="shadow-lg ring-1 ring-white/10"
         />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <p className="t-eyebrow">{eyebrow}</p>

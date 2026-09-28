@@ -11,9 +11,9 @@ export function PlaylistCard({ playlist, locale = DEFAULT_LOCALE }: { playlist: 
   return (
     <Link
       href={`/library/playlists/${playlist.id}`}
-      className="aurora-rise group flex min-w-0 flex-col gap-2.5 rounded-xl border border-border-subtle bg-surface-1 p-2 transition-colors hover:border-accent/40"
+      className="aurora-rise aurora-glass-edge group flex min-w-0 flex-col gap-2.5 rounded-xl border border-border-subtle bg-surface-1 p-2 transition-colors hover:border-accent/40"
     >
-      <span className="relative block overflow-hidden rounded-lg">
+      <span className="relative block overflow-hidden rounded-lg ring-1 ring-white/[0.06]">
         <Artwork
           src={playlist.artwork}
           alt={playlist.title}

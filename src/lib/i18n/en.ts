@@ -538,6 +538,13 @@ const en: Messages = {
     backgroundRemove: "Remove image",
     backgroundHint:
       "Paste a link to a JPEG, PNG, WebP, AVIF or GIF. It is checked in your browser before it is used: the file type, its real size, and that it loads at all. At most 4 MB, and at least 480×320.",
+    backgroundPersistedLabel: "Persisted",
+    backgroundUploadLabel: "Or upload from this device",
+    backgroundUploadAction: "Choose a file",
+    backgroundUploadRemove: "Remove upload",
+    backgroundUploadSessionOnly: "Local upload — session only",
+    backgroundUploadHint:
+      "Shown in this browser only, until you reload. The file is never uploaded and never saved; it stays on this device.",
 
     // --- Rejections (§7, §49, §74) ------------------------------------
     backgroundError: {

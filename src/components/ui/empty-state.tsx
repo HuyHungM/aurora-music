@@ -33,11 +33,11 @@ export function EmptyState({
 }: EmptyStateProps) {
   const Heading = `h${headingLevel}` as "h2" | "h3";
   return (
-    <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border-strong bg-surface-1 px-6 py-12 text-center">
+    <div className="aurora-glass-edge flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border-strong bg-surface-1/60 px-6 py-12 text-center">
       {icon ? (
         <div
           aria-hidden="true"
-          className="mb-1 grid h-12 w-12 place-items-center rounded-full bg-surface-3 text-text-secondary"
+          className="mb-1 grid h-12 w-12 place-items-center rounded-full bg-accent/12 text-accent"
         >
           {icon}
         </div>

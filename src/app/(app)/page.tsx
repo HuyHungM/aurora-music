@@ -12,7 +12,16 @@ import { RecommendationSection } from "@/components/recommendations/recommendati
 import { HeroSection } from "@/components/home/hero-section";
 import { SectionHeader } from "@/components/home/section-header";
 import { EmptyState } from "@/components/ui/empty-state";
-import { HeartIcon, ClockIcon, LibraryIcon, MusicNoteIcon, AlertCircleIcon } from "@/components/ui/icons";
+import {
+  HeartIcon,
+  ClockIcon,
+  LibraryIcon,
+  MusicNoteIcon,
+  SparkleIcon,
+  UserIcon,
+  ListMusicIcon,
+  AlertCircleIcon,
+} from "@/components/ui/icons";
 import { ButtonLink } from "@/components/ui/button";
 
 export const metadata: Metadata = { title: "Home" };
@@ -77,8 +86,12 @@ export default async function HomePage() {
       {/* Continue listening: the fastest path to music. */}
       {library && library.recent.length > 0 ? (
         <section aria-label={t("home.continueListening")}>
-          <SectionHeader title={t("home.continueListening")} aside={t("home.continueAside")} />
-          <div className="rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+          <SectionHeader
+            title={t("home.continueListening")}
+            aside={t("home.continueAside")}
+            icon={<ClockIcon size={16} />}
+          />
+          <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
             <TrackList
               tracks={library.recent.map((entry) => entry.track)}
               showMenu={true}
@@ -106,31 +119,31 @@ export default async function HomePage() {
 
       {sections.popular.length > 0 ? (
         <section aria-label={t("home.popular")}>
-          <SectionHeader title={t("home.popular")} aside={t("home.popularAside")} />
+          <SectionHeader title={t("home.popular")} aside={t("home.popularAside")} icon={<SparkleIcon size={16} />} />
           <TrackList tracks={sections.popular.slice(0, 8)} showMenu={true} numbered />
         </section>
       ) : sections.popularStatus === "failed" ? (
         <section>
-          <SectionHeader title={t("home.popular")} aside={t("home.popularAside")} />
+          <SectionHeader title={t("home.popular")} aside={t("home.popularAside")} icon={<SparkleIcon size={16} />} />
           {sectionFailed(t("home.popular"))}
         </section>
       ) : null}
 
       {sections.featured.length > 1 ? (
         <section aria-label={t("home.featured")}>
-          <SectionHeader title={t("home.featured")} aside={t("home.featuredAside")} />
+          <SectionHeader title={t("home.featured")} aside={t("home.featuredAside")} icon={<SparkleIcon size={16} />} />
           <TrackList tracks={sections.featured.slice(1, 7)} showMenu={true} />
         </section>
       ) : sections.featuredStatus === "failed" ? (
         <section>
-          <SectionHeader title={t("home.featured")} aside={t("home.featuredAside")} />
+          <SectionHeader title={t("home.featured")} aside={t("home.featuredAside")} icon={<SparkleIcon size={16} />} />
           {sectionFailed(t("home.featured"))}
         </section>
       ) : null}
 
       {sections.featuredAlbums.length > 0 ? (
         <section aria-label={t("home.discoverAlbums")}>
-          <SectionHeader title={t("home.discoverAlbums")} aside={t("home.discoverAlbumsAside")} />
+          <SectionHeader title={t("home.discoverAlbums")} aside={t("home.discoverAlbumsAside")} icon={<MusicNoteIcon size={16} />} />
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {sections.featuredAlbums.slice(0, 5).map((album) => (
               <li key={`${album.provider}:${album.providerAlbumId ?? album.id}`} className="min-w-0">
@@ -143,7 +156,7 @@ export default async function HomePage() {
 
       {sections.featuredArtists.length > 0 ? (
         <section aria-label={t("home.discoverArtists")}>
-          <SectionHeader title={t("home.discoverArtists")} aside={t("home.discoverArtistsAside")} />
+          <SectionHeader title={t("home.discoverArtists")} aside={t("home.discoverArtistsAside")} icon={<UserIcon size={16} />} />
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {sections.featuredArtists.slice(0, 5).map((artist) => (
               <li key={`${artist.provider}:${artist.providerArtistId ?? artist.id}`} className="min-w-0">
@@ -170,9 +183,9 @@ export default async function HomePage() {
       {library ? (
         <>
           <section aria-label={t("home.likedMusic")}>
-            <SectionHeader title={t("home.likedMusic")} aside={t("home.likedAside")} />
+            <SectionHeader title={t("home.likedMusic")} aside={t("home.likedAside")} icon={<HeartIcon size={16} />} />
             {library.liked.length > 0 ? (
-              <div className="rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+              <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
                 <TrackList
                   tracks={library.liked.map((entry) => entry.track)}
                   showMenu={true}
@@ -193,7 +206,7 @@ export default async function HomePage() {
           </section>
 
           <section aria-label={t("home.yourPlaylists")}>
-            <SectionHeader title={t("home.yourPlaylists")} aside={t("home.yourPlaylistsAside")} />
+            <SectionHeader title={t("home.yourPlaylists")} aside={t("home.yourPlaylistsAside")} icon={<ListMusicIcon size={16} />} />
             {library.playlists.length > 0 ? (
               <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                 {library.playlists.map((playlist) => (

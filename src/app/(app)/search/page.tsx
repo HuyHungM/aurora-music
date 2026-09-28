@@ -24,7 +24,8 @@ import { LinkSearchResult } from "./link-result";
 import { identityToTrack } from "@/lib/music/identity-track";
 import { getRequestLocale } from "@/lib/i18n/server";
 import { getT } from "@/lib/i18n/translate";
-import { MusicNoteIcon, AlertCircleIcon } from "@/components/ui/icons";
+import { SectionHeader } from "@/components/home/section-header";
+import { MusicNoteIcon, SparkleIcon, UserIcon, LibraryIcon, AlertCircleIcon } from "@/components/ui/icons";
 import { ButtonLink } from "@/components/ui/button";
 
 export const metadata: Metadata = { title: "Search" };
@@ -264,7 +265,7 @@ export default async function SearchPage({
         <div className="flex flex-col gap-10">
           {topTrack ? (
             <section aria-label={t("search.topResult")}>
-              <h2 className="t-section-title mb-3">{t("search.topResult")}</h2>
+              <SectionHeader title={t("search.topResult")} icon={<SparkleIcon size={16} />} />
               <TopResultCard track={topTrack} />
             </section>
           ) : null}
@@ -275,8 +276,8 @@ export default async function SearchPage({
 
           {restTracks.length > 0 ? (
             <section aria-label={t("search.tracksSection")}>
-              <h2 className="t-section-title mb-3">{t("search.tracksSection")}</h2>
-              <div className="rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+              <SectionHeader title={t("search.tracksSection")} icon={<MusicNoteIcon size={16} />} />
+              <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
                 <TrackList tracks={restTracks} showMenu={true} variant="search" />
               </div>
             </section>
@@ -284,7 +285,7 @@ export default async function SearchPage({
 
           {artists.length > 0 ? (
             <section aria-label={t("search.artistsSection")}>
-              <h2 className="t-section-title mb-3">{t("search.artistsSection")}</h2>
+              <SectionHeader title={t("search.artistsSection")} icon={<UserIcon size={16} />} />
               <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
                 {artists.slice(0, 8).map((artist) => (
                   <li
@@ -304,7 +305,7 @@ export default async function SearchPage({
 
           {albums.length > 0 ? (
             <section aria-label={t("search.albumsSection")}>
-              <h2 className="t-section-title mb-3">{t("search.albumsSection")}</h2>
+              <SectionHeader title={t("search.albumsSection")} icon={<LibraryIcon size={16} />} />
               <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
                 {albums.slice(0, 8).map((album) => (
                   <li

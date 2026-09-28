@@ -84,7 +84,7 @@ export default async function RadioPage() {
       <section aria-label={t("radio.explore")}>
         <SectionHeader title={t("radio.explore")} aside={t("radio.exploreAside")} />
         {popular.length > 0 ? (
-          <div className="rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+          <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
             <TrackList tracks={popular} showMenu={true} numbered />
           </div>
         ) : (

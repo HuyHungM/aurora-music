@@ -61,7 +61,7 @@ export function MiniPlayer() {
     >
       {/* Progress hairline across the mini player's top edge. */}
       <div aria-hidden="true" className="absolute inset-x-0 top-0 h-0.5 bg-surface-active">
-        <div className="h-full bg-accent" style={{ width: `${progress * 100}%` }} />
+        <div className="h-full bg-gradient-to-r from-aurora-indigo to-accent" style={{ width: `${progress * 100}%` }} />
       </div>
       <button
         type="button"
@@ -143,6 +143,7 @@ export function MiniPlayer() {
         loading={isLoading}
         label={isPlaying ? t("player.pause") : t("player.play")}
         onToggle={() => engine?.togglePlay()}
+        primary
         // The bar and the full player both block the toggle while a track is
         // resolving. The mini player showed the spinner and stayed live, so a
         // second tap during the load fired `togglePlay` again - two requests

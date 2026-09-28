@@ -11,7 +11,7 @@ export function ArtistCard({ artist, locale = DEFAULT_LOCALE }: { artist: Artist
   return (
     <Link
       href={href}
-      className="aurora-rise group flex min-w-0 flex-col items-center gap-2.5 rounded-xl border border-transparent p-2 text-center transition-colors hover:border-border-subtle hover:bg-surface-1"
+      className="aurora-rise aurora-glass-edge group flex min-w-0 flex-col items-center gap-2.5 rounded-xl border border-border-subtle bg-surface-1/60 p-2 text-center transition-colors hover:border-accent/40 hover:bg-surface-1"
     >
       <Artwork
         src={artist.image}

@@ -3,6 +3,7 @@ import type { User } from "@/lib/domain";
 import type { AuthAvailability } from "@/lib/auth/availability";
 import { cookies } from "next/headers";
 import { listUserLikes } from "@/lib/dal/like";
+import { listUserPlaylists } from "@/lib/dal/playlist";
 import { getRequestLocale } from "@/lib/i18n/server";
 import { getT } from "@/lib/i18n/translate";
 import { getRequestAppearance } from "@/lib/appearance/server";
@@ -37,11 +38,28 @@ export async function AppShell({
   // Seed for the single client mirror of DAL likes (Phase 38): the
   // provider's optimistic toggles roll back against this same table,
   // so rows, menus, player, and track page can never diverge.
-  const initialLiked = user
-    ? (await listUserLikes(user.id, { limit: 1000 })).map(
-        (like) => `${like.provider}:${like.trackId}`,
-      )
-    : [];
+  //
+  // The sidebar's real playlists ride along in the same round trip: a
+  // signed-in listener should see their own collections in the rail on
+  // EVERY route, not only on `/library`, and two independent awaits here
+  // would serialize two queries for no reason. Only `{id, title}` is kept —
+  // the domain `Playlist` carries every membership and would bloat the RSC
+  // payload of every page (see `SidebarPlaylistSummary`).
+  const [initialLiked, sidebarPlaylists] = await Promise.all([
+    user
+      ? listUserLikes(user.id, { limit: 1000 }).then((likes) =>
+          likes.map((like) => `${like.provider}:${like.trackId}`),
+        )
+      : Promise.resolve([] as string[]),
+    user
+      ? listUserPlaylists(user.id).then((playlists) =>
+          playlists.map((playlist) => ({
+            id: playlist.id,
+            title: playlist.title,
+          })),
+        )
+      : Promise.resolve([] as { id: string; title: string }[]),
+  ]);
   // Anonymous install opt-out, read once here and handed to the single
   // install authority so the affordance stays hidden across navigations
   // instead of returning on every route (Phase 51). Read defensively: a
@@ -105,7 +123,12 @@ export async function AppShell({
               `lg:flex` still governs: there is no nested blur to worry about
               because the sidebar and the header are siblings, not parents. */}
           <aside className="aurora-glass fixed inset-y-0 left-0 z-rail hidden w-66 flex-col border-r border-border-subtle lg:flex lg:w-66">
-            <Sidebar user={user} availability={availability} locale={locale} />
+            <Sidebar
+              user={user}
+              availability={availability}
+              locale={locale}
+              playlists={sidebarPlaylists}
+            />
           </aside>
 
           <div className="flex min-w-0 flex-1 flex-col lg:pl-66">

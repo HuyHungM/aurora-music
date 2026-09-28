@@ -50,10 +50,11 @@ const GLOBALS = RAW.replace(/\/\*[\s\S]*?\*\//g, " ");
 
 /**
  * Custom properties injected outside this file. `next/font` writes the
- * Geist family variables onto the root element at runtime, so they are
- * the only legitimate source of a `var()` this file cannot define.
+ * Plus Jakarta Sans and Geist Mono family variables onto the root element at
+ * runtime, so they are the only legitimate source of a `var()` this file
+ * cannot define.
  */
-const EXTERNAL_TOKENS = new Set(["--font-geist-sans", "--font-geist-mono"]);
+const EXTERNAL_TOKENS = new Set(["--font-jakarta", "--font-geist-mono"]);
 
 interface Declaration {
   name: string;
@@ -522,9 +523,10 @@ const GLASS_ALPHAS = [
 /** The clamp, so it is read rather than assumed. */
 const GLASS_ALPHA_CEILING = 0.96;
 
-/** The four surface classes, in the order the hierarchy requires. */
+/** The glass surface classes, in the order the hierarchy requires. */
 const GLASS_CLASSES = [
   "aurora-glass",
+  "aurora-liquid-glass",
   "aurora-glass-float",
   "aurora-glass-nested",
   "aurora-glass-edge",

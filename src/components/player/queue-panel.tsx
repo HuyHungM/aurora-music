@@ -22,6 +22,7 @@ import { focusFirstByLabel, useFocusTrap } from "@/components/ui/focus";
 import { AddToPlaylistMenu } from "@/components/tracks/add-to-playlist-menu";
 import { getRadioSession, subscribeRadioSession } from "@/lib/radio/instance";
 import { KeepListeningToggle } from "@/components/player/keep-listening-toggle";
+import { AutoplayButton } from "@/components/player/autoplay-button";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { useSyncExternalStore } from "react";
 import { ArrowDownIcon, ArrowUpIcon, ListMusicIcon, PauseIcon, PlayIcon, QueueIcon, RadioIcon, XIcon } from "@/components/ui/icons";
@@ -749,6 +750,7 @@ export function QueuePanel() {
           ) : null}
         </h2>
         <span className="flex-1" />
+        <AutoplayButton size={18} />
         <Button variant="ghost" size="icon" className="h-11 w-11" aria-label={t("queue.close")} onClick={closeAndRestoreFocus}>
           <XIcon size={18} />
         </Button>

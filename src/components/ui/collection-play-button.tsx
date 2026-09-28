@@ -56,7 +56,7 @@ export function CollectionPlayButton({
       size="sm"
       onClick={handleClick}
       aria-label={label}
-      className="aurora-press gap-1.5"
+      className="aurora-press gap-1.5 shadow-glow"
     >
       <PlayIcon size={16} />
       <span>{t("collectionPlay.play")}</span>

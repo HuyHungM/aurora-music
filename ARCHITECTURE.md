@@ -1848,9 +1848,9 @@ Glass settings are deliberately **not** part of the playback session snapshot
 (§26.4). They are a rendering preference of one browser, not a fact about what
 is playing, and a restored session has no reason to inherit them.
 
-### 32.2 The eight primitives, four derived values, and one ladder
+### 32.2 The eight primitives, five derived values, and one ladder
 
-Eight `--p-appearance-*` primitives are written by the sliders. Four more are
+Eight `--p-appearance-*` primitives are written by the sliders. Five more are
 derived in CSS, not by the client:
 
 | Token | Meaning |
@@ -1864,15 +1864,18 @@ derived in CSS, not by the client:
 | `--p-appearance-bg-saturation` | background image saturation |
 | `--p-appearance-bg-blur` | background image blur |
 | `--p-appearance-chrome-lift` | **constant** additive delta for chrome surfaces |
+| `--p-appearance-liquid-lift` | **constant** additive delta for Liquid Glass surfaces |
 | `--p-appearance-float-lift` | **constant** additive delta for floating surfaces |
 | `--p-appearance-scrim-floor` | the contrast floor under a background image |
 | `--p-z-backdrop` | `-1`, so the backdrop sits below in-flow content |
 
-The two lifts are constants on purpose, and the three alphas are
+The three lifts are constants on purpose, and the surface alphas are
 `min(96%, (alpha + lift) * 100%)`. A small, dense, high-contrast surface needs
 a firmer backdrop than a large, sparse one, so a header and a dialog cannot
 share a value even when the user has picked one — bigger surface, more opaque,
-which is the opposite of raw glassmorphism. The `min()` is not decoration:
+which is the opposite of raw glassmorphism. Liquid Glass sits between chrome and
+float, so the ladder stays ordered `nested < chrome < liquid < float` at every
+slider position. The `min()` is not decoration:
 `color-mix()` with a percentage over 100% is invalid, so a slider at its maximum
 without a ceiling produces a declaration the browser drops and the surface goes
 silently transparent.
@@ -1881,14 +1884,20 @@ silently transparent.
 slider, and asserts that every stylesheet default equals the model's default —
 the two authorities agreeing is the thing most likely to rot silently.
 
-### 32.3 Four classes, and the hierarchy they encode
+### 32.3 Five classes, and the hierarchy they encode
 
 | Class | Job | Applied to |
 | --- | --- | --- |
-| `.aurora-glass` | chrome | header, sidebar, player, mini-player, app shell |
+| `.aurora-glass` | chrome | header, sidebar, mini-player, app shell |
+| `.aurora-liquid-glass` | Level 3, the strongest material | player bar, queue, sheets, dialogs |
 | `.aurora-glass-float` | floating surfaces | dialogs, queue panel, menus, locale switcher |
 | `.aurora-glass-nested` | controls on a surface | radio groups, switches, preset buttons, sliders |
 | `.aurora-glass-edge` | border only | cards, rows, list sections, banners |
+
+Liquid Glass is a distinct **level**, not a heavier float: it adds a firmer
+fill, a stronger blur, a static specular sheen, a lavender border and an
+electric-violet bloom, and it substitutes for — never stacks with — chrome on a
+surface, so the blur budget is unchanged.
 
 Every one is scoped to `[data-aurora-glass="on"]`. With the attribute `off`, no
 glass rule is in the cascade at all rather than resolving to values that
@@ -1902,9 +1911,9 @@ Two prohibitions are enforced by test, not by convention:
   browser to snapshot and re-blur the same pixels, and a control that looks less
   like glass than the surface around it is worse than no glass.
 - **No `backdrop-filter` in any component.** `backdrop-filter` appears in
-  `globals.css` and nowhere else; components reach glass only through the four
-  classes. Otherwise there is no longer a single blur radius and no way to
-  answer "how expensive is this page" without reading every file on it.
+  `globals.css` and nowhere else; components reach glass only through the
+  surface classes. Otherwise there is no longer a single blur radius and no way
+  to answer "how expensive is this page" without reading every file on it.
 
 ### 32.4 Three switches, and what "off" costs
 
@@ -2011,6 +2020,19 @@ Nothing is stored that has not been checked, and the value stored is the
 **trimmed address that was validated**, not the raw text that was typed. Custom
 backgrounds are an https URL and hand-authored SVG presets; there is no upload
 (see `docs/scope-boundaries.md`).
+
+**A local file preview is a third, session-only source.** It is validated by
+`validateLocalBackgroundFile` in the same module, reusing `settleImage`,
+`readSize` and `checkBackgroundDimensions`, and skipping only the three checks
+that cannot apply to a local blob: the https-scheme syntax, the credentials
+check, and the byte-sniff of an untrusted origin (the declared MIME on a `File`
+is a hint, and the decode below it is the real check — exactly the posture the
+opaque-host path already takes). The surface is an in-memory `blob:` object URL
+held in `AppearanceRoot`, never in the encoded `Appearance`, and the root owns
+revoking the previous URL on replace and on unmount. Nothing is written to
+either sink, so a reload drops it: the render chain is local preview → persisted
+appearance → Aurora Default, and a refused file is non-blocking — it reports a
+reason and leaves the persisted background exactly as it was.
 
 **`checkBackgroundUrl` lives in `appearance.ts`, not here**, and both reasons
 point the same way. The decoder needs it: a cookie is a string anybody can set, so

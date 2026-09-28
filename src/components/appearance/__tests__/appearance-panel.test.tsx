@@ -682,6 +682,113 @@ describe("the background URL field", () => {
   });
 });
 
+describe("the local preview", () => {
+  let revoked: string[];
+  let counter: number;
+
+  beforeEach(() => {
+    revoked = [];
+    counter = 0;
+    // A URL whose object-URL methods are observable. It extends the real
+    // constructor so `checkBackgroundUrl`'s `new URL(...)` still works.
+    class StubURL extends URL {}
+    const statics = StubURL as unknown as {
+      createObjectURL: (blob: Blob) => string;
+      revokeObjectURL: (url: string) => void;
+    };
+    statics.createObjectURL = () => {
+      counter += 1;
+      return `blob:aurora-${counter}`;
+    };
+    statics.revokeObjectURL = (url: string) => {
+      revoked.push(url);
+    };
+    vi.stubGlobal("URL", StubURL);
+  });
+
+  function choose(name: string, type: string) {
+    const file = new File([new Uint8Array(PNG_MAGIC)], name, { type });
+    // `fireEvent` rather than `user.upload`, because the input's `accept`
+    // filter would silently drop the very non-image file this has to prove is
+    // refused.
+    fireEvent.change(screen.getByTestId("background-upload"), {
+      target: { files: [file] },
+    });
+  }
+
+  function backgroundKind() {
+    return document
+      .querySelector("[data-aurora-background]")
+      ?.getAttribute("data-aurora-background");
+  }
+
+  it("offers nothing to remove until a file is chosen", () => {
+    renderPanel();
+    expect(screen.getByTestId("background-upload")).toBeTruthy();
+    expect(screen.queryByTestId("background-upload-remove")).toBeNull();
+    expect(screen.queryByTestId("background-upload-active")).toBeNull();
+    // The address path is labelled as the one that is kept.
+    expect(screen.getByTestId("background-persisted")).toBeTruthy();
+  });
+
+  it("adopts a valid file as a session-only preview, and says so", async () => {
+    renderPanel();
+    choose("cover.png", "image/png");
+
+    await waitFor(() => expect(backgroundKind()).toBe("local"));
+    const root = document.querySelector<HTMLElement>("[data-aurora-background]");
+    expect(root?.style.getPropertyValue("--aurora-background-image")).toBe(
+      'url("blob:aurora-1")',
+    );
+    expect(screen.getByTestId("background-upload-active").textContent).toContain(
+      "session only",
+    );
+    expect(screen.getByTestId("background-upload-remove")).toBeTruthy();
+    // Nothing is written anywhere: no action call, no cookie.
+    expect(setAppearanceAction).not.toHaveBeenCalled();
+    expect(document.cookie).not.toContain("aurora-appearance");
+  });
+
+  it("refuses a non-image file without changing the background", async () => {
+    renderPanel();
+    choose("page.html", "text/html");
+
+    const error = await screen.findByTestId("background-error");
+    expect(error.textContent).not.toMatch(/settings\./);
+    expect(backgroundKind()).toBe("none");
+    expect(screen.queryByTestId("background-upload-remove")).toBeNull();
+  });
+
+  it("revokes the previous object URL when a new file replaces it", async () => {
+    renderPanel();
+    choose("one.png", "image/png");
+    await waitFor(() => expect(backgroundKind()).toBe("local"));
+
+    choose("two.png", "image/png");
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector<HTMLElement>("[data-aurora-background]")
+          ?.style.getPropertyValue("--aurora-background-image"),
+      ).toBe('url("blob:aurora-2")'),
+    );
+    // The first Blob is released the moment it stops being shown.
+    expect(revoked).toEqual(["blob:aurora-1"]);
+  });
+
+  it("clears the preview, and reverts to the persisted background", async () => {
+    renderPanel();
+    choose("cover.png", "image/png");
+    await waitFor(() => expect(backgroundKind()).toBe("local"));
+
+    fireEvent.click(screen.getByTestId("background-upload-remove"));
+
+    expect(backgroundKind()).toBe("none");
+    expect(revoked).toEqual(["blob:aurora-1"]);
+    expect(screen.queryByTestId("background-upload-remove")).toBeNull();
+  });
+});
+
 /* ==========================================================================
    4. THE ADVANCED CONTROLS
    ========================================================================== */

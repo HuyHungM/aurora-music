@@ -78,8 +78,10 @@ export default async function ArtistDetailPage({
 
         {tracksResult.kind === "success" && tracksResult.data.length > 0 ? (
           <section aria-label={t("artist.topTracks")}>
-            <SectionHeader title={t("artist.topTracks")} aside={t("artist.topTracksAside", { name: artist.name })} />
-            <TrackList tracks={tracksResult.data.slice(0, 10)} showMenu={true} numbered />
+            <SectionHeader title={t("artist.topTracks")} icon={<MusicNoteIcon size={16} />} aside={t("artist.topTracksAside", { name: artist.name })} />
+            <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+              <TrackList tracks={tracksResult.data.slice(0, 10)} showMenu={true} numbered />
+            </div>
           </section>
         ) : null}
 
@@ -93,7 +95,7 @@ export default async function ArtistDetailPage({
         ) : null}
 
         {tracksResult.kind === "failed" ? (
-          <div className="flex items-center gap-2 rounded-xl border border-border-subtle bg-surface-1 px-4 py-3 text-sm text-text-muted">
+          <div className="aurora-glass-edge flex items-center gap-2 rounded-xl border border-border-subtle bg-surface-1/60 px-4 py-3 text-sm text-text-muted">
             <AlertCircleIcon size={16} className="shrink-0" />
             <span>{t("artist.tracksUnavailable")}</span>
           </div>

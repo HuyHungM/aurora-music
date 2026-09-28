@@ -162,7 +162,7 @@ function LinkCollectionCard({
         </div>
       </div>
 
-      <div className="rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+      <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
         <TrackList
           tracks={tracks}
           showMenu={true}

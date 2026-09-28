@@ -5,7 +5,7 @@ type Variant = "primary" | "secondary" | "ghost" | "subtle";
 
 const variantClasses: Record<Variant, string> = {
   primary:
-    "bg-accent text-accent-foreground hover:bg-accent-hover active:bg-accent-hover",
+    "bg-accent text-accent-foreground hover:bg-accent-hover hover:shadow-glow active:bg-accent-active",
   // Phase 54: the three non-primary variants had NO `:active` rule at all,
   // so on a touch device - where there is no hover to fall back on - tapping
   // a ghost or secondary button produced no acknowledgement whatsoever.

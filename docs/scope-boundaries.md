@@ -532,7 +532,13 @@ outcome is a documented deviation rather than a quietly narrowed scope.
   four actions exist unchanged — typing previews, applying validates, Remove
   clears one, Reset clears both. The fork was raised before implementation and
   the URL answer was chosen, so this is a recorded interpretation rather than a
-  silent substitution.
+  silent substitution. **Later addition (the Stitch restyle):** a local file can
+  also be previewed for the session, held as an in-memory object URL and never
+  transmitted or persisted. That is still not the upload path this bullet
+  excludes — no bytes leave the device, there is no object storage and no upload
+  endpoint, and a stored preference still holds only a URL — so the exclusion
+  stands; the render chain is simply local preview → persisted appearance →
+  Aurora Default.
 - **There is no light theme, so "every supported theme" has nothing to iterate.**
   Aurora is dark-only: one `@theme` block, one set of primitives, no `data-theme`
   attribute anywhere. Any statement of the form "applies to every supported

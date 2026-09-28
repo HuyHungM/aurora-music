@@ -19,7 +19,7 @@
  * are consumed by browsers and by the OS splash screen, where the design
  * system's `oklch()` is not universally honoured. It corresponds to
  * `--p-neutral-0` / `--canvas-base` in `globals.css`
- * (`oklch(0.145 0.012 285)`); see `app-metadata.test.ts`, which pins the
+ * (`oklch(0.145 0.014 272)`); see `app-metadata.test.ts`, which pins the
  * relationship instead of trusting a comment.
  */
 
@@ -57,10 +57,10 @@ export function appDescription(locale: Locale): string {
 export const APP_DESCRIPTION_BY_MANIFEST_LOCALE = APP_DESCRIPTIONS[DEFAULT_LOCALE];
 
 /** Canvas colour for browser chrome, the splash screen and the manifest. */
-export const APP_THEME_COLOR = "#08070d";
+export const APP_THEME_COLOR = "#080a10";
 
 /** Canvas colour painted before the first frame, to avoid a white flash. */
-export const APP_BACKGROUND_COLOR = "#08070d";
+export const APP_BACKGROUND_COLOR = "#080a10";
 
 /**
  * Stable application identifier (RULE 16). It MUST NOT change between

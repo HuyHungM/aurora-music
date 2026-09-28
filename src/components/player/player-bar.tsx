@@ -66,21 +66,21 @@ export function PlayerBar() {
     <div
       role="region"
       aria-label={t("player.bar")}
-      // `aurora-glass` replaces `bg-background-subtle/95 backdrop-blur-md`
-      // (Phase 53, §29). The player is the surface most often overlapped by
-      // scrolling content, which is exactly why the chrome glass level is the
-      // MOST opaque of the three rather than the least: a translucent
-      // transport bar with list rows visible through it is a legibility
-      // problem before it is a premium look. `--glass-chrome-alpha` encodes
-      // that, and this is the surface it was chosen for.
-      className="aurora-glass fixed inset-x-0 bottom-0 z-player hidden border-t border-border-subtle lg:left-66 lg:flex"
+      // `aurora-liquid-glass` replaces `bg-background-subtle/95 backdrop-blur-md`
+      // (Phase 53, §29; lifted to Liquid Glass in the Stitch migration). The
+      // player bar is the surface most often overlapped by scrolling content,
+      // and it is also the surface that most carries the product's material —
+      // so it gets Level 3 rather than plain chrome: the firmest fill of the
+      // ladder, a specular sheen and a lavender/electric edge. That is exactly
+      // the "floating Liquid Glass surface" the player bar is specified as.
+      className="aurora-liquid-glass fixed inset-x-0 bottom-0 z-player hidden border-t border-border-subtle lg:left-66 lg:flex"
     >
       {/* Hairline progress: the bar's top edge is the seek position. */}
       <div
         aria-hidden="true"
         className="absolute inset-x-0 top-0 h-0.5 bg-surface-active"
       >
-        <div className="h-full bg-accent transition-[width]" style={{ width: `${progress * 100}%` }} />
+        <div className="h-full bg-gradient-to-r from-aurora-indigo to-accent transition-[width]" style={{ width: `${progress * 100}%` }} />
       </div>
 
       <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 px-5 py-2.5">
@@ -133,6 +133,8 @@ export function PlayerBar() {
             loading={isLoading}
             label={isPlaying ? t("player.pause") : t("player.play")}
             onToggle={() => engine?.togglePlay()}
+            size={20}
+            primary
             disabled={!currentTrack || isLoading}
           />
           <Button

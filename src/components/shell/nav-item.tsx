@@ -51,7 +51,7 @@ export function NavList({
               className={
                 isBottom
                   ? `relative flex min-h-12 select-none flex-col items-center justify-center gap-1 px-2 text-[11px] font-medium transition-colors ${
-                      active ? "text-text-primary" : "text-text-muted hover:text-text-secondary"
+                      active ? "text-accent" : "text-text-muted hover:text-text-secondary"
                     }`
                   // `aurora-touch` on the sidebar branch only (Phase 54).
                   // Measured 40px tall on a touch-emulated 1024x1366 tablet:
@@ -61,7 +61,7 @@ export function NavList({
                   // already declares `min-h-12` (48px) and needed nothing.
                   : `group relative flex aurora-touch select-none items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
                       active
-                        ? "bg-surface-active text-text-primary"
+                        ? "bg-accent/12 text-accent"
                         : "text-text-secondary hover:bg-surface-hover hover:text-text-primary"
                     }`
               }

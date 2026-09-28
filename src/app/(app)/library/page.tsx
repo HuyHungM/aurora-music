@@ -98,6 +98,7 @@ export default async function LibraryPage() {
         <SectionHeader
           title={t("library.likedMusic")}
           aside={t("library.likedSaved", { count: formatNumber(locale, library.liked.length) })}
+          icon={<HeartIcon size={16} />}
           action={
             likedTracks.length > 0 ? (
               <span className="flex items-center gap-2">
@@ -108,7 +109,7 @@ export default async function LibraryPage() {
           }
         />
         {library.liked.length > 0 ? (
-          <div className="rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+          <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
             <TrackList
               tracks={likedTracks}
               showMenu={true}
@@ -129,6 +130,7 @@ export default async function LibraryPage() {
         <SectionHeader
           title={t("library.recentlyPlayed")}
           aside={t("library.recentlyPlayedAside")}
+          icon={<ClockIcon size={16} />}
           action={
             recentTracks.length > 0 ? (
               <LibraryPlayButton tracks={recentTracks} labelKey="library.playRecent" />
@@ -136,7 +138,7 @@ export default async function LibraryPage() {
           }
         />
         {library.recent.length > 0 ? (
-          <div className="rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
+          <div className="aurora-glass-edge rounded-2xl border border-border-subtle bg-surface-1/60 p-2">
             <TrackList
               tracks={recentTracks}
               showMenu={true}
@@ -158,6 +160,7 @@ export default async function LibraryPage() {
         <SectionHeader
           title={t("library.followingArtists")}
           aside={t("library.followingCount", { count: formatNumber(locale, follows.length) })}
+          icon={<UserIcon size={16} />}
         />
         {follows.length > 0 ? (
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">

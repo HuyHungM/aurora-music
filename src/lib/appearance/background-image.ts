@@ -509,3 +509,112 @@ async function tryCooperative(
     info: { url, width: size.width, height: size.height, bytes: bytes.byteLength, format },
   };
 }
+
+/* ==========================================================================
+   LOCAL PREVIEW (session-only)
+   ========================================================================== */
+
+/**
+ * The browser surface a local, session-only preview needs.
+ *
+ * Same shape and same contract as `BackgroundImageEnvironment`: every member is
+ * optional, a missing one is the `unavailable` rejection rather than a crash,
+ * because this runs in the settings UI.
+ *
+ * Why it is a SEPARATE interface rather than three more members on
+ * `BackgroundImageEnvironment`: the URL path never creates or revokes an object
+ * URL, and the local path never fetches. Keeping them apart means each caller
+ * has to supply exactly the surface it uses, and a URL validator cannot
+ * accidentally start minting object URLs.
+ */
+export interface LocalBackgroundEnvironment {
+  createObjectURL?: (blob: Blob) => string;
+  revokeObjectURL?: (url: string) => void;
+  createImage?: (src: string) => BackgroundImageElement;
+}
+
+export type LocalBackgroundResult =
+  | { ok: true; objectUrl: string; width: number; height: number }
+  | { ok: false; reason: BackgroundRejection };
+
+/**
+ * Validates a file chosen from the device, for a preview that never leaves the
+ * tab.
+ *
+ * WHAT THIS IS NOT. It is not an upload. No bytes are sent anywhere, nothing is
+ * written to a cookie or a database, and the result is an in-memory `blob:`
+ * URL that stops existing when the document does. §4 of the phase brief asked
+ * for an "uploaded image"; this is the closest thing that is honest about there
+ * being no upload path (see `docs/scope-boundaries.md`).
+ *
+ * WHAT IT REUSES, and why that matters: the same `settleImage`, `readSize` and
+ * `checkBackgroundDimensions` the URL path uses, so a local file and a remote
+ * address are judged by one set of size, decode and dimension rules. Only the
+ * three checks that cannot apply to a local blob are skipped: the https-scheme
+ * syntax, the credentials check, and the byte sniff (there is no
+ * `Content-Type` from a remote origin to distrust, and the declared MIME on a
+ * `File` is a hint, not a security boundary — the decode below is the real
+ * check, exactly as it is for the opaque-host path).
+ *
+ * ON FAILURE THE OBJECT URL IS REVOKED before returning, so a refused file does
+ * not leak a Blob that would otherwise live until the tab closed. On success
+ * the caller owns the URL and must revoke it when replacing or removing the
+ * preview — `appearance-root.tsx` is that owner.
+ */
+export async function validateLocalBackgroundFile(
+  file: Blob,
+  env: LocalBackgroundEnvironment,
+): Promise<LocalBackgroundResult> {
+  if (typeof env.createObjectURL !== "function") {
+    return { ok: false, reason: "unavailable" };
+  }
+  // A declared type that is present and not an image is a definitive refusal;
+  // an empty or missing type is not, because plenty of browsers leave it blank
+  // and the decode is the check that actually decides.
+  const declaredType = typeof file.type === "string" ? file.type.toLowerCase() : "";
+  if (declaredType !== "" && !declaredType.startsWith("image/")) {
+    return { ok: false, reason: "unsupportedType" };
+  }
+  if (file.size > BACKGROUND_MAX_BYTES) {
+    return { ok: false, reason: "tooLarge" };
+  }
+  if (typeof env.createImage !== "function") {
+    return { ok: false, reason: "unavailable" };
+  }
+
+  let objectUrl: string;
+  try {
+    objectUrl = env.createObjectURL(file);
+  } catch {
+    return { ok: false, reason: "decodeFailed" };
+  }
+  const revoke = () => {
+    try {
+      env.revokeObjectURL?.(objectUrl);
+    } catch {
+      // Best effort: a failure to revoke is a leak the browser will collect
+      // when the document unloads, not a reason to surface an error.
+    }
+  };
+
+  let image: BackgroundImageElement;
+  try {
+    image = env.createImage(objectUrl);
+  } catch {
+    revoke();
+    return { ok: false, reason: "decodeFailed" };
+  }
+
+  const settled = await settleImage(image);
+  const size = readSize(image);
+  if (size === null || (!settled && size.width <= 0)) {
+    revoke();
+    return { ok: false, reason: "decodeFailed" };
+  }
+  const rejected = checkBackgroundDimensions(size.width, size.height);
+  if (rejected) {
+    revoke();
+    return { ok: false, reason: rejected };
+  }
+  return { ok: true, objectUrl, width: size.width, height: size.height };
+}

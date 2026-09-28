@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 /**
  * Font preload guard: the mono face is defined only as a CSS variable
  * with no rendered consumer, so it must not preload its woff2 (Chrome
- * reports "preloaded but not used"). The primary sans face stays
- * preloaded for initial rendering.
+ * reports "preloaded but not used"). The primary sans face — Plus Jakarta
+ * Sans since the Stitch migration — stays preloaded for initial rendering.
  */
 function sourceFiles(directory: string): string[] {
   const out: string[] = [];
@@ -38,8 +38,8 @@ describe("font preload", () => {
       resolve(process.cwd(), "src/app/layout.tsx"),
       "utf8",
     );
-    expect(layout).toMatch(/Geist\([\s\S]*subsets/);
-    expect(layout).not.toMatch(/Geist\([^)]*preload:\s*false/);
+    expect(layout).toMatch(/Plus_Jakarta_Sans\([\s\S]*subsets/);
+    expect(layout).not.toMatch(/Plus_Jakarta_Sans\([^)]*preload:\s*false/);
   });
 
   it("has no rendered consumer of the mono face", () => {
