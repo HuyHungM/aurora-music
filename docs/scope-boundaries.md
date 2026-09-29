@@ -56,8 +56,7 @@ implementation exists; several additionally asserted by boundary tests):
 - Payments / subscriptions
 - Analytics / external telemetry
 - Live radio / live streams (resolver rejects live/upcoming)
-- Sleep timer / crossfade / gapless playback (the equalizer shipped — see
-  the Phase 53 addendum below — those three did not)
+- Sleep timer / crossfade / gapless playback
 - New providers beyond YouTube / Deezer / Spotify
 - Queue history navigation across sessions
 - Additional UI locales beyond Vietnamese / English; Accept-Language
@@ -156,7 +155,7 @@ must not be treated as an open bug.
 
 The dev server is reachable at `http://<lan-ip>:3000` and the application is
 usable there end to end (render, HMR, API, server actions, auth, search,
-playback, queue, likes, playlists, sharing, radio, EQ, appearance). Two
+playback, queue, likes, playlists, sharing, radio, appearance). Two
 things on that origin are left unsolved on purpose:
 
 - **No TLS for the dev origin — and none for the deployed origin either.** A
@@ -579,80 +578,6 @@ patch individual instances when the primitive is responsible.
   rather than a state that fails to report. It is left alone here because fixing
   it changes another feature's appearance; the measurement is recorded so the
   next audit of that control has it.
-## Phase 53 addendum — Aurora V-Shape equalizer: what is deliberately absent
-
-The addendum's own §3 premise was that this is a familiar, well-trodden feature
-with an established research basis to follow. It is not quite, and the parts that
-are missing are recorded here rather than papered over.
-
-- **No measurement rig, and no claim to one.** Aurora V-Shape is a
-  **reference-informed musical choice**: it is argued from listening intuition,
-  from what the ten bands are conventionally used for, and from the measurement
-  of its *own* transfer function. It is **not** derived from HARMAN's published
-  curves, not measured with an instrument, and not a reproduction of any product
-  or anyone's hearing. That distinction is deliberate. HARMAN/Sean Olive's work
-  is about loudness matching and headphone/room correction, and it does not
-  describe a consumer V-shaped curve; treating a paywalled proprietary tuning as
-  a specification would have meant either copying it or inventing a citation for
-  a number nobody in this repository can verify. `docs/scope-boundaries.md` and
-  `ARCHITECTURE.md` §33.6 both say this, and no user-facing string claims
-  otherwise.
-- **No per-device, per-headphone or per-room correction profiles.** The equalizer
-  is a global taste control. Detecting the output device, measuring a room, or
-  running a headphone-compensation curve would each be a different product, and
-  the last one is a claim this project has no way to make honestly.
-- **No loudness normalisation, no compression, no limiting, no upsampling.** The
-  preamp exists solely to keep the filter chain from clipping. It is not a
-  dynamics processor, and a listener who wants a level-matched experience across
-  tracks is not served by this.
-- **No per-track or per-genre automation.** One curve, chosen by the listener,
-  applied to everything. Automatic switching would require a classifier this
-  project has no data for.
-- **No custom filter types.** Ten peaking bands and one preamp. No low-pass, no
-  high-pass, no notch, no low-shelf — the "at least 10 bands" wording is read as
-  exactly ten, and a parameterised filter-type list would be a second audio
-  architecture rather than an extension of this one.
-- **The 20 Hz and 20 kHz ends are not offered as controls.** §5's "about 20 Hz to
-  20 kHz" range is covered by 31 Hz and 16 kHz centres: a 20 Hz centre sits below
-  what consumer hardware reproduces, so the control would appear inert, and a
-  20 kHz centre is either inaudible or a hiss control. This is a deliberate
-  narrowing inside the stated range, made for a stated reason.
-- **No output metering and no numeric headroom budget UI.** The interface can say
-  that the requested headroom exceeds the range it can express, which is the
-  honest part of the story. A live level readout would be a second audio
-  subsystem to build and maintain for information a listener cannot act on.
-- **The equalizer is not in the player surface.** §37 permits "an optional
-  compact EQ button"; it is not built. The panel is reachable in Settings, which
-  is the surface a listener expects to find a persistent preference in, and a
-  control that duplicates the panel would be a second place to keep in step for
-  no gain. The option remains open, and adding it is a button plus a link — not a
-  second state, because there is only one store.
-- **No CORS-clean media delivery.** A provider stream is cross-origin and answers
-  without `Access-Control-Allow-Origin`, so the browser will not let Web Audio
-  read the element: `MediaElementAudioSourceNode` outputs digital zeroes while
-  the element plays normally. Measured in a real browser, with Chrome's own
-  message — see `ARCHITECTURE.md` §33.8. What was done about it is the refusal:
-  the graph now asks `sourceVerdict()` before it takes the one-way door and
-  declines `cors-tainted` rather than engaging into silence, and the listener is
-  told the *stream* is the problem rather than their browser. The equalizer is
-  therefore **unavailable on provider streams today**, and the same code is
-  measurably audible (`e2e/equalizer-audible.spec.ts`) the moment media delivery
-  is something Web Audio may read. Closing that gap needs a media-delivery
-  change, and one option is deliberately not taken here: a same-origin relay of
-  the stream is a proxy — an SSRF surface and a bandwidth bill that belongs in
-  `docs/security.md`, and not an equalizer change.
-- **No pre-engagement *network* probe of the element's source.** An earlier
-  design did exactly that: a bounded ranged `mode: "cors"` `fetch()`, with the
-  verdict read from whether it resolved. It was measured wrong and removed. The
-  request is governed by the page's own CSP (`connect-src 'self' ws: wss:`), so
-  it is blocked *before leaving the browser* and its `TypeError` is
-  indistinguishable from a genuine CORS refusal — a decision that inherits the
-  application's policy is not a measurement of the media, and it would have
-  declined sources Web Audio reads perfectly well. `eq-graph.test.ts` stubs
-  `fetch` to throw and asserts the gate still decides correctly, so it cannot
-  come back. The gate is now spec-local: origin plus the element's own CORS
-  state, and a `not-yet` deferral for a check that has not reported.
-
 ## Phase 54 — mobile, tablet and foldable: what is deliberately absent
 
 The phone work reused the one engine, the one store, the one resolver and the

@@ -110,13 +110,13 @@ export function TrackRow({
         {isCurrent ? (
           <span
             aria-hidden="true"
-            data-slot="eq"
+            data-slot="playing"
             className="absolute inset-0 grid place-items-center rounded-lg bg-black/45"
           >
             <span className="flex h-4 items-end gap-[3px]">
-              <span className="eq-bar w-[3px] rounded-full bg-accent-foreground" />
-              <span className="eq-bar eq-bar-2 w-[3px] rounded-full bg-accent-foreground" />
-              <span className="eq-bar eq-bar-3 w-[3px] rounded-full bg-accent-foreground" />
+              <span className="playing-bar w-[3px] rounded-full bg-accent-foreground" />
+              <span className="playing-bar playing-bar-2 w-[3px] rounded-full bg-accent-foreground" />
+              <span className="playing-bar playing-bar-3 w-[3px] rounded-full bg-accent-foreground" />
             </span>
           </span>
         ) : null}

@@ -1,0 +1,14 @@
+-- DropTable column: the equalizer feature was removed from the product, so its
+-- preference has no reader and no writer anywhere in the application. Dropping
+-- the column is the completing half of `20260926120002_add_user_audio_eq`.
+--
+-- The column was additive and nullable (`"audioEq" JSONB`), held a device
+-- listening preference only, and was never read by playback: no `PlaybackState`,
+-- no queue, no `AudioSource`, no stream URL was ever stored here. Dropping it
+-- cannot affect playback, the queue, the session, likes, playlists, locale or
+-- the appearance preference.
+--
+-- Rollback: re-add `"User"."audioEq" JSONB` (nullable, no default). The data
+-- itself is not backed up by this migration; the feature it belonged to no
+-- longer exists, so there is nothing to restore to.
+ALTER TABLE "User" DROP COLUMN "audioEq";

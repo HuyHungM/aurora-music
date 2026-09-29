@@ -102,22 +102,6 @@ export default async function SearchPage({
     // contract as the playback-state resolver.
     getShellProviders();
 
-    // Tracks come from unified multi-provider search: one row per merged
-    // canonical group. Artists/albums keep the existing single-provider
-    // path, which UnifiedSearch does not cover.
-    const unifiedResult = await searchUnifiedTracksAction(query);
-    if (unifiedResult.ok && unifiedResult.result.succeeded) {
-      tracks = unifiedResult.result.tracks.map(identityToTrack);
-      // One catalog may fail while others succeed: the unified set stays
-      // intact and the UI notes results may be incomplete (never raw
-      // provider errors).
-      tracksPartial = unifiedResult.result.partial;
-    } else {
-      tracksError = unifiedResult.ok
-        ? t("search.unavailableDescription")
-        : unifiedResult.error;
-    }
-
     const provider = getPreferredProvider();
     const queryObj = { query, limit: 20, offset: 0 };
 
@@ -131,17 +115,38 @@ export default async function SearchPage({
       albumsUnsupported = true;
     }
 
-    const artistPromise = hasArtistSearch
-      ? provider.searchArtists(queryObj)
-      : Promise.reject(new Error("unsupported"));
-    const albumPromise = hasAlbumSearch
-      ? provider.searchAlbums(queryObj)
-      : Promise.reject(new Error("unsupported"));
-
-    const [artistsResult, albumsResult] = await Promise.allSettled([
-      artistPromise,
-      albumPromise,
+    // Tracks (unified multi-provider fan-out), artists and albums are three
+    // INDEPENDENT searches. They used to run as two sequential phases - the
+    // unified track search first, then artists/albums together - so the page
+    // waited for their SUM. Firing all three together makes it wait for the
+    // SLOWEST instead. Result semantics are unchanged: each branch below
+    // resolves exactly the same value it would have with the old awaits.
+    const [unifiedSettled, artistsResult, albumsResult] = await Promise.allSettled([
+      searchUnifiedTracksAction(query),
+      hasArtistSearch
+        ? provider.searchArtists(queryObj)
+        : Promise.reject(new Error("unsupported")),
+      hasAlbumSearch
+        ? provider.searchAlbums(queryObj)
+        : Promise.reject(new Error("unsupported")),
     ]);
+
+    if (unifiedSettled.status === "fulfilled") {
+      const unifiedResult = unifiedSettled.value;
+      if (unifiedResult.ok && unifiedResult.result.succeeded) {
+        // One catalog may fail while others succeed: the unified set stays
+        // intact and the UI notes results may be incomplete (never raw
+        // provider errors).
+        tracks = unifiedResult.result.tracks.map(identityToTrack);
+        tracksPartial = unifiedResult.result.partial;
+      } else {
+        tracksError = unifiedResult.ok
+          ? t("search.unavailableDescription")
+          : unifiedResult.error;
+      }
+    } else {
+      tracksError = t("search.unavailableDescription");
+    }
 
     if (artistsResult.status === "fulfilled") {
       artists = artistsResult.value.items;

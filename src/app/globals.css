@@ -1629,18 +1629,18 @@ body {
   background-image: var(--aurora-gradient);
 }
 
-/* Now-playing equalizer: tiny GPU-friendly bars, paused under reduced motion. */
-.eq-bar {
+/* Now-playing bars: tiny GPU-friendly bars, paused under reduced motion. */
+.playing-bar {
   height: 40%;
-  animation: aurora-eq 0.9s var(--p-ease-standard) infinite alternate;
+  animation: aurora-playing-bars 0.9s var(--p-ease-standard) infinite alternate;
 }
-.eq-bar-2 {
+.playing-bar-2 {
   animation-delay: 0.25s;
 }
-.eq-bar-3 {
+.playing-bar-3 {
   animation-delay: 0.5s;
 }
-@keyframes aurora-eq {
+@keyframes aurora-playing-bars {
   from {
     height: 25%;
   }
@@ -1649,7 +1649,7 @@ body {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .eq-bar {
+  .playing-bar {
     animation: none;
     height: 60%;
   }
@@ -2087,11 +2087,11 @@ body {
 
    `Button` in `ui/button.tsx` has carried `select-none` since the selection
    block was written, and every control built from that primitive behaved
-   accordingly. The roughly one hundred buttons that do NOT use it - the EQ
-   preset and toggle switches, the appearance radios, the header's locale
-   trigger, the queue's reorder items - were left selectable by accident rather
-   than by decision, so the same pill-shaped control was unselectable in one
-   surface and selectable in the next.
+   accordingly. The roughly one hundred buttons that do NOT use it - the
+   appearance radio toggles, the header's locale trigger, the queue's reorder
+   items - were left selectable by accident rather than by decision, so the same
+   pill-shaped control was unselectable in one surface and selectable in the
+   next.
 
    This is a `button` rule, not a `*` rule, and that distinction is the whole
    argument. A button's label is part of the control: it is a command, and the
@@ -2146,8 +2146,8 @@ body {
 
    Checkbox and radio are here for the same reason a button is, and they are
    worth naming because they were the one case this block could have missed:
-   the EQ preset list and the appearance toggles render a NATIVE, visible
-   `accent`-coloured box inside a `<label>`, so the user aims at that box as
+   the appearance toggles render a NATIVE, visible `accent`-coloured box inside
+   a `<label>`, so the user aims at that box as
    often as at the label, and the browser gives it the default arrow. Pointing
    at the label is not enough when the label is most of the row.
 

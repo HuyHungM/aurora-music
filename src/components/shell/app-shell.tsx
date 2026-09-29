@@ -8,9 +8,6 @@ import { getT } from "@/lib/i18n/translate";
 import { getRequestAppearance } from "@/lib/appearance/server";
 import { INSTALL_DISMISS_COOKIE } from "@/lib/pwa/install";
 import { AppearanceRoot } from "@/components/appearance/appearance-root";
-import { AudioGraphBridge } from "@/components/audio/audio-graph-bridge";
-import { EQPersistenceRoot } from "@/components/audio/eq-persistence-root";
-import { getRequestEQ } from "@/lib/audio/eq-server";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
 import { NavList } from "./nav-item";
@@ -65,13 +62,6 @@ export async function AppShell({
   // `getRequestAppearance` never throws - every step of it is defensive -
   // so a failed read costs the default theme and nothing more.
   const appearance = await getRequestAppearance();
-  // The equalizer preference, same three reasons and same never-throws contract.
-  // It is NOT the same element, though, and the difference matters: appearance
-  // has to be on the shell root because the custom properties are written
-  // there, whereas the EQ only has to be PERSISTED from the shell. Putting it
-  // here is what makes addendum §39 true - the preference is saved whether or not
-  // anybody ever visits Settings, and whether or not the player is on screen.
-  const eq = await getRequestEQ();
 
   return (
     // `AppearanceRoot` replaces this div. It keeps the same layout classes and
@@ -81,15 +71,6 @@ export async function AppShell({
     // margins. `body` still paints the same colour underneath, which covers
     // the pre-hydration frame and anything outside the shell.
     <AppearanceRoot initial={appearance} authenticated={user !== null}>
-      {/*
-        The equalizer's persistence, and its registration with the audio graph.
-        Both are here for the same reason: neither may depend on a component
-        being mounted. Registering the element is what lets the graph find the
-        ONE audio element, and it is a registration rather than a creation
-        precisely because `getDefaultEngine()` already guarantees one.
-      */}
-      <AudioGraphBridge />
-      <EQPersistenceRoot initial={eq} authenticated={user !== null} />
       <InstallProvider initiallyDismissed={installDismissed}>
         <LikedTracksProvider
           initialLiked={initialLiked}

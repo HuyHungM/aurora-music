@@ -3,7 +3,6 @@ import { getRequestLocale } from "@/lib/i18n/server";
 import { getT } from "@/lib/i18n/translate";
 import { getSessionUserId } from "@/lib/dal/session";
 import { AppearancePanel } from "@/components/appearance/appearance-panel";
-import { EqPanel } from "@/components/audio/eq-panel";
 import { LocaleSwitcher } from "@/components/i18n/locale-switcher";
 
 /**
@@ -29,23 +28,10 @@ import { LocaleSwitcher } from "@/components/i18n/locale-switcher";
  * moved. What the server does contribute is the account, so the page can say
  * honestly where a signed-in visitor's choice is stored.
  *
- * NO PLAYBACK REACH - WITH ONE EXCEPTION, ADDED IN PHASE 53's ADDENDUM AND
- * STATED HERE RATHER THAN LEFT LYING IN A DOCSTRING. This file still imports no
- * engine, no queue module and no playback module, and rendering the page is
- * still incapable of interrupting playback. But `EqPanel` reads and writes the
- * EQ store, and the store pushes parameters at an audio graph, so the audio path
- * is now genuinely reachable from a control on this page. That is the point of
- * the feature and it is the only way an equalizer can work, so the honest
- * statement is narrower than the old one rather than being quietly abandoned.
- *
- * What the narrow statement GUARANTEES is what §31 and §32 actually need: the
- * reach is ONE WAY and it is to the EQ alone. Nothing on this page can start,
- * pause, skip, reseek or replace a track, no control here reads or writes the
- * queue, and the graph is attached to the existing element rather than owning
- * playback. `eq-store.ts` has no import from any playback module, and a quality
- * gate asserts that - so a track change, a queue transition, a radio seed and a
- * resolver retry all travel paths that cannot reach EQ state and therefore
- * cannot reset it.
+ * NO PLAYBACK REACH. This file imports no engine, no queue module and no
+ * playback module, and rendering the page is incapable of interrupting
+ * playback: nothing here can start, pause, skip, reseek or replace a track,
+ * and no control here reads or writes the queue.
  */
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getRequestLocale();
@@ -79,21 +65,6 @@ export default async function SettingsPage() {
           {t("settings.appearance")}
         </h2>
         <AppearancePanel />
-      </section>
-
-      <hr className="border-t border-border-subtle" />
-
-      {/*
-        Audio (§36). Between Appearance and Language, because the reading order
-        of a settings page should be "how it looks, how it sounds, what language
-        it is in" - visual, then audible, then textual - and because an equalizer
-        most people will never open belongs below the two things most people will.
-      */}
-      <section aria-labelledby="settings-audio" className="flex flex-col gap-4">
-        <h2 id="settings-audio" className="t-section-title text-text-primary">
-          {t("eq.section")}
-        </h2>
-        <EqPanel />
       </section>
 
       <hr className="border-t border-border-subtle" />

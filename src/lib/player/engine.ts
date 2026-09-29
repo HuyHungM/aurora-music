@@ -119,36 +119,6 @@ export class PlayerEngine {
     return this.generation;
   }
 
-  /**
-   * The underlying element, but only if it really is one (Phase 53 addendum).
-   *
-   * The equalizer needs a `MediaElementAudioSourceNode`, and the only element
-   * it is allowed to use is this one. It is exposed through a narrow read-only
-   * accessor rather than by widening `AudioSurface` or handing the surface out,
-   * for two reasons.
-   *
-   * First, the return type is `HTMLAudioElement | null` rather than
-   * `AudioSurface`. The surface is an interface precisely so tests can inject
-   * `fake-audio.ts`; a test double is not an `HTMLAudioElement` and cannot be
-   * connected to Web Audio, so the honest answer for a doubled surface is
-   * `null` - which the equalizer treats as "unsupported" and leaves playback
-   * alone. Returning the surface and letting each caller check would push that
-   * decision into every caller.
-   *
-   * Second, this is the ONLY way out of the engine. Nothing in the engine knows
-   * the equalizer exists, no playback code path reads EQ state, and there is no
-   * second element: `getDefaultEngine()` already guarantees one. A track change,
-   * a queue transition or a resolver retry goes through `load()`, which swaps
-   * `src` on this same element, so the graph the EQ attached to is unaffected
-   * and the EQ cannot be reset by playback.
-   */
-  get mediaElement(): HTMLAudioElement | null {
-    if (typeof HTMLAudioElement === "undefined") {
-      return null;
-    }
-    return this.surface instanceof HTMLAudioElement ? this.surface : null;
-  }
-
   /** Current element time/duration snapshot (for seek and progress rendering). */
   snapshot(): { currentTime: number; duration: number } {
     return {

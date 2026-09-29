@@ -7,6 +7,7 @@ import type { UnifiedSearchDiagnostics } from "@/lib/music/unified-search";
 import { createUnifiedSearch } from "@/lib/music/unified-search";
 import { searchQuerySchema } from "@/lib/validation/schemas";
 import { guardServerAction, type GuardFailure } from "@/lib/api/action-guard";
+import { logger } from "@/lib/diagnostics/logger";
 
 export interface UnifiedSearchPayload {
   query: string;
@@ -57,7 +58,18 @@ export async function searchUnifiedTracksAction(
   }
   try {
     const search = createUnifiedSearch(extractorManager);
+    const startedAt = Date.now();
     const result = await search.search(parsed.data.query, { limit: SEARCH_LIMIT });
+    // Development/diagnostic timing. Deliberately never logs the query text:
+    // counts and duration only.
+    logger.debug("Unified search completed", {
+      event: "search_unified_completed",
+      durationMs: Date.now() - startedAt,
+      providers: result.providers.length,
+      groups: result.tracks.length,
+      succeeded: result.succeeded,
+      partial: result.partial,
+    });
     return {
       ok: true,
       result: {

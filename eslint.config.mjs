@@ -13,6 +13,12 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "src/generated/**",
+    // Legacy Cloudflare/OpenNext/vinext build output (see .gitignore). These
+    // directories hold generated bundles, not source, and are untracked; lint
+    // must never scan them.
+    ".wrangler/**",
+    "dist/**",
+    ".vinext/**",
     // Local QA scaffolding (see .gitignore); scratch probes, not product code.
     ".qa/**",
     ".qa-*.mts",

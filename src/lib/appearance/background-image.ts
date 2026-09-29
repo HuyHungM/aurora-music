@@ -2,7 +2,7 @@
  * Background image validation (Phase 53, §7, §8, §13, §49, §74).
  *
  * A user-supplied address is untrusted input that ends up in a stylesheet and
- * in a cookie, so it is checked four ways before it is ever accepted:
+ * in a cookie, so it is checked up to four ways before it is ever accepted:
  *
  *   1. SYNTACTICALLY, with no network at all. Scheme, length, embedded
  *      credentials. This is the only check that can run on the server, and it
@@ -18,12 +18,18 @@
  *      and discovered later as an invisible background.
  *
  * CANDOUR ABOUT CHECK 2. Reading bytes requires CORS, and most image hosts do
- * not send it. So the byte sniff runs when the host cooperates and is skipped
- * when it does not - and in that case the format verdict comes from the
- * browser having decoded the image at all, which is a weaker signal and is
- * recorded as such. `info.format` and `info.bytes` are `null` in that case
- * rather than being guessed, so nothing downstream can claim a check that did
- * not happen. See `ARCHITECTURE.md` §20.2.
+ * not send it. So the byte sniff runs when the caller supplies a `fetch` and
+ * the host cooperates, and is skipped when it does not - and in that case the
+ * format verdict comes from the browser having decoded the image at all, which
+ * is a weaker signal and is recorded as such. `info.format` and `info.bytes`
+ * are `null` in that case rather than being guessed, so nothing downstream can
+ * claim a check that did not happen. See `ARCHITECTURE.md` §20.2.
+ *
+ * The shipped panel does NOT supply a `fetch`: the application's CSP pins
+ * `connect-src` to 'self', so a cross-origin fetch of a user-supplied address
+ * could only be blocked and logged as a console violation. It always takes the
+ * decode route. The fetch capability remains for callers whose CSP allows the
+ * read.
  *
  * Like `pwa/platform.ts`, this module is pure and takes its browser
  * dependencies as arguments, so every branch below is reachable from a test

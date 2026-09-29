@@ -196,6 +196,13 @@ TrackIdentity → PlaybackController → PlaybackResolver → AudioSource
 - Generations: every load claims a monotonic generation; stale results are
   inert (ignored, not aborted). Pause/next/stop win by flag or superseding
   generation.
+- Resolution economy: identical identities resolved **concurrently** coalesce
+  onto one in-flight promise, keyed `provider:id` (`resolveIdentity`); and
+  re-loading the **same** identity while its active source is still unexpired
+  and not suppressed reinstalls that source without a network call
+  (`loadReusingSource`). Both are economy on a live result, never a cache:
+  an expired source or a post-exhaustion suppression record forces a fresh
+  resolve.
 - Recovery execution: one cycle per generation, same stable identity, bounded
   attempts with backoff, reload at saved position (latest seek wins),
   pause-wins-on-intent, suppression after exhaustion.
@@ -220,7 +227,8 @@ identity / source → provider resolution → source validation → AudioSource
   validates the ID, rejects private/upcoming/live/mismatched responses with
   staged `PlaybackResolutionError(resolve | stream)`.
 - Temporary URLs are memory-only; expiry is checked before handoff
-  (`isAudioSourceExpired`); re-resolution is the recovery path, never reuse.
+  (`isAudioSourceExpired`). The resolver itself never caches or reuses; the
+  PlaybackController may reuse its own still-fresh same-identity source (§6).
 
 ## 8. YouTube playback adapter
 
@@ -493,6 +501,16 @@ classifySearchInput(value)
   readable resource, and a foreign host all classify as `unsupported-url`;
   non-`http(s)` schemes (`javascript:`, `data:`) are prose, not links, and
   classify as `query`.
+- **Submit-driven, not type-ahead.** The field owns transient typing state
+  only; a request begins on submit (`router.push`), never per keystroke. That
+  keeps a search from spending provider quota per prefix, from writing a
+  search-history row per prefix, and from interrupting playback on every
+  character. Repeated identical queries are collapsed server-side by the
+  provider L1/L2 cache, not by a client debounce.
+- **The page fans out.** `/search` runs the unified track search, the artist
+  search and the album search **concurrently** (`Promise.allSettled`), so a
+  request waits for the slowest of the three rather than their sum. Result
+  semantics are per-branch identical to the previous sequential version.
 - **`?q=` is validated as a URL first.** The search page classifies before
   `searchQuerySchema`, whose 200-character prose cap would otherwise reject
   a long playlist URL with a schema error. Unsupported links render
@@ -1175,7 +1193,7 @@ Rules the file depends on, each of them load-bearing rather than stylistic:
   its two call sites rendered with no gradient, with no build error.
 - **Motion is tokens plus two reduced-motion layers.** Durations and
   easings are primitives; decorative motion (press compression, hover lift,
-  equalizer) is declared *inside* a `prefers-reduced-motion: no-preference`
+  the now-playing bars) is declared *inside* a `prefers-reduced-motion: no-preference`
   block so it is never parsed into the cascade when unwanted. A blanket
   `prefers-reduced-motion: reduce` net is retained for transitions declared
   anywhere else, including by dependencies. The net may only shorten motion:
@@ -2028,16 +2046,23 @@ choice, so the reset would visibly undo itself on the next request.
 
 ### 32.8 Background image validation
 
-Four stages, in order, and each one is a rejection reason rather than a crash:
-syntax (https only, no credentials, length), transfer size and format sniffed
-from **magic bytes** rather than from the extension or the `Content-Type`, a real
-`decode()`, and then dimensions. The byte cap is 4 MiB and the pixel cap is
-16 MP — 8 MP refused a 4K 3840×2160 image, which is an ordinary photograph.
+Three stages reach the shipped panel, in order, and each one is a rejection
+reason rather than a crash: syntax (https only, no credentials, length), a real
+`decode()`, and then dimensions. The pixel cap is 16 MP — 8 MP refused a
+4K 3840×2160 image, which is an ordinary photograph. The validator can also
+sniff the transfer size and format from **magic bytes**, but the application
+never exercises that: CSP pins `connect-src` to 'self', so the cross-origin
+`fetch` it needs is blocked by the browser and would only log a console
+violation, and the panel does not pass one. The capability stays importable for
+callers whose CSP permits the read, and the 4 MiB byte cap applies only on that
+route.
 
-A host that will not cooperate over CORS is **not** a rejection: the image is
-loaded through an `HTMLImageElement` and `decode()`d instead, which needs no CORS
-because nothing is read back out of it. Refusing there would reject a large
-number of ordinary image hosts for a reason the user cannot act on.
+Because the shipped validation never fetches, every host — cooperative or not —
+takes the same route: the image is loaded through an `HTMLImageElement` and
+`decode()`d, which needs no CORS because nothing is read back out of it. That is
+also why a host that sends no `Access-Control-Allow-Origin` is **not** a
+rejection: refusing there would reject a large number of ordinary image hosts
+for a reason the user cannot act on.
 
 Nothing is stored that has not been checked, and the value stored is the
 **trimmed address that was validated**, not the raw text that was typed. Custom
@@ -2140,466 +2165,6 @@ the property is asserted.
   `#8d5bed`'s relative luminance is 0.1902, so 4.5:1 would need a foreground
   luminance of 1.0309 and white is 1.0. Darkening `--accent` is a brand-colour
   decision, so it is recorded here rather than made in an audit pass.
-
-## 33. Aurora V-Shape and the equalizer (Phase 53 addendum)
-
-### 33.1 What changed in the audio path
-
-Before this phase Aurora had **no Web Audio at all**. `PlayerEngine` owns one
-`AudioSurface`, created as `new Audio()` in `engine-factory.ts`, and the element's
-output went straight to the speakers. The pipeline the addendum describes —
-`HTMLMediaElement → AudioContext/DSP → EQ → preamp → destination` — was being
-*built*, not extended. The addendum's §6 asks to "resolve the previous +3 dB vs
-−3/−3.5 dB inconsistency"; there was no prior EQ for that to refer to, and the
-figure is now fixed in `eq.ts` with a test that fails if it moves.
-
-The graph is:
-
-```
-HTMLAudioElement  (the engine's, created in engine-factory.ts)
-      │  createMediaElementSource          ← the one-way door, taken LAST
-      ▼
-  BiquadFilter  31 Hz   ─┐
-  BiquadFilter  62 Hz    │
-  BiquadFilter  125 Hz   │
-  BiquadFilter  250 Hz   │
-  BiquadFilter  500 Hz   ├─ ten peaking filters, Q 1.41, chained in series
-  BiquadFilter  1 kHz    │
-  BiquadFilter  2 kHz    │
-  BiquadFilter  4 kHz    │
-  BiquadFilter  8 kHz    │
-  BiquadFilter  16 kHz  ─┘
-      ▼
-  GainNode  (preamp / headroom)
-      ▼
-  AudioContext.destination
-```
-
-### 33.2 The one-way door, and the order it dictates
-
-`createMediaElementSource()` **permanently re-homes** the element's output. There
-is no API to reverse it: once the element is routed through a
-`MediaElementAudioSourceNode`, it no longer reaches the speakers on its own.
-Tearing the graph down therefore does not restore direct playback — it produces
-**silence**.
-
-That single fact dictates the whole order of operations, and every failure mode
-below it is a non-event by construction:
-
-1. resolve the element, and decline `no-element` if there is none
-2. **require a user activation**, or defer (`isAwaitingGesture`) — nothing below
-   can run without a started context, and deferring here allocates no context
-3. **ask whether Web Audio may read this source at all** — `sourceVerdict`, with
-   no source and an unreported CORS check both *deferring* and an unreadable
-   source *declining* as `cors-tainted` (§33.8)
-4. create the `AudioContext`
-5. create the ten filters and chain them
-6. create the preamp gain and wire it to `destination`
-7. wire the last filter into the preamp
-8. **only now** call `createMediaElementSource(element)`
-
-Every failure at steps 1–7 leaves the element playing directly and untouched,
-which is the entirety of §33's "fail gracefully and keep audio playback
-functional". If step 8 itself throws, the element is not re-homed — that is what
-throwing means — and the inert chain is discarded. **There is no ordering in
-which this module can leave a listener with no sound.** Step 8 *completing* on a
-source the browser will not let Web Audio read is a different matter — not an
-ordering failure but a delivery one — and that is what step 3 exists to refuse
-before the door is taken, and §33.8 measures for the case where the source
-arrives later.
-
-**Step 3 is before the context on purpose.** A source that cannot be used then
-costs one string comparison instead of a `AudioContext`, a monotonic clock, ten
-biquads and a gain node, all discarded. The audible cost of a decline is a
-notice; the cost of finding out afterwards is that the element has already been
-re-homed, and nothing in this feature can undo that.
-
-**The gate in front of step 5, added after the first implementation of this
-module shipped with the promise broken.** Steps 1–4 were never the risky part.
-Step 5 was, because it was preceded by `await context.resume().catch(() =>
-undefined)` — an unconditional commitment of the one-way door, whether or not
-the browser had actually started the context. `resume()` does not fail
-uniformly without a user activation: Safari rejects with `NotAllowedError`,
-Chromium keeps the promise pending until a gesture. Both are swallowed
-identically by a `.catch`, and re-homing an element into a context that never
-started is **permanent silence**, because nothing in this feature ever calls
-`resume()` a second time.
-
-`engage()` is therefore split into an orchestrator and a `build()` that obeys
-three rules:
-
-- **Bounded resume.** `resume()` is awaited under `EQ_RESUME_TIMEOUT_MS`
-  (1 s). The successful case resolves in a microtask, so the bound never
-  delays an engagement that was going to work; it only caps the case where the
-  browser is saying "not yet". Without it `engage()` could sit in flight
-  indefinitely, and the store — which pushes on every change — would start a
-  second engagement alongside it.
-- **Re-home only on `context.state === "running"`.** Otherwise the inert chain
-  is discarded, the context is closed, the element is never touched, and the
-  attempt is *deferred* rather than failed: `isAwaitingGesture` becomes true
-  and the next pointer/key/touch gesture re-runs it. A suspended context at
-  page load is an ordinary lifecycle state, so it sets no `unsupportedReason`.
-- **One engagement at a time.** `inflight` serialises concurrent `build()`s.
-  A burst of configuration changes produces one context and one ten-filter
-  chain; previously the loser of that race called `createMediaElementSource`
-  second, threw `InvalidStateError`, and recorded a permanent `no-source`
-  failure for a perfectly healthy graph.
-
-`AudioGraphBridge` resolves the element through a registration rather than
-creating it. `getElement()` returning `null` is a *supported answer* — server
-render, a test-double surface, a browser with no Web Audio — and needs no special
-handling because it is the same shape as "this browser cannot process audio".
-
-### 33.3 Bypass is unity, never a disconnect
-
-The corollary of 33.2. Turning the EQ off sets every band to 0 dB and the preamp
-to 0 dB **and leaves the graph in place**. Disconnecting would be silence, not a
-bypass. `effectiveGraphState()` returns all-zero bands and a 0 dB preamp when
-disabled, and `bypass()` applies that through the normal parameter path — ten
-`linearRampToValueAtTime` writes and one preamp write, on the nodes that are
-already running. It never closes the context, never disconnects the source and
-never recreates anything, so leaving bypass and returning costs nothing.
-
-`dispose()` exists and is **test-only**. `PlayerEngine.cleanup()` remains what
-stops audio.
-
-### 33.4 One authority, one direction
-
-```
-  UI surfaces ──▶ eq-store.ts ──▶ eq-graph.ts ──▶ Web Audio
-  (Settings, player, any popup)        │
-                                        │ getEqElementResolver() ──▶ engine
-                                        ▼
-                              one HTMLAudioElement
-```
-
-- `eq.ts` is the single authority for the curve, the ranges, the presets, the
-  headroom arithmetic and the wire format. It is pure and framework-free.
-- `eq-store.ts` is the one canonical state (§42), reachable from non-React code.
-  No surface holds a copy; `use-eq.ts` reads it through `useSyncExternalStore`.
-- The engine knows **nothing** about the equalizer. It exposes exactly one
-  addition: `mediaElement`, a read-only getter returning
-  `HTMLAudioElement | null` — `null` when the surface is a test double, because
-  a double is not connectable to Web Audio and pushing that check into every
-  caller would be the wrong place for it.
-- A quality gate asserts the dependency is one-way, that no `eq-*.ts` module
-  imports anything under `lib/player`, `lib/music` or `lib/playback`, and that
-  no playback module imports the EQ. §31/§32 are therefore true by
-  construction, not by review.
-
-A preset change is `graph.apply(state)` — parameter writes to the same ten
-nodes. No node is created, destroyed or reconnected. The context is created
-exactly once however many times `engage()` is called.
-
-### 33.5 Headroom is the transfer function, not `max(band.gain)`
-
-`peakingCoefficients()` (RBJ) produces the numbers handed to `BiquadFilterNode`
-**and** the numbers `magnitudeDb()` evaluates, so the graph and the arithmetic
-cannot disagree. `compositeMaxGainDb()` sums per-filter dB over a 513-point
-logarithmic grid from 20 Hz to 20 kHz, **plus every band centre evaluated
-exactly**.
-
-The exact centre evaluations are load-bearing. A pure log grid does not land on
-31 Hz, and a lone +12 dB band there measures 11.9945 dB on the grid — 0.0055 dB
-*under* its own gain. Inaudible, and still the wrong direction for a function
-whose job is to size headroom: it must never under-report, because everything
-built on it assumes an upper bound. Ten extra evaluations make the guarantee
-real.
-
-**MEASURED, and this is the finding that matters:** Aurora V-Shape's composite
-peak is **+3.8302 dB at ~61.7 Hz**, not the +3.0 dB the table implies. The
-31/62/125 Hz group overlaps (drop 62 → 2.57; drop 31 → 3.38; drop 125 → 3.49).
-The overlap excess is **0.83 dB**, so with the specified −3.5 dB preamp the chain
-peaks at **+0.33 dB** — the addendum's own §6 arithmetic does not bound its own
-shipped curve.
-
-Resolution, and the reason it is a resolution rather than a change:
-
-- `DEFAULT_PREAMP_DB = -3.5` **ships unchanged**. §52 exists precisely to stop
-  this constant being "fixed" back to −3.
-- The measured excess is documented at the constant and asserted in tests, so it
-  cannot drift silently.
-- `autoPreampDb` is composite-aware and returns **−4.3302 dB** for the V-Shape
-  (a true −0.5 dB peak), available as "Auto Headroom" for anyone who wants the
-  conservative figure.
-
-The concrete demonstration that a naive bound is wrong: **two adjacent bands at
-+6 dB peak at 7.19 dB**, so `−(max individual gain)` would under-compensate by
-1.19 dB. That is the argument for computing the real thing.
-
-`headroomSaturated()` reports when the range cannot express the requirement —
-every band at +12 dB needs −18.93 dB against a −12 dB floor. The interface says
-so rather than showing a reassuring clamped number.
-
-**A measured borderline, recorded rather than rounded away:** a lone band at
-+12 dB needs exactly −12.5 dB, which is 0.5 dB past the floor. The floor is not
-widened to chase it; −12 dB is already a quarter of the signal's amplitude, and
-the interface reports saturation instead of quietly protecting less than it says
-it does. The saturation test carries a 1e-9 dB tolerance because a band at
-exactly +11.5 dB evaluates to 11.500000000000037, and a bare comparison against
-the floor would report a curve that *fits* as one that does not.
-
-### 33.6 The curve, and where it came from
-
-`AURORA_V_SHAPE` is a reference-informed musical choice, **not** a measurement of
-any product and **not** Harman's tuning.
-
-**The references actually used, and what each was used for.** They informed the
-*kind of curve to build*; none of them supplied a gain figure.
-
-- **Sean Olive, Todd Welti and Elisabeth McMullin (HARMAN)**, on headphone
-  preference: the finding that listeners in blind tests consistently prefer a
-  bass- and treble-emphasised target over a flat one, and the finding that
-  preference is a *broad* curve rather than a sharp one. Used for the shape
-  (wide low and high emphasis, relaxed mid) and for the confidence that a mild
-  V is a defensible default. Their published tuning data is behind a paywall and
-  concerns a different use case entirely; **no number here comes from it**, and
-  none of it was copied or reverse-engineered.
-- **RTINGS**, on consumer expectations for a "V-shape" vs "flat" EQ in headphones
-  and speakers. Used only as a check that the terminology and the expected
-  direction of each band match what a listener is looking for.
-- **SoundGuys**, on headphone EQ practice. Used for the band-count and
-  centre-frequency conventions a ten-band graphic equalizer is expected to use,
-  which is why the centres are ISO-octave rounded rather than invented.
-
-Forum presets, measurement charts and "target curves" found online were **not**
-treated as authoritative, and the addendum's premise that HARMAN's work *is* a
-V-shape is recorded as a false premise in the conflicts section below. Where the
-addendum gave explicit per-band numbers, those numbers are what shipped — the
-research was not used to override them.
-
-| Band | Gain | Why this band |
-|---|---:|---|
-| 31 Hz | +2.5 | Sub presence without the 20–30 Hz rumble most hardware cannot reproduce |
-| 62 Hz | +3.0 | The bass note most listeners actually feel; the peak of the composite |
-| 125 Hz | +2.0 | Warmth, kept below 62 so the low end stays a shape and not a wall |
-| 250 Hz | +0.5 | Just enough to keep the bass from sounding boxy |
-| 500 Hz | −0.5 | First cut — the boxy/nasal region |
-| 1 kHz | −1.0 | The deepest cut, so vocals sit forward |
-| 2 kHz | −0.5 | Easing off the cut so presence returns |
-| 4 kHz | +0.5 | Back to neutral; articulation |
-| 8 kHz | +2.0 | The sparkle that makes it sound "open" |
-| 16 kHz | +1.5 | Air, held under 8 kHz so it does not read as hiss |
-
-Design constraints, stated as constraints:
-
-- **Bands are 31 Hz – 16 kHz, not 20 Hz – 20 kHz.** A 20 Hz centre is below
-  consumer reproduction limits — a control that does nothing. A 20 kHz centre is
-  either inaudible or a hiss control. The ten centres above are ISO-octave
-  rounded and each one is a place a listener can hear.
-- **Q = 1.41 uniformly** — the textbook constant-Q octave graphic EQ. A narrower
-  Q (≈2) would reduce band overlap, but at 31 Hz it produces a ~15 Hz bump below
-  most hardware's reproduction limit: optimising for a shape nobody hears.
-- **Flat is all 0 dB with a 0 dB preamp.** No stale V-Shape headroom.
-
-### 33.7 Persistence: two sinks, one document
-
-Same architecture as the appearance preference, reused rather than reinvented:
-
-```
-encodeEQ(config) ──▶ "aurora-eq" cookie      (immediate, always)
-                └─▶ User.audioEq JSONB      (debounced, when signed in)
-```
-
-- A **column, not a table.** A second table is a second preference *system* —
-  a second schema to migrate, a second write that can fail, a second thing to
-  back up — and §40 rules that out. A second *column* on the existing table,
-  through the same DAL/action/cookie shape, is a second preference, which is
-  what this is.
-- **A column, not a key inside `appearance`.** `Appearance` is a closed, typed,
-  per-control shape with its own ranges, decoder and wire format. An audio key
-  inside it would make it a bag of unrelated settings, break its per-field
-  repair, and mean a glass edit could clobber a curve. Two domains, two
-  documents, one table.
-- The value is the **compact encoding**: every field equal to the default is
-  omitted, so a listener who has not opened the equalizer is worth `{"v":1}` —
-  eleven bytes. A fully hand-edited ten-band curve measures **221 bytes**.
-- `EQWire` is a **type, not a runtime schema** — the same reasoning as
-  `AppearanceWire`; zod once cost 88 KiB of gzip in this codebase. `decodeEQ`
-  is total and per-field, with only `v` as a hard gate.
-- The decoder **hardens the node count**: a stored band at an unknown frequency
-  is *dropped, not added* — a cookie must not decide how many filters exist. A
-  stored `flat` carrying stray gains is a contradiction and the preset wins.
-- **No reset action**, and that is a decision. `setEQAction` already writes the
-  default document to both sinks, and a dedicated reset action would be a second
-  write path for one effect, with a second opportunity for the two to disagree
-  about what the default is.
-- **§39 separation is enforced, not promised.** A quality gate fails the build if
-  any session/snapshot file mentions `audioEq`, `eqPreset`, `preamp` or
-  `AURORA_V_SHAPE`, and another fails it if the playback snapshot names an EQ
-  field. The equalizer is a device preference; a queue position is not; and
-  "clear my playback session" must not clear the curve.
-
-### 33.8 Degradation, and what is NOT covered
-
-`EqGraph.engage()` returns `false` — a **supported outcome**, not an error — for
-`no-element`, `no-web-audio` and `cors-tainted`. In every case playback continues
-untouched and the interface says the equalizer is unavailable *in the same breath
-as the failure*, because a notice reporting only the problem reads as "music is
-broken".
-
-`cors-tainted` gets its own notice text (`eq.unsupportedSource`) rather than
-sharing `eq.unsupported`. The two reasons are not the same kind of fact:
-`no-web-audio` is about the listener's browser, and "this browser cannot process
-audio" is an answer to a question nobody asked when the real cause is the
-provider's stream.
-
-Two **deferrals** are deliberately not in that list, because neither is a
-failure and reporting either as one would put an error notice in front of a
-listener whose equalizer is healthy:
-
-- `isAwaitingGesture` — "the browser wants a gesture first, the graph is fine,
-  and it will retry by itself".
-- `isAwaitingSource` — "there is nothing to re-home yet, or the element's CORS
-  check has not reported, and the graph is listening for the event that answers
-  it". This is the ordinary state of a listener who switches the equalizer on
-  before pressing play.
-
-`eq-store.push()` maps both to `unsupportedReason: null`.
-
-Parameter changes are smoothed: `cancelScheduledValues` →
-`setValueAtTime(current)` → `linearRampToValueAtTime(target, now + 0.03)`. The
-anchor is not optional: a ramp with no anchor ramps from whatever the last event
-left, which on a fresh gain is 0 — an audible full-scale jump on the first drag.
-The same treatment is applied to frequency and to Q, because a filter whose
-centre jumps while its gain is already changing produces an artefact that
-smoothing only one of the two does not fix.
-
-`sanitizeGraphState(state, fresh)` guards what reaches those ramps, and it is
-**one rule per situation rather than one rule for all of them**:
-
-- **On apply, non-finite gain/frequency/Q is rejected, not rewritten.** It is
-  passed through so `ramp()` drops it before it can reach an `AudioParam`, and
-  the parameter keeps the number already in the graph — the last known good
-  value. Nothing is scheduled, so nothing moves to a curve the listener never
-  asked for.
-- **On a fresh build, non-finite frequency/Q is replaced** with the canonical
-  centre and `EQ_BAND_Q`. There is no "already in the graph" to keep at that
-  point, and a node's own defaults are 350 Hz / Q 1 — neither is one of
-  Aurora's bands.
-- **Finite values are clamped** to the model's own ranges: band gain
-  −12…+12 dB, preamp −12…0 dB. **Non-finite preamp becomes 0 dB** (unity),
-  which is the model's own `dbToLinearSafe` answer: a preamp nobody can describe
-  must neither amplify nor attenuate.
-
-Anything it had to touch is reported once as `eq_parameter_sanitized`.
-
-**The silence, measured, and the gate that now stands in front of it.** The
-stream URLs are cross-origin googlevideo and the element carries no
-`crossOrigin`. Per specification a `MediaElementAudioSourceNode` over such a
-resource outputs **zeroes**, and on 2026-09-26 that was confirmed end to end in
-a real Chromium against a real provider stream. The element was healthy —
-`paused: false`, `readyState: 4`, `currentTime` advancing, `volume: 1`,
-`muted: false`, `AudioContext.state: "running"`, all ten filters `peaking` at
-exactly the configured gains, preamp at the right linear value — while an
-analyser tapped at the source node and at the preamp both read **exactly 0**.
-Chrome named the cause: *"MediaElementAudioSource outputs zeroes due to CORS
-access restrictions."*
-
-**The curve was never the cause.** Injecting 0.05 DC at the first filter and
-reading the preamp returned the configured attenuation of it, so the chain, the
-biquads and the headroom were all provably correct. Flat was equally silent, and
-so was V-Shape → Bypass → V-Shape, because Bypass leaves the door open. What
-made the music stop was *engaging the graph at all* on an unreadable source.
-
-The obvious fix was tested rather than assumed, and it does not work: setting
-`element.crossOrigin = "anonymous"` and reloading makes the browser log *"No
-'Access-Control-Allow-Origin' header is present on the requested resource"* and
-the element fail outright with `MEDIA_ERR_SRC_NOT_SUPPORTED` (errorCode 4) —
-**strictly worse than the silence.** The attribute cannot be set here; it
-belongs to whoever owns media delivery.
-
-**So the graph answers the question before it takes the door, and the answer is
-local.** `sourceVerdict(url, element, origin)` in `eq-graph.ts` returns one of
-three values, and the third is the reason it is not a boolean:
-
-| verdict | when | what the graph does |
-| --- | --- | --- |
-| `readable` | same-origin; or `blob:`/`data:`; or a cross-origin source whose element set `crossOrigin` and has loaded (`readyState > 0`, no `error`) | engages |
-| `unreadable` | cross-origin with no CORS opt-in; or a failed check; or an unparseable URL | `decline("cors-tainted")` — the element is never touched |
-| `not-yet` | opted in, but the check has neither passed nor failed | defers, and listens for the event that reports |
-
-**It asks the network nothing.** An earlier version issued its own ranged,
-`mode: "cors"` `fetch()` and read the verdict from whether it resolved. That was
-measuring the wrong thing, and the test suite caught it rather than review:
-Aurora's CSP is `connect-src 'self' ws: wss:`, so the probe's own request was
-blocked **by the page's policy** before it left the browser — a `TypeError`
-indistinguishable from a CORS refusal, which would have declined the equalizer
-for sources Web Audio could read perfectly well. A probe that inherits the app's
-policy is not a measurement of the media. `eq-graph.test.ts` now stubs `fetch`
-to throw and asserts the gate still decides correctly, so this cannot return.
-
-**Consequence, stated plainly.** On this media delivery path the equalizer
-**declines**, the listener is told the *stream* is the problem rather than their
-browser, and their music plays. The same code engages — and is measurably
-audible — the moment media delivery is something Web Audio may read. That
-capability is a media-delivery change wearing an equalizer costume and is
-recorded in `docs/scope-boundaries.md` as deliberately not built here.
-
-**The limit of the gate, stated rather than hidden.** The verdict is asked before
-the door, so it is asked about the source the element has *at that moment*. A
-later `src` cannot be refused, only noticed: `onSourceChange` subscribes to
-`loadstart`/`emptied`/`loadedmetadata`/`canplay`/`error`, and a source that
-arrives unreadable is **reported** (`eq_source_unreadable_after_engage`, surfaced
-as the same stream notice) and never torn down — a teardown would leave the
-element re-homed into a closed context, which is the same silence with less
-information. This is unreachable while no Aurora source is CORS-readable; it is
-documented so that it is not a surprise if media delivery ever changes.
-
-### 33.9 The mode model, one atomic apply, latest-wins
-
-**The four modes are `flat`, `aurora-v`, `custom` and `bypass`** — the model's
-own names. `bypass` is **derived, never stored**: `effectiveMode(config,
-comparing)` returns `"bypass"` whenever the equalizer is off or the
-hold-to-compare control is held, and otherwise `config.presetId`. It is the one
-place the rule *"off means neutral"* is written down, which is why `enabled` and
-`bypass` cannot disagree: there is no `bypass` flag to contradict `enabled`,
-because it is computed from `enabled` at the moment it is asked for.
-
-**Mode is separate from parameters.** A mode names a *policy* for choosing bands
-and preamp — Flat → every band 0 dB and a 0 dB preamp (no stale V-Shape
-headroom); V-Shape → the shipped ten-band curve under the declared −3.5 dB
-preamp; Custom → the listener's edited bands under automatic headroom — and
-bands/preamp are the parameters that policy resolves to. `effectiveGraphState()`
-performs the resolution, `graph.apply(state)` performs **one atomic write** of
-the result, and `push()` is the only bridge between them. Custom is independent
-of the presets: Custom → V-Shape → Custom restores the edited curve rather than
-the preset's.
-
-**What a mode change is forbidden to do** — pause, stop, reset position,
-recreate the media element, replace an `AudioSource`, trigger a resolver
-request, reload a track, clear the queue, recreate the controller or recreate
-the `AudioContext` — is guaranteed structurally rather than by review: `apply()`
-has no path that constructs a node and no path that touches the element, and the
-only constructor in the module is `build()`, which runs once per engagement. A
-preset change is ten `AudioParam` writes to the nodes that already exist.
-
-**Latest request wins.** `push()` stamps each request with a monotonic
-`pushGeneration` and only the `.then` whose generation is still current writes
-`engaged`/`unsupportedReason` back to the store; `engage()` re-reads `requested`
-after each in-flight build and applies the newest one. A rapid
-Flat → V-Shape → Flat therefore lands on Flat in the graph *and* in the
-interface, and a stale attempt can never stamp an error over a successful one.
-
-**Diagnostics** — one event per transition, one per failure, primitive fields
-only (the logger drops URL-shaped and credential-shaped keys regardless):
-
-| Event | Level | Emitted when |
-|---|---|---|
-| `eq_mode_change_requested` | info | the derived mode changed |
-| `eq_preset_applied` | info | `choosePreset` committed a different curve |
-| `eq_state_applied` | info | a write actually moved the graph |
-| `eq_bypass_changed` | info | the live graph was neutralised |
-| `eq_audio_context_state` | info / warn | engaged, deferred to a gesture, declined |
-| `eq_audio_graph_health` | info | at engagement, and on a mode transition |
-| `eq_parameter_sanitized` | warn | a non-finite or out-of-range value was refused |
-| `eq_transition_error` | warn | a parameter write threw |
-| `eq_state_reverted` | warn | the last-known-good curve was restored |
-
-`eq_audio_graph_health` is deliberately a *transition* check, not a per-frame
-one: `health()` reads `filterCount`, `contextState`, `preampConnected` and
-`awaitingGesture`, and runs where those being wrong would matter — at
-engagement and on a mode change.
 
 ## ARCHITECTURAL INVARIANTS
 
@@ -2782,68 +2347,7 @@ engagement and on a mode change.
     deploy, so a service-worker update is only ever allowed to land between
     documents. This is the same reasoning as invariant 33's presence contract:
     a transient must not interrupt a transient.
-38. **The equalizer is a colouration layer, and it can never take playback down
-    with it.** Aurora has exactly one `AudioContext`, one `HTMLAudioElement` and
-    one `PlayerEngine`; the ten `BiquadFilterNode`s and the preamp `GainNode` are
-    spliced into the path the engine already owned, and the engine knows nothing
-    about them. The load-bearing constraint is that
-    `createMediaElementSource()` is **irreversible** — once the element is routed
-    into a graph it can never reach the speakers on its own — so the graph is
-    fully built and wired to `destination` *before* the element is re-homed, and
-    every failure above that line leaves the element playing directly. There is
-    consequently no ordering in which an equalizer error produces silence:
-    disabling it is **unity gain through the live graph**, never a disconnect,
-    and `EqGraph.dispose()` exists for tests only. A preset or band change writes
-    parameters to the same ten nodes; it never rebuilds, never reconnects and
-    never creates a second context, however many times it is applied. Enforced
-    statically by `src/quality-gates.test.ts` (one `new Audio(`, one
-    `AudioContext` construction site, no `eq-*` import in any playback module,
-    no playback import in any `eq-*` module) and behaviourally by
-    `src/lib/audio/__tests__/eq-graph.test.ts`, which drives a fake
-    `AudioContext` and asserts that a failed engagement never touches the
-    element, and by
-    `src/lib/audio/__tests__/eq-store.test.ts`, which drives the same fake
-    through the store and asserts the whole chain — an action to an `AudioParam`
-    — on one context and one set of ten nodes. The mode model is
-    `flat`/`aurora-v`/`custom`/`bypass`, where `bypass` is derived by
-    `effectiveMode()` from `enabled` and `comparing` rather than stored, so
-    there is no second flag that could contradict `enabled`; `push()` carries a
-    monotonic generation so the latest requested state wins; and `build()` only
-    re-homes the element once `AudioContext.state === "running"`, deferring to
-    the next user gesture otherwise, because re-homing into a context that
-    never started is the one path to permanent silence and it is now closed.
-39. **Headroom is measured from the real transfer function, and saturation is
-    reported rather than hidden.** `peakingCoefficients()` produces the numbers
-    handed to the node *and* the numbers the headroom arithmetic evaluates, so
-    graph and calculation cannot disagree; `compositeMaxGainDb()` sums per-filter
-    dB across a 513-point logarithmic grid **plus every band centre evaluated
-    exactly**, because a grid that misses 31 Hz under-reports a lone +12 dB band
-    by 0.0055 dB and a ceiling that under-reports is worse than no ceiling. It
-    follows that `-(max individual band gain)` is **not** a bound — two adjacent
-    +6 dB bands peak at 7.19 dB, and the shipped Aurora V-Shape peaks at
-    **+3.8302 dB at ~61.7 Hz**, so the specified −3.5 dB preamp leaves +0.33 dB
-    of peak. `DEFAULT_PREAMP_DB` is therefore exactly −3.5 and is frozen by
-    test; the measured overlap is documented at the constant rather than
-    "corrected" out of it, and `autoPreampDb` offers the composite-aware −4.3302
-    dB as "Auto Headroom". When the −12…0 dB range cannot express what a curve
-    needs, the interface says so — a clamped, reassuring number would be a lie
-    about protection that is not being provided.
-40. **Equalizer state is a device preference and playback state is not.** The
-    curve persists to the same two sinks the appearance preference uses — an
-    immediate `aurora-eq` cookie and a debounced nullable `User.audioEq` column
-    — as the compact encoding that omits every field equal to the default. A
-    *column on the existing table* is reuse of the preference architecture; a new
-    table or a key nested inside `appearance` would each be a second preference
-    system, and the latter would break that closed document's per-field repair so
-    a glass edit could clobber a curve. No `AudioSource`, stream URL, provider id,
-    position or queue is ever persisted with it, and no session/snapshot module
-    may mention the equalizer at all. `EQWire` is a type, not a runtime schema,
-    the decoder is total and per-field with `v` as the only hard gate, and a
-    stored band at an unknown frequency is dropped rather than added — a cookie
-    must never decide how many filters exist. Enforced by
-    `src/quality-gates.test.ts` and the reviewed migration allowlist in
-    `src/lib/dal/__tests__/playback-schema.test.ts`.
-41. **The three user collections hold one entry per CANONICAL track, and
+38. **The three user collections hold one entry per CANONICAL track, and
     "canonical" has exactly one definition.** Playlist membership, the active
     queue and Recently Played are the only collections in the product that
     deduplicate, and they deduplicate for the same reason: a listener means
@@ -2892,7 +2396,7 @@ engagement and on a mode change.
     repeat; a user collection that reaches a component holding two entries for
     one song is a bug upstream, and hiding it in a render would leave the
     database wrong while making the symptom disappear.
-42. **An open menu is painted whole, where its trigger is.** Four claims, and
+39. **An open menu is painted whole, where its trigger is.** Four claims, and
     all four are the responsibility of whoever adds a menu: the trigger's own
     `relative` wrapper is the positioning context (no app-root box, no
     `fixed`); no ancestor between the surface and the page carries a clip, so
@@ -2919,46 +2423,6 @@ engagement and on a mode change.
 
 If a future conflict requires a product decision, record it here rather than
 inventing an answer.
-
-### Open — Phase 53 addendum
-
-**1. The addendum's §2 volume/mute instruction contradicts this repository.**
-
-§2 says "do NOT persist volume/mute". `PRODUCT_SPEC.md` §7, this file, and E2E
-Journey 17 all treat volume and mute as **persisted** user preferences, and the
-code does persist them. The addendum is the newer document but not the
-canonical one: `AGENTS.md` names `PRODUCT_SPEC.md` and this file as the sources
-of truth for scope and architecture, and neither was changed to match. Volume
-and mute are therefore **left persisted**, and the discrepancy is reported rather
-than silently resolved. The consequence is worth stating plainly — the addendum
-adds a second *persistable preference* to a page that already had one, so if the
-instruction is ever honoured, `appearance` and `audioEq` need a stated
-relationship at that point.
-
-**2. §6's "resolve the +3 dB vs −3/−3.5 dB inconsistency" refers to nothing that
-exists.** The addendum describes the new curve as reconciling a *previous* EQ
-and a previous preamp decision. Aurora had no equalizer, no `AudioContext`, no
-`BiquadFilterNode` and no preamp of any kind before this phase, so there is no
-prior decision to reconcile and nothing to resolve *with*. §52's instruction not
-to "fix" −3.5 back to −3 is nevertheless satisfied prospectively: −3.5 is
-declared once in `src/lib/audio/eq.ts`, frozen by test, and the reasoning that
-motivated it is recorded in §33.5.
-
-**3. §3's framing of "Harman" as a V-Shape is a false premise, and was not
-adopted.** HARMAN's published work (Sean Olive, Todd Welti, Elisabeth McMullin)
-is concerned with *loudness* matching and headphone/room correction, not with a
-consumer V-shaped listening curve, and the research is behind a paywall. Aurora
-V-Shape is therefore documented as a **reference-informed musical choice** and
-nothing more: no proprietary tuning was consulted, copied, reverse-engineered or
-claimed, and no forum or measurement chart was treated as authoritative. The
-independent sources actually used are listed in §33.6 and in the phase report.
-
-**4. §5's own arithmetic does not bound its own curve.** §5 derives −3.5 dB from
-"+3.0 dB maximum boost", and §33.5 measures the shipped table's composite peak at
-**+3.8302 dB**, so the specified preamp leaves +0.33 dB of peak. This is a
-defect in the specification, not a decision left open: the constant ships
-unchanged at −3.5 as instructed, the excess is documented and asserted, and the
-composite-aware −4.3302 dB is offered as "Auto Headroom". See §33.5.
 
 Resolved during Phase 32 (objective, code-supported):
 

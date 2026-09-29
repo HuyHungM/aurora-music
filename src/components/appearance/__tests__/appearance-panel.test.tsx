@@ -26,9 +26,9 @@
  *      must not discard a background image the user set afterwards, and the
  *      values it does own must all land together.
  *
- * The REAL validator runs here, driven through stubbed `fetch` and `Image`, so
- * the wiring between the form and `validateBackgroundImage` is covered rather
- * than a mock of it. Its own edge cases are in
+ * The REAL validator runs here, driven through a stubbed `Image`, so the wiring
+ * between the form and `validateBackgroundImage` is covered rather than a mock
+ * of it. Its own edge cases are in
  * `src/lib/appearance/__tests__/background-image.test.ts`.
  */
 
@@ -493,36 +493,6 @@ describe("the background URL field", () => {
     expect(fetches).toHaveLength(0);
   });
 
-  it("refuses a file that is too large to be worth loading", async () => {
-    // The byte cap is the one that protects the user from a 400 MB "image".
-    const user = userEvent.setup();
-    renderPanel();
-    fetchImpl = () => pngResponse(5 * 1024 * 1024);
-    await user.type(
-      screen.getByTestId("background-url"),
-      "https://img.test/huge.jpg{Enter}",
-    );
-    expect((await screen.findByTestId("background-error")).textContent).toContain(
-      "4 MB",
-    );
-  });
-
-  it("refuses a file whose real type is not an image", async () => {
-    const user = userEvent.setup();
-    renderPanel();
-    fetchImpl = () =>
-      new Response("<html>not an image</html>", {
-        status: 200,
-        headers: { "content-type": "text/html" },
-      });
-    await user.type(
-      screen.getByTestId("background-url"),
-      "https://img.test/page.html{Enter}",
-    );
-    expect(await screen.findByTestId("background-error")).toBeTruthy();
-    expect(requestedImages).toHaveLength(0);
-  });
-
   it("refuses an image too small to work as a background", async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -558,12 +528,9 @@ describe("the background URL field", () => {
   it("survives a network failure, and says so in a sentence", async () => {
     const user = userEvent.setup();
     renderPanel();
-    // Both routes fail: the CORS request AND the plain image load, which is
-    // what a mistyped host actually looks like.
+    // The image element fails to load, which is what a mistyped host actually
+    // looks like.
     imageStub = { width: 1920, height: 1080, offline: true };
-    fetchImpl = () => {
-      throw new Error("offline");
-    };
     await user.type(
       screen.getByTestId("background-url"),
       "https://img.test/photo.jpg{Enter}",
@@ -579,16 +546,14 @@ describe("the background URL field", () => {
     expect(error.textContent).toContain("connection");
   });
 
-  it("accepts an image from a host that refuses to cooperate over CORS", async () => {
-    // THE FALLBACK WORTH KEEPING. A CDN without
-    // `Access-Control-Allow-Origin` fails the byte-sniffing fetch, but the
-    // browser loads the image perfectly well as an ordinary `<img>`. Refusing
-    // it there would reject a large number of perfectly ordinary image hosts
-    // for a reason the user cannot do anything about and would not understand.
+  it("accepts an image from a host that does not send CORS headers", async () => {
+    // THE ONLY ROUTE. Validation asks the browser to DECODE the address; it
+    // never fetches it into JavaScript, so a CDN that sends no
+    // `Access-Control-Allow-Origin` is treated like any other. The panel must
+    // not reach the network at all, because the application's CSP would block
+    // that fetch and log a console violation.
     const user = userEvent.setup();
     renderPanel();
-    // A CORS failure arrives as an opaque response: no `ok`, no readable body.
-    fetchImpl = () => new Response(null, { status: 0 });
     await user.type(
       screen.getByTestId("background-url"),
       "https://cdn.test/photo.png{Enter}",
@@ -601,9 +566,7 @@ describe("the background URL field", () => {
         ),
       ).toBe("url"),
     );
-    // The size cap could not be enforced on this route, so it is not claimed
-    // to have been - the honest outcome is acceptance on a weaker guarantee.
-    expect(fetches).toHaveLength(1);
+    expect(fetches).toHaveLength(0);
     expect(requestedImages).toEqual(["https://cdn.test/photo.png"]);
   });
 
@@ -634,21 +597,6 @@ describe("the background URL field", () => {
       (screen.getByTestId("background-url") as HTMLInputElement).value,
     ).toBe("");
     expect(screen.queryByTestId("background-error")).toBeNull();
-  });
-
-  it("asks the network for exactly what a background needs", async () => {
-    // No credentials, and CORS - so a private image behind a session cookie is
-    // not sent on the user's behalf, and a CDN that does not allow the read
-    // fails here rather than as a broken background later.
-    const user = userEvent.setup();
-    renderPanel();
-    await user.type(
-      screen.getByTestId("background-url"),
-      "https://img.test/photo.png{Enter}",
-    );
-    await waitFor(() => expect(fetches).toHaveLength(1));
-    expect(fetches[0].mode).toBe("cors");
-    expect(fetches[0].credentials).toBe("omit");
   });
 
   it("clears the error as soon as the address is edited", async () => {

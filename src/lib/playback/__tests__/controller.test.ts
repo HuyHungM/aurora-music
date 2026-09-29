@@ -143,8 +143,8 @@ describe("generation races", () => {
       engine,
       reportError: (error) => errors.push(error),
     });
-    racing.loadTrack(youtubeTrack(), { autoplay: true });
-    racing.loadTrack(youtubeTrack(), { autoplay: true });
+    racing.loadTrack(youtubeTrack("dQw4w9WgXcQ"), { autoplay: true });
+    racing.loadTrack(youtubeTrack("aaaaaaaaaaa"), { autoplay: true });
     expect(releases).toHaveLength(2);
     // Newer resolves first, then the stale one arrives late.
     releases[1]?.({ url: "https://cdn.example/current.m4a" });
@@ -206,6 +206,88 @@ describe("generation races", () => {
     expect(engine.loaded).toHaveLength(0);
     expect(errors).toEqual([]);
     engine.emitError();
+  });
+});
+
+describe("resolution deduplication and source reuse", () => {
+  it("coalesces duplicate concurrent loads of the same track into one resolution", async () => {
+    const { engine, backend, controller } = setup();
+    let release!: (source: { url: string }) => void;
+    const gate = new Promise<{ url: string }>((resolve) => {
+      release = resolve;
+    });
+    backend.resolveSource.mockImplementationOnce(() => gate);
+
+    // Two synchronous loads of the same identity, as a double click or a
+    // double-fired effect would produce.
+    controller.loadTrack(youtubeTrack(), { autoplay: true });
+    controller.loadTrack(youtubeTrack(), { autoplay: true });
+    release({ url: "https://cdn.example/one.m4a" });
+    await flush();
+    await flush();
+
+    // One upstream call, one load: the shared result applies to the newest
+    // generation, the superseded one is discarded.
+    expect(backend.resolveSource).toHaveBeenCalledTimes(1);
+    expect(engine.loaded).toHaveLength(1);
+    expect(engine.loaded[0]?.track.streamUrl).toBe("https://cdn.example/one.m4a");
+  });
+
+  it("re-resolves genuinely different tracks independently", async () => {
+    const { engine, backend, controller } = setup();
+    backend.resolveNextWith(sourceFor("a"));
+    controller.loadTrack(youtubeTrack("dQw4w9WgXcQ"));
+    backend.resolveNextWith(sourceFor("b"));
+    controller.loadTrack(youtubeTrack("aaaaaaaaaaa"));
+    await flush();
+    await flush();
+    expect(backend.resolveSource).toHaveBeenCalledTimes(2);
+    expect(engine.loaded).toHaveLength(1);
+    expect(engine.loaded[0]?.track.streamUrl).toBe("https://cdn.example/b.m4a");
+  });
+
+  it("reuses the live source when the same track is loaded again", async () => {
+    const { engine, backend, controller } = setup();
+    backend.resolveNextWith(sourceFor("dQw4w9WgXcQ"));
+    controller.loadTrack(youtubeTrack());
+    await flush();
+    expect(backend.resolveSource).toHaveBeenCalledTimes(1);
+    expect(engine.loaded).toHaveLength(1);
+
+    // Re-click the same track: source is fresh, so no second resolution.
+    controller.loadTrack(youtubeTrack(), { autoplay: true });
+    await flush();
+    expect(backend.resolveSource).toHaveBeenCalledTimes(1);
+    expect(engine.loaded).toHaveLength(2);
+    expect(engine.loaded[1]?.track.streamUrl).toBe(
+      "https://cdn.example/dQw4w9WgXcQ.m4a",
+    );
+  });
+
+  it("re-resolves when the active source has expired", async () => {
+    const engine = fakeEngine();
+    const backend = controllableResolver();
+    let nowMs = 1_000_000;
+    const controller = createPlaybackController({
+      resolver: backend.resolver,
+      engine,
+      reportError: () => undefined,
+      now: () => nowMs,
+    });
+    backend.resolveNextWith({
+      ...sourceFor("dQw4w9WgXcQ"),
+      expiresAt: new Date(nowMs + 60_000),
+    });
+    controller.loadTrack(youtubeTrack());
+    await flush();
+    expect(backend.resolveSource).toHaveBeenCalledTimes(1);
+
+    nowMs += 120_000; // past the source's expiry
+    backend.resolveNextWith(sourceFor("dQw4w9WgXcQ", "https://cdn.example/fresh.m4a"));
+    controller.loadTrack(youtubeTrack());
+    await flush();
+    expect(backend.resolveSource).toHaveBeenCalledTimes(2);
+    expect(engine.loaded[1]?.track.streamUrl).toBe("https://cdn.example/fresh.m4a");
   });
 });
 

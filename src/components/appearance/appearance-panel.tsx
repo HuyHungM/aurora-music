@@ -285,11 +285,13 @@ function BackgroundSection() {
     setChecking(true);
     setLocalError(undefined);
     const env: BackgroundImageEnvironment = {
-      // Delegated rather than reimplemented, so the real network stack is what
-      // validates the address. The injected `init` carries `mode: "cors"` and
-      // `credentials: "omit"`, and passing it through is what makes the second
-      // of those true in practice rather than merely intended.
-      fetch: (input, init) => fetch(input, init),
+      // No cross-origin `fetch` here. The application's CSP pins `connect-src`
+      // to 'self', so a fetch of a user-supplied address could only ever be
+      // blocked by the browser and logged as a console violation — it is not a
+      // validation production can actually perform. Validation runs on the
+      // browser's own decode (below), which needs no CORS: that is the same
+      // path a CORS-refusing host already took, so nothing that production
+      // could observe is lost.
       // `src` is assigned here, not by the validator: the validator only asks
       // for an element at an address and reads `naturalWidth` off it, so the
       // element has to be constructed already pointed at that address. Setting

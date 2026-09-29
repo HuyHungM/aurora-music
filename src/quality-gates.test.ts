@@ -42,29 +42,13 @@ function filesUnder(root: string, pattern: RegExp): string[] {
 }
 
 /**
- * Source with comments and docstrings removed.
- *
- * Load-bearing wherever a gate searches for a token that prose also contains.
- * `src/lib/audio/eq-graph.ts` spends forty lines explaining that it does NOT
- * call `new Audio()`, and a gate that matched the raw file would fail on its
- * own documentation. A gate that reads prose instead of code is a gate that is
- * easy to satisfy by accident.
- */
-function codeOf(file: string): string {
-  return readFileSync(file, "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
-}
-
-/**
  * Production source only - not a test file.
  *
- * Excluding test files is not pedantry. A gate that searches for
- * `webkitAudioContext` has that string in its own regex, so a naive search
- * reports the gate itself as a second offender, and depending on how the
- * expectation is written that can be satisfied by deleting the very thing the
- * gate exists to protect. Test files cannot construct an audio graph at
- * runtime, so they are not in scope for any of these claims.
+ * Excluding test files is not pedantry. A gate that searches for a token can
+ * have that string in its own regex, so a naive search reports the gate itself
+ * as a second offender, and depending on how the expectation is written that
+ * can be satisfied by deleting the very thing the gate exists to protect. Test
+ * files are also not in scope for the module-boundary claims these gates make.
  */
 function isProductionSource(file: string): boolean {
   return !file.includes("__tests__") && !/\.test\.tsx?$/.test(file);
@@ -237,159 +221,6 @@ describe("appearance gates", () => {
   });
 });
 
-describe("equalizer gates (Phase 53 addendum)", () => {
-  /**
-   * The directories that own playback. Same list the appearance gates use, and
-   * for the same reason: §31 and §32 are claims about a module graph, and by
-   * the time a behavioural test can observe the engine an import has already
-   * been allowed.
-   */
-  const PLAYBACK_DIRECTORIES = [
-    "src/lib/player",
-    "src/lib/music",
-    "src/lib/playback",
-  ];
-
-  /**
-   * The equalizer's own modules, named by directory prefix.
-   *
-   * `eq-graph.ts` is the exception the graph itself documents, and it is listed
-   * separately below rather than excused here: it does not import playback
-   * either. What imports playback is `components/audio/audio-graph-bridge.tsx`,
-   * which is a component and not one of these modules.
-   */
-  const EQ_MODULES = ["eq.ts", "eq-store.ts", "eq-graph.ts", "eq-labels.ts"];
-
-  it("keeps the equalizer out of the playback modules", () => {
-    // The dependency is one-way. The EQ reads the engine; the engine knows
-    // nothing about the EQ. A reverse import would mean a track change could
-    // reach EQ state, and §31/§32 require that a change of track, a queue
-    // transition, a radio seed and a resolver retry all travel paths that
-    // cannot reach the equalizer.
-    const offenders: string[] = [];
-    for (const directory of PLAYBACK_DIRECTORIES) {
-      for (const file of filesUnder(join(rootDir, directory), /\.(ts|tsx)$/)) {
-        const content = readFileSync(file, "utf8");
-        for (const moduleName of EQ_MODULES) {
-          if (content.includes(`audio/${moduleName}`)) {
-            offenders.push(`${file} imports ${moduleName}`);
-          }
-        }
-      }
-    }
-    expect(offenders).toEqual([]);
-  });
-
-  it("keeps the equalizer modules free of any playback import", () => {
-    // The other half of the same claim, and the one that actually makes §31 and
-    // §32 true by construction rather than by review. `eq-store.ts` is the
-    // sharp case: it is the one canonical EQ state, it is reachable from
-    // non-React code, and a single playback import would let playback read and
-    // write the curve.
-    const offenders: string[] = [];
-    for (const moduleName of EQ_MODULES) {
-      const file = join(rootDir, "src/lib/audio", moduleName);
-      const content = codeOf(file);
-      if (
-        /from\s+"@\/lib\/(player|music|playback)\//.test(content) ||
-        /from\s+"\.\.\/(player|music|playback)\//.test(content)
-      ) {
-        offenders.push(moduleName);
-      }
-    }
-    expect(offenders).toEqual([]);
-  });
-
-  it("keeps the equalizer out of the playback SESSION and snapshot", () => {
-    // §39's narrower and more important half. The snapshot is what is restored
-    // on reload; an equalizer setting in there would mean the curve travelled
-    // with a queue position, so "clear my playback session" would clear the
-    // equalizer too, and a restored session would carry a device's tuning.
-    const offenders: string[] = [];
-    for (const file of filesUnder(join(rootDir, "src"), /\.(ts|tsx)$/)) {
-      if (!file.includes("session") && !file.includes("snapshot")) {
-        continue;
-      }
-      const content = codeOf(file);
-      if (/audioEq|eqPreset|eqEnabled|preamp|AURORA_V_SHAPE/.test(content)) {
-        offenders.push(file);
-      }
-    }
-    expect(offenders).toEqual([]);
-  });
-
-  it("creates an audio element in exactly one place", () => {
-    // Addendum §26: no second `<audio>`. A second element is a second audio
-    // path, and a second path is the beginning of doubled playback.
-    const sites: string[] = [];
-    for (const file of filesUnder(join(rootDir, "src"), /\.(ts|tsx)$/)) {
-      if (!isProductionSource(file)) {
-        continue;
-      }
-      if (/\bnew\s+Audio\s*\(/.test(codeOf(file))) {
-        sites.push(file.slice(rootDir.length + 1));
-      }
-    }
-    expect(sites).toEqual([join("src", "lib", "player", "engine-factory.ts")]);
-  });
-
-  it("constructs an AudioContext in exactly one place", () => {
-    // The other half of §26, and the one that is easy to break by accident: a
-    // second context is a second clock, and two clocks feeding one pair of
-    // speakers is how you get a half-beat echo.
-    //
-    // Matched on the ways a context can actually be OBTAINED rather than on the
-    // word "AudioContext". This file's own type is `EqAudioContext`, so a bare
-    // word search would exclude the one file that is supposed to have it - a
-    // gate that excludes its own subject is worse than no gate, because it
-    // reports a pass that means nothing.
-    const sites: string[] = [];
-    for (const file of filesUnder(join(rootDir, "src"), /\.(ts|tsx)$/)) {
-      if (!isProductionSource(file)) {
-        continue;
-      }
-      if (/(window|globalThis)\.AudioContext|webkitAudioContext|OfflineAudioContext/.test(codeOf(file))) {
-        sites.push(file.slice(rootDir.length + 1));
-      }
-    }
-    expect(sites).toEqual([join("src", "lib", "audio", "eq-graph.ts")]);
-  });
-
-  it("never creates a media element for the equalizer to read", () => {
-    // The graph's `getElement` is a RESOLVER, and the shape of the code is the
-    // guarantee: it cannot construct an element even if somebody wanted it to.
-    // `AudioGraphBridge` registers the engine's element rather than making
-    // one, which is the only arrangement in which there is exactly one.
-    const content = codeOf(join(rootDir, "src/lib/audio/eq-graph.ts"));
-    expect(content).not.toMatch(/document\.createElement/);
-    expect(content).not.toMatch(/\bnew\s+Audio\b/);
-  });
-
-  it("keeps the equalizer's own modules out of the appearance preference", () => {
-    // §40's "no new preferences table/system". A column on `User` beside
-    // `appearance` is a second preference; a key inside `appearance` would be a
-    // second system wearing the first one's coat, because it would break that
-    // document's per-field repair and let a glass edit clobber a curve.
-    const content = codeOf(join(rootDir, "src/lib/appearance/appearance.ts"));
-    expect(content).not.toMatch(/audioEq|eqPreset|preamp|\bEQBand\b/);
-  });
-
-  it("keeps browser storage APIs out of the equalizer too", () => {
-    // The existing storage gate covers all of `src`, and this asserts the EQ
-    // is inside that coverage rather than assuming it - the cookie sink is
-    // exactly where a third storage API would be introduced by accident.
-    for (const file of filesUnder(join(rootDir, "src/lib/audio"), /\.(ts|tsx)$/)) {
-      if (!isProductionSource(file)) {
-        continue;
-      }
-      const content = codeOf(file);
-      expect(content, file).not.toMatch(
-        /localStorage|sessionStorage|indexedDB|openDatabase/,
-      );
-    }
-  });
-});
-
 describe("public asset gates", () => {
   it("serves only reviewed public assets", () => {
     // An allowlist, not a denylist: anything not named here is a failure.
@@ -487,7 +318,15 @@ describe("Phase 52 hardening gates", () => {
       // so would every other dot-directory at the top level.
       const visit = (directory: string, isNamedRoot: boolean): void => {
         for (const entry of readdirSync(directory)) {
-          if (entry === "node_modules" || entry === ".next" || entry === ".git") {
+          // `dist` is legacy Cloudflare/OpenNext/vinext build output (see
+          // .gitignore). It is generated, untracked and not source, so the Bun
+          // rule must not read an `npm run` out of a stale bundle in it.
+          if (
+            entry === "node_modules" ||
+            entry === ".next" ||
+            entry === ".git" ||
+            entry === "dist"
+          ) {
             continue;
           }
           // A DOT-DIRECTORY IS NOT THIS PROJECT. Editor state, tool caches and

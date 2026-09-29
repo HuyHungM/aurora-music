@@ -68,7 +68,19 @@ const KNOWN_MIGRATIONS = [
   //
   // Rollback: drop the column; the equalizer falls back to the cookie, then to
   // the shipped Aurora V-Shape. No other column depends on it.
+  //
+  // SUPERSEDED (reviewed): the equalizer was removed from the product, so a
+  // later migration drops this column. Kept in the allowlist because applied
+  // migration history is immutable.
   "20260926120002_add_user_audio_eq",
+  // Phase "remove equalizer" (reviewed): drops the now-unread `User.audioEq`
+  // column added above. The feature was removed end to end, so the preference
+  // has no reader and no writer; the column stored no playback data, so dropping
+  // it cannot affect the session, the queue, providers or any other preference.
+  //
+  // Rollback: re-add `"User"."audioEq" JSONB` (nullable, no default). There is
+  // nothing to restore the data to, because the feature it belonged to is gone.
+  "20260930120000_drop_user_audio_eq",
   // Canonical duplicate prevention (reviewed): one unique index, preceded by
   // an EXACT cleanup that merges only identical `(userId, trackId)` rows and
   // keeps the newest of each. No column is added, dropped or retyped, and no

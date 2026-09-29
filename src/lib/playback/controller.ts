@@ -260,6 +260,17 @@ export function createPlaybackController(
   const clearError = deps.clearError ?? (() => undefined);
   const guard = createResolutionGuard();
 
+  /**
+   * L1 in-flight coalescing for source resolution, keyed by stable identity
+   * (`provider:id`). Identical concurrent resolutions share ONE promise, so a
+   * duplicate click or a double-fired effect spends one upstream call instead
+   * of two. The entry is deleted the moment the promise settles (success or
+   * failure), so this never becomes a cache: a later, genuinely new load
+   * always resolves fresh. A settled promise is shared too, but only across
+   * callers that were already awaiting it.
+   */
+  const inFlight = new Map<string, Promise<AudioSource>>();
+
   let disposed = false;
   let wantPlay = false;
   let pendingSeek: { generation: number; seconds: number } | null = null;
@@ -804,6 +815,35 @@ export function createPlaybackController(
     touchDiagnostics();
   }
 
+  /**
+   * Resolves an identity through the in-flight coalescer. The first caller
+   * for a key starts the upstream resolution; every concurrent caller with
+   * the same key awaits that same promise.
+   */
+  function resolveIdentity(identity: TrackIdentity): Promise<AudioSource> {
+    const key = identityKey(identity);
+    const existing = inFlight.get(key);
+    if (existing) {
+      return existing;
+    }
+    const promise = resolver.resolve(identity);
+    inFlight.set(key, promise);
+    const release = () => {
+      if (inFlight.get(key) === promise) {
+        inFlight.delete(key);
+      }
+    };
+    // A rejection handler here is required: it clears the entry and keeps a
+    // failed shared promise from surfacing as an unhandled rejection.
+    promise.then(release, release);
+    return promise;
+  }
+
+  /** True when this exact URL was recorded as dead by a terminal cycle. */
+  function isUrlSuppressed(url: string): boolean {
+    return suppressedFailures.some((entry) => entry.url === url);
+  }
+
   async function resolveAndLoad(
     identity: TrackIdentity,
     track: Track | null,
@@ -812,7 +852,7 @@ export function createPlaybackController(
   ): Promise<void> {
     let source: AudioSource;
     try {
-      source = await resolver.resolve(identity);
+      source = await resolveIdentity(identity);
     } catch (error) {
       if (!isCurrent(generation)) {
         return;
@@ -885,6 +925,37 @@ export function createPlaybackController(
     void resolveAndLoad(identity, track, autoplay, generation);
   }
 
+  /**
+   * Re-loads a track whose identity already owns a fresh, live source.
+   *
+   * Re-clicking the track that is already resolved used to spend a full
+   * upstream resolution for an identical identity. When the active source is
+   * the same identity, still unexpired and not recorded dead, reinstall it
+   * directly: the engine reload still restarts the media, but no network work
+   * happens. This is the "reuse a valid resolved source" path (never a cache:
+   * expiry and the suppression record both force a fresh resolve).
+   */
+  function loadReusingSource(track: Track, autoplay: boolean): void {
+    if (!activeSource) {
+      return;
+    }
+    const generation = guard.claim();
+    wantPlay = autoplay;
+    pendingSeek = null;
+    sourceGeneration = generation;
+    hasLoadedSource = true;
+    hasPlayedOnce = false;
+    resetRecoveryForNewWork();
+    const source = activeSource;
+    touchDiagnostics();
+    logger.debug("Playback source reused", {
+      event: "playback_source_reused",
+      trackKey: activeIdentity ? identityKey(activeIdentity) : null,
+    });
+    engine.load(withPlaybackSource(track, source), autoplay && wantPlay);
+    armStallTimer();
+  }
+
   const unsubscribers: Array<() => void> = [
     engine.on("error", (payload) => onEngineError(payload)),
     engine.on("timeupdate", (payload) => {
@@ -932,6 +1003,20 @@ export function createPlaybackController(
           kind: "unavailable",
           message: "This track has no playable stream right now.",
         });
+        return;
+      }
+      // Re-clicking the track that already owns a fresh, live source reuses
+      // it instead of spending another upstream resolution (same identity,
+      // unexpired, not recorded dead).
+      if (
+        activeIdentity &&
+        identityKey(activeIdentity) === identityKey(identity) &&
+        hasLoadedSource &&
+        activeSource &&
+        !isAudioSourceExpired(activeSource, now()) &&
+        !isUrlSuppressed(activeSource.url)
+      ) {
+        loadReusingSource(track, autoplay);
         return;
       }
       // Resolvable or not, resolution is the only path: an identity

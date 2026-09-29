@@ -4,15 +4,7 @@ import type { EngineRepeatMode } from "@/lib/music/music-engine";
 import { useMusicEngineState } from "@/lib/music/use-music-engine";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { Button } from "@/components/ui/button";
-import {
-  PauseIcon,
-  PlayIcon,
-  RepeatIcon,
-  RepeatOneIcon,
-  ShuffleIcon,
-  SkipBackIcon,
-  SkipForwardIcon,
-} from "@/components/ui/icons";
+import { PauseIcon, PlayIcon } from "@/components/ui/icons";
 
 /** Shared repeat vocabulary so bar/mini/full can never drift apart. */
 export function repeatDisplay(repeat: EngineRepeatMode): "off" | "all" | "one" {
@@ -245,101 +237,4 @@ export function SeekSlider({
   );
 }
 
-export function TransportButtons({
-  shuffle,
-  repeat,
-  canNavigate,
-  onShuffle,
-  onPrevious,
-  onTogglePlay,
-  onNext,
-  onRepeat,
-  playing,
-  loading,
-  playLabel,
-  compact = false,
-  canShuffle = true,
-}: {
-  shuffle: boolean;
-  repeat: EngineRepeatMode;
-  canNavigate: boolean;
-  onShuffle: () => void;
-  onPrevious: () => void;
-  onTogglePlay: () => void;
-  onNext: () => void;
-  onRepeat: () => void;
-  playing: boolean;
-  loading?: boolean;
-  playLabel: string;
-  compact?: boolean;
-  /**
-   * Whether the queue can be randomised. Defaults to `true` so an existing
-   * caller that knows nothing about the queue keeps a working control; a caller
-   * that has the engine should pass `playOrder.length > 0`, which is the same
-   * condition `useShuffleControl` uses.
-   */
-  canShuffle?: boolean;
-}) {
-  const rd = repeatDisplay(repeat);
-  const { t } = useLocale();
-  const icon = compact ? 18 : 20;
-  const repeatLabel =
-    rd === "one" ? t("player.repeatOne") : rd === "all" ? t("player.repeatAll") : t("player.repeatOff");
-  return (
-    <div className="flex items-center gap-1" role="group" aria-label={t("player.controls")}>
-      <Button
-        variant="ghost"
-        size="icon"
-        className={`h-11 w-11 ${shuffleToggleClass(shuffle)} ${SHUFFLE_DISABLED_CLASS}`}
-        disabled={!canShuffle}
-        aria-label={shuffle ? t("player.disableShuffle") : t("player.enableShuffle")}
-        aria-pressed={shuffle}
-        title={
-          canShuffle
-            ? shuffle
-              ? t("player.shuffleOn")
-              : t("player.shuffleOff")
-            : t("player.shuffleUnavailable")
-        }
-        onClick={onShuffle}
-      >
-        <ShuffleIcon size={icon} className={shuffleIconClass(shuffle)} />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-11 w-11"
-        aria-label={t("player.previous")}
-        onClick={onPrevious}
-        disabled={!canNavigate}
-      >
-        <SkipBackIcon size={icon} />
-      </Button>
-      <PlayPauseButton playing={playing} loading={loading} label={playLabel} onToggle={onTogglePlay} />
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-11 w-11"
-        aria-label={t("player.next")}
-        onClick={onNext}
-        disabled={!canNavigate}
-      >
-        <SkipForwardIcon size={icon} />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-11 w-11"
-        aria-label={repeatLabel}
-        aria-pressed={rd !== "off"}
-        onClick={onRepeat}
-      >
-        {rd === "one" ? (
-          <RepeatOneIcon size={icon} className="text-accent" />
-        ) : (
-          <RepeatIcon size={icon} className={rd === "all" ? "text-accent" : ""} />
-        )}
-      </Button>
-    </div>
-  );
-}
+

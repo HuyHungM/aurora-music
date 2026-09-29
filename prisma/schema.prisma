@@ -22,17 +22,6 @@ model User {
   /// appearance and playback session are two lifecycles, and resetting one
   /// must never touch the other.
   appearance     Json?
-  /// Phase 53 addendum "Aurora V-Shape": the equalizer preference, as the
-  /// compact versioned document `src/lib/audio/eq.ts` encodes. A second
-  /// COLUMN, not a second table and not a key inside `appearance`: the audio
-  /// preference and the visual preference are two domains with two documents,
-  /// and sharing one JSON bag would mean a glass edit could clobber a curve.
-  /// Nullable column only, like `locale`: null means "no explicit preference"
-  /// and falls back to the anonymous cookie, then to `DEFAULT_EQ`. No backfill,
-  /// no default, and deliberately NOT part of `PlaybackState` - the equalizer
-  /// is an audio preference and the session is a position in a queue, and
-  /// addendum §39 requires them to be separable.
-  audioEq        Json?
   /// Phase 47 "Keep listening": generic queue continuation preference.
   /// Defaults OFF so the documented end-of-queue stop behaviour is
   /// preserved until a listener opts in. Radio remains independent.
