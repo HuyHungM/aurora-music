@@ -6,208 +6,102 @@
   there is no `package-lock.json`). Install with `bun install`; CI uses
   `bun install --frozen-lockfile`. A `postinstall` hook runs
   `prisma generate`, so a fresh install yields a working tree.
-- Node.js 22+ stays present in the environment for toolchain internals that
-  shell out to a Node runtime (Prisma's engine spawn, Next's own helpers). It
-  is not used to install dependencies or to run project scripts.
+- Node.js 22+ for local runs and for toolchain internals that shell out to a
+  Node runtime (Prisma's engine spawn, Next's own helpers). It is not used to
+  install dependencies or to run project scripts.
 - PostgreSQL reachable; `DATABASE_URL` set (required in every environment).
 - `AUTH_SECRET` set when `NODE_ENV=production` (dummy values only ever in
   CI placeholders, never real secrets in logs or VCS).
 
-## Cloudflare Workers (OpenNext)
+## Target platform: Vercel (native Next.js)
 
-Aurora deploys to **Cloudflare Workers** through
-[`@opennextjs/cloudflare`](https://opennext.js.org/cloudflare). The
-server-rendered Next.js application is bundled into a Worker; it is **not**
-converted to a static site. API routes, Auth.js, Prisma/PostgreSQL, the
-YouTube playback resolver and server actions all keep running server-side.
+Aurora deploys as a **native Next.js application on Vercel**. There is no
+Workers bundle and no OpenNext adapter: Vercel detects the Next.js framework,
+runs `next build`, and serves the App Router through Vercel's Node.js
+Functions. API routes, Auth.js, Prisma/PostgreSQL, the YouTube playback
+resolver and server actions all keep running server-side.
 
 ```text
-next build → @opennextjs/cloudflare build → wrangler deploy → Cloudflare Worker
+Browser → Cloudflare DNS → Vercel (Next.js) → Node.js Functions → Aiven PostgreSQL
 ```
 
-### Committed configuration (no interactive migration)
+Repository configuration is framework-driven. There is deliberately **no
+`vercel.json`**: no `builds`, no catch-all `routes`, no `functions` block. The
+build command is the real `package.json` `build` script (`next build`) and the
+install command is `bun install` (`bun.lock` is the only lockfile). `.vercel/`
+is gitignored and never committed.
 
-The deployment is driven entirely by files in the repository. The Cloudflare
-build must **not** be allowed to auto-run `@opennextjs/cloudflare migrate`
-(which `wrangler deploy` can trigger): that command rewrites `next.config.ts`,
-`package.json`, `.dev.vars` and `public/_headers` on the build machine, so the
-artifact depends on an ephemeral mutation instead of a review.
+### Canonical origin and DNS
 
-| File | Purpose |
+- Canonical origin: `https://app.auroramuzik.dpdns.org`.
+- The apex `auroramuzik.dpdns.org` **301-redirects to the canonical origin**,
+  preserving path and query, over HTTPS, without a redirect loop. This redirect
+  is an edge/DNS responsibility (a Cloudflare redirect rule on the apex host),
+  **not** an application route — the app does not serve the apex.
+- Cloudflare remains the DNS provider for the zone. `app` resolves to the
+  Vercel deployment and the Vercel project's production domain is
+  `app.auroramuzik.dpdns.org`.
+- TLS terminates at Vercel; the app does not force HSTS.
+
+### Environment variables (Vercel Project Settings)
+
+Set these in **Vercel → Project → Settings → Environment Variables** for the
+Production (and Preview, where useful) environment. Never commit values.
+
+| Variable | Notes |
 | --- | --- |
-| `open-next.config.ts` | OpenNext adapter config (`defineCloudflareConfig()`). No R2/ISR override — Aurora is dynamic. |
-| `wrangler.jsonc` | Worker name, entry (`.open-next/worker.js`), assets, `nodejs_compat`, `IMAGES` binding. |
-| `next.config.ts` | `serverExternalPackages` (see below). |
+| `DATABASE_URL` | Aiven PostgreSQL connection string. Keep `sslmode=require` (or `verify-full`); never weaken verification. |
+| `AURORA_DATABASE_CA_CERT` | Inline public PEM for Aiven's per-project CA. Vercel Functions have no readable file to point a path at, so supply the CA as a value. Takes precedence over the path variable. |
+| `AURORA_PUBLIC_URL` | `https://app.auroramuzik.dpdns.org` — required in production. |
+| `AUTH_SECRET` | Required in production (Auth.js). Generate with `openssl rand -base64 32`. |
+| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Optional; enables Google sign-in. |
+| `AUTH_GITHUB_ID` / `AUTH_GITHUB_SECRET` | Optional; enables GitHub sign-in. |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Optional; enables the Spotify catalog provider. |
+| `YOUTUBE_API_KEY` | Optional; enables the YouTube metadata provider. |
+| `AURORA_FEATURE_FLAGS` | Optional server-side kill switches (see below). |
 
-### Scripts
+`AURORA_DATABASE_CA_CERT_PATH` and `SERVER_PORT` are Node-host file/port
+mechanisms and are not used on Vercel, which supplies its own port and has no
+persistent file to point at. Supply the CA inline instead. `AUTH_TRUST_HOST`
+is not required when `AURORA_PUBLIC_URL` is set: the origin is pinned, not
+inferred from a proxy header.
+
+### Database migrations
+
+Migrations are **not** run automatically during the Vercel build. Next.js
+builds can run more than once and in parallel, and a build is not a safe place
+to mutate a database other processes depend on. Run them explicitly, before
+promoting the new deployment:
 
 ```bash
-bun run build      # next build — the low-level build only
-bun run preview    # opennextjs-cloudflare build && opennextjs-cloudflare preview
-bun run deploy     # opennextjs-cloudflare build && opennextjs-cloudflare deploy
-bun run upload     # opennextjs-cloudflare build && opennextjs-cloudflare upload
-bun run cf-typegen # wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts
+DATABASE_URL="postgresql://…" bunx prisma migrate deploy
 ```
 
-`build` stays `next build`. `opennextjs-cloudflare build` runs the package's
-`build` script internally, so pointing `build` at `opennextjs-cloudflare build`
-would recurse. `preview`/`deploy` call the OpenNext **binary**, not the `build`
-script, so they do not recurse either.
+Migrate **before** promoting the new artifact: every migration to date is
+additive to the schema — the one exception is the reviewed duplicate-row
+`DELETE` inside `recently_played_one_row_per_track`, which only removes rows
+the new uniqueness forbids — so old code also runs against the new schema,
+while new code requires it.
 
-### `pg` / `pg-cloudflare` on workerd
-
-`pg` reaches Cloudflare's native TCP sockets through its optional
-`pg-cloudflare` dependency, which exposes a `workerd` export condition:
-
-```jsonc
-// node_modules/pg-cloudflare/package.json
-"exports": { ".": {
-  "workerd": { "import": "./esm/index.mjs", "require": "./dist/index.js" },
-  "default": "./dist/empty.js"
-} }
-```
-
-Next's dependency tracer follows only the `default` condition, so the
-standalone output would keep `dist/empty.js` and drop the real socket files.
-OpenNext restores the full package **only for names listed in Next's
-`serverExternalPackages`** (`copyWorkerdPackages`). `next.config.ts` therefore
-declares:
-
-```ts
-serverExternalPackages: ["pg", "pg-cloudflare"],
-```
-
-Removing either entry breaks PostgreSQL on Workers (bundling resolves/keeps
-`pg-cloudflare`'s missing `dist/index.js`, and the runtime TCP socket is not
-available). `pg-cloudflare` is a transitive *optional* dependency of `pg`; it
-is deliberately not added as a direct dependency, because the lockfile already
-pins it and the tracer/OpenNext copy is what matters.
-
-### Runtime compatibility
-
-- `nodejs_compat` is required by `pg`, `@prisma/adapter-pg` and Auth.js.
-- `IMAGES` enables optimised `next/image`; `ASSETS` serves `.open-next/assets`.
-- Secrets are set with `wrangler secret put NAME` (or the dashboard) — never in
-  `wrangler.jsonc`, `open-next.config.ts` or a committed `.dev.vars`. `.dev.vars`
-  is gitignored.
-- **Database TLS on Workers — private CAs are a deployment prerequisite, not
-  an env var.** The Node-host mechanism `AURORA_DATABASE_CA_CERT_PATH` reads a
-  file from disk, which Workers do not have; `AURORA_DATABASE_CA_CERT` supplies
-  the same public CA inline for a **filesystem-less Node** runtime (takes
-  precedence over the path, fails closed on a non-PEM value, keeps verification
-  ON). It does **not** work on Workers: `pg` uses `pg-cloudflare`, whose
-  `startTls` hands the caller's options to `cloudflare:sockets`, which accepts
-  only `expectedServerHostname` and therefore cannot be given the provider's
-  CA. Workerd verifies against Cloudflare's own trust store, which cannot hold
-  Aiven's per-project CA, so the TLS upgrade to the database fails
-  (`Network connection lost`) while TCP and publicly-trusted TLS succeed.
-  Verification must stay ON, so the fix is a trust boundary outside the app:
-  use [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) (Cloudflare's
-  Postgres connector, which owns the origin TLS and CA — the vendor's
-  documented recommendation), or point the service at a publicly-trusted
-  certificate. Do not deploy the Workers target against a private-CA database
-  until one of those is configured. See `docs/scope-boundaries.md`.
-- **What ends up in the build artifact:** `opennextjs-cloudflare build`
-  compiles the values from `.env` / `.env.local` into the generated
-  `.open-next/cloudflare/next-env.mjs`. Cloudflare bindings and secrets are
-  applied to `process.env` first, so a real Worker secret always wins over the
-  compiled fallback — but any secret sitting in a local env file at build time
-  is still written into the (gitignored) bundle. Keep infra-only secrets such
-  as `CLOUDFLARED_TOKEN` out of `.env` when building for Cloudflare, and prefer
-  `wrangler secret put` for everything the Worker needs.
-
-### Cloudflare Workers Builds (dashboard configuration)
-
-When the repository is connected to **Cloudflare Workers Builds**, the
-build/deploy commands are configured in the Cloudflare dashboard (Worker →
-**Settings** → **Build**), not in `wrangler.jsonc`. Workers Builds does **not**
-honour a custom build command configured inside the Wrangler file, so the
-command below belongs in the dashboard.
-
-Recommended configuration:
+### Build settings
 
 | Setting | Value |
 | --- | --- |
-| Build command | `bunx opennextjs-cloudflare build` |
-| Deploy command | `bunx wrangler deploy` |
+| Framework preset | Next.js (auto-detected) |
+| Install command | `bun install` (default; `bun.lock` is the lockfile) |
+| Build command | `next build` (the `build` script) |
+| Output | Next.js default (`.next`); no static export |
 
-- `bun run build` only runs `next build` and produces `.next/`. That is not
-  sufficient: deploying through OpenNext requires the `.open-next/` output.
-- `bunx opennextjs-cloudflare build` performs the required OpenNext
-  transformation on top of `next build` (it invokes the package's `build`
-  script internally).
-- `bunx wrangler deploy` then deploys the generated `.open-next/worker.js`.
-- Do **not** point `package.json`'s `build` script at
-  `opennextjs-cloudflare build`: OpenNext invokes the package build script, so
-  that would recurse. `build` stays `next build`.
+`postinstall` runs `prisma generate`, so the Prisma client exists before
+`next build`.
 
-Alternative configuration — let the deploy script own the whole flow:
-
-| Setting | Value |
-| --- | --- |
-| Build command | *(empty)* |
-| Deploy command | `bun run deploy` |
-
-`bun run deploy` already performs:
-
-```text
-opennextjs-cloudflare build
-→
-opennextjs-cloudflare deploy
-```
-
-Because the deploy script runs the OpenNext build itself, the dashboard must
-**not** also run `next build` separately in this configuration — leave the
-build command empty.
-
-**Workers Builds does not automatically use the repository's local `.env`.**
-Build-time variables and secrets the build needs must be configured through the
-Cloudflare Workers/Build settings (Build variables and secrets); values needed
-at runtime belong in the Worker's Variables & Secrets. Never commit secret
-values.
-
-> **Warning — a successful Workers build/deploy does not mean the Aurora
-> production database architecture is supported by Workers.** The current Aiven
-> PostgreSQL deployment uses a private per-project CA, and the Workers runtime
-> (`pg-cloudflare` → `cloudflare:sockets`) cannot currently supply that CA while
-> preserving certificate verification. A green OpenNext build therefore only
-> proves the artifact bundles; it does **not** prove database connectivity. The
-> supported production paths remain **Node + cloudflared**, or — for Workers —
-> **Hyperdrive**, or a PostgreSQL endpoint with a publicly trusted certificate.
-> See `docs/scope-boundaries.md` ("Cloudflare Workers DB TLS").
-
-### Production Worker variables and secrets
-
-Declare the canonical origin as a **non-secret Worker variable** (`wrangler.jsonc`
-`vars`, committed, or the dashboard) — never infer it:
-
-| Non-secret variable | Value |
-| --- | --- |
-| `AURORA_PUBLIC_URL` | `https://app.auroramuzik.dpdns.org` |
-| `AUTH_TRUST_HOST` | `true` |
-
-Public OAuth client IDs (`AUTH_GOOGLE_ID`, `AUTH_GITHUB_ID`,
-`SPOTIFY_CLIENT_ID`) are not secret and may be set the same way when required.
-
-Everything sensitive is a **Worker secret**, never `vars` and never committed:
+### Local preview of a production build
 
 ```bash
-bunx wrangler secret put DATABASE_URL
-bunx wrangler secret put AUTH_SECRET
-bunx wrangler secret put AUTH_GOOGLE_SECRET
-bunx wrangler secret put AUTH_GITHUB_SECRET
-bunx wrangler secret put SPOTIFY_CLIENT_SECRET
-bunx wrangler secret put YOUTUBE_API_KEY
+bun install
+bun run build
+AURORA_PUBLIC_URL="http://localhost:3000" bun run start
 ```
-
-`SERVER_PORT`, `CLOUDFLARED_TOKEN`, `CLOUDFLARED_PROTOCOL` and
-`AURORA_DATABASE_CA_CERT_PATH` are **Node-host only** (consumed by `start.js`
-and `db-tls.ts` on the server) and must not be moved into the Worker.
-
-The production Worker serves `app.auroramuzik.dpdns.org`; attach that hostname
-as a Worker custom domain in Cloudflare. Do not change the legacy
-`auroramuzik.dpdns.org` routing as part of this without inspecting it first
-(see the legacy-origin note above).
 
 ## Canonical release order
 
@@ -216,10 +110,10 @@ install (`bun install`)
 → build (`bun run build`)          ← must precede typecheck on a clean clone
 → validate (`bun run typecheck`, `bun run lint`, `bun run test`)
 → migration review (`git status` + allowlist test)
-→ migration deploy (`bunx prisma migrate deploy`)
-→ application start (`bun run start -- -p PORT`)
+→ migration deploy (`bunx prisma migrate deploy`)   ← separate, pre-promote step
+→ deploy to Vercel (Vercel builds `next build` and starts the deployment)
 → readiness (`GET /api/health` → 200 `{"status":"ok"}`)
-→ smoke (`bun run smoke:prod -- --spawn --port PORT`)
+→ smoke (`bun run smoke:prod https://app.auroramuzik.dpdns.org`)
 → traffic
 ```
 
@@ -228,12 +122,6 @@ install (`bun install`)
 the `LayoutProps`-style generated types are absent and typecheck fails. The
 build step above is therefore ordered first, not last. This is Next.js 16
 behaviour and is unrelated to the package manager.
-
-Migrate **before** deploying the new artifact: every migration to date is
-additive to the schema — the one exception is the reviewed duplicate-row
-`DELETE` inside `recently_played_one_row_per_track`, which only removes rows
-the new uniqueness forbids — so old code also runs against the new schema,
-while new code requires it.
 
 ## Startup contract
 
@@ -303,7 +191,11 @@ AURORA_DATABASE_CA_CERT_PATH="/etc/aurora/postgres-ca.pem"
 - When unset, the connection string is used exactly as written and `pg`
   verifies against the system trust store — the pre-existing behaviour.
 
-The same variable is honoured by `db:verify`, `db:check`, `db:integrity` and
+On a filesystem-less runtime such as Vercel, supply the same public CA as
+inline PEM text instead, in `AURORA_DATABASE_CA_CERT` (it takes precedence over
+the path and never weakens verification).
+
+The same variables are honoured by `db:verify`, `db:check`, `db:integrity` and
 the E2E harness, so every path trusts the same CA.
 
 ### Managed provider with a per-project CA (Aiven)
@@ -317,11 +209,12 @@ CA; never weaken the connection:
 
 1. In the Aiven Console, open the service and download its **CA certificate**
    (`ca.pem`). Do not take a CA from a third-party site.
-2. Store it on the host, outside the repository and outside the web root, e.g.
-   `/home/container/secrets/aiven-ca.pem`.
-3. Set `AURORA_DATABASE_CA_CERT_PATH` to that absolute path and leave
-   `sslmode=require` (and the rest of `DATABASE_URL`) unchanged.
-4. Restart the application, then run `bun run db:check` (`SELECT 1` plus the
+2. Provide it to the runtime: on a Node host, store it outside the repository
+   and outside the web root (e.g. `/home/container/secrets/aiven-ca.pem`) and
+   set `AURORA_DATABASE_CA_CERT_PATH` to that absolute path; on Vercel, set
+   `AURORA_DATABASE_CA_CERT` to the certificate text.
+3. Leave `sslmode=require` (and the rest of `DATABASE_URL`) unchanged.
+4. Restart/redeploy, then run `bun run db:check` (`SELECT 1` plus the
    `getUserByAccount` lookup against a sentinel key).
 
 The CA file is a **public** certificate (no private key). Never commit it to
@@ -401,10 +294,11 @@ always permitted: revocation must work even when the feature is being killed.
 
 ## Rollback
 
-- Application rollback = redeploy the previous artifact. Safe: migrations
-  to date are additive to the schema (the one reviewed duplicate-row
-  `DELETE` inside `recently_played_one_row_per_track` only removes rows the
-  new uniqueness forbids), so old code runs on the new schema.
+- Application rollback = redeploy the previous artifact. On Vercel this is an
+  instant rollback to the previous deployment; safe, because migrations to date
+  are additive to the schema (the one reviewed duplicate-row `DELETE` inside
+  `recently_played_one_row_per_track` only removes rows the new uniqueness
+  forbids), so old code runs on the new schema.
 - Database rollback has **no automatic downgrade** (Prisma provides none);
   it means restoring from backup. Never run `prisma migrate resolve`
   destructive commands casually.
@@ -420,7 +314,7 @@ always permitted: revocation must work even when the feature is being killed.
   absence disables providers, never breaks boot. Live E2E stays opt-in
   (`AURORA_E2E_LIVE_PLAYBACK=1`) and out of CI.
 
-## Public origin and OAuth (required behind a tunnel or reverse proxy)
+## Public origin and OAuth (required on a custom domain)
 
 Set the public origin. It is what Google's registered redirect URI must match,
 and the only way to get there is to stop deriving it from the request:
@@ -447,32 +341,13 @@ GitHub OAuth app → Authorization callback URL:
 | Authorization callback URL | `https://app.auroramuzik.dpdns.org/api/auth/callback/github` |
 
 No port, no trailing slash, and no `http://`. The origin the *process* listens
-on stays internal and is not part of OAuth:
+on is chosen by Vercel and is not part of OAuth. `AURORA_PUBLIC_URL` exists
+precisely because the application must not need to know its own port or
+deployment hostname to build a correct public URL.
 
-```env
-PORT=24584                 # next start binds 24584
-                           # Cloudflared origin: http://127.0.0.1:24584
-```
-
-`PORT` is what Next.js reads. Nothing else in the repository refers to this
-port by name — the value lives in the launcher's environment and in the tunnel
-configuration, which is why `AURORA_PUBLIC_URL` exists: the application must
-not need to know its own port to build a correct public URL.
-
-Tunnel route:
-
-| Field | Value |
-| --- | --- |
-| Hostname | `app.auroramuzik.dpdns.org` |
-| Path | `*` |
-| Service type | HTTP |
-| URL | `http://127.0.0.1:24584` |
-| HTTP Host Header | **unset** — or exactly `app.auroramuzik.dpdns.org` |
-
-Never `127.0.0.1:24584`, `localhost:24584` or `<public-host>:24584` in the
-Host Header override. `AURORA_PUBLIC_URL` makes the application ignore that
-header, so the override is no longer load-bearing, but leaving a wrong one in
-place keeps every other proxied URL on the deployment wrong too.
+These provider-console entries must be updated to the canonical callbacks and a
+real sign-in exercised before OAuth can be called verified. Do not claim a real
+OAuth end-to-end success until both are done.
 
 Verify the generated URI rather than the configuration, because the two can
 disagree:
@@ -494,12 +369,14 @@ they are one declaration in two places, and the disagreement is the bug.
 as canonical in configuration, naming, monitoring or reports. It may still
 exist during the migration; do not delete it, and do not change how it routes,
 without first inspecting the current Cloudflare routing configuration. Once the
-Worker at `app.auroramuzik.dpdns.org` is verified, turning the legacy host into
-a redirect (or retiring it) is a separate, reviewed change.
+Vercel production origin is verified, turning the legacy host into a 301
+redirect to `https://app.auroramuzik.dpdns.org` (preserving path and query) is a
+separate, reviewed change.
 
 ## Edge responsibilities (not in-app)
 
-- TLS termination (no HSTS forced by the app), rate limiting, backups.
-- Host-header sanitization is no longer a requirement *when*
-  `AURORA_PUBLIC_URL` is set — the application pins the origin itself and
-  ignores the header. Without it, `trustHost: true` still assumes a sane proxy.
+- TLS termination (no HSTS forced by the app), the apex 301 redirect, rate
+  limiting, backups.
+- Host-header sanitization is not a requirement *when* `AURORA_PUBLIC_URL` is
+  set — the application pins the origin itself and ignores the header.
+  Without it, `trustHost: true` still assumes a sane proxy.

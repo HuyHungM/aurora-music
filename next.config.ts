@@ -80,17 +80,12 @@ const nextConfig: NextConfig = {
     ],
   },
 
-  // OpenNext/Cloudflare: `pg-cloudflare` exposes a "workerd" export condition
-  // whose require/import targets (`dist/index.js`, `esm/index.mjs`) are the
-  // Cloudflare TCP-socket implementation. Next's dependency tracer only follows
-  // the default condition, so the standalone output keeps just `dist/empty.js`
-  // and the real files are never copied. OpenNext's `copyWorkerdPackages` only
-  // restores the full package for names listed here; without this, bundling (or
-  // the workerd runtime) resolves `pg-cloudflare` to a missing `dist/index.js`
-  // and PostgreSQL cannot connect. `pg` is listed alongside it so Next keeps
-  // both packages external instead of bundling the driver. Neither entry changes
-  // non-Cloudflare behaviour.
-  serverExternalPackages: ["pg", "pg-cloudflare"],
+  // Node runtime externals. `next build` / `next start` (local `next dev`, the
+  // E2E harness, Vercel Functions and the typecheck type graph) run the
+  // application on Node, where `pg` must stay external rather than be bundled
+  // by the server compiler. The driver is reached through Prisma's
+  // `@prisma/adapter-pg`, so only `pg` needs the exemption.
+  serverExternalPackages: ["pg"],
 
   async headers() {
     return [

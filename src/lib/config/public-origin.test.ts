@@ -7,9 +7,9 @@ import {
 
 /**
  * The production incident this module exists for, in the shape it was
- * measured: a Cloudflare Tunnel whose `originRequest.httpHostHeader` override
- * appended the origin's port to the public hostname, so the origin's own
- * process port reached Google's `redirect_uri`.
+ * measured: a reverse proxy whose host-header override appended the origin's
+ * port to the public hostname, so the origin's own process port reached
+ * Google's `redirect_uri`.
  */
 const PUBLIC_ORIGIN = "https://auroramuzik.dpdns.org";
 const TAUNTED_HOST = "auroramuzik.dpdns.org:24584";

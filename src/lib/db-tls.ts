@@ -24,16 +24,17 @@ export const DATABASE_CA_CERT_PATH_VAR = "AURORA_DATABASE_CA_CERT_PATH";
  * Name of the optional variable that carries the PEM CA **inline**, as text.
  *
  * The path variable above is a Node-host mechanism: it reads a file from disk.
- * Cloudflare Workers (the OpenNext target) and any other filesystem-less
- * runtime have no disk, so a provider with a private CA (Aiven's per-project
- * CA is the known case) needs the same trust anchor supplied as a value. The
- * CA is a **public** certificate — it carries no private key — so a Worker
- * secret/binding is a safe place for it.
+ * A serverless platform (Vercel Functions) has no readable file to point at,
+ * so a provider with a private CA (Aiven's per-project CA is the known case)
+ * needs the same trust anchor supplied as a value. The CA is a **public**
+ * certificate — it carries no private key — so a hosting-provider environment
+ * variable is a safe place for it.
  *
- * This is the Workers-compatible half of the pair, not a replacement: keep the
+ * This is the filesystem-less half of the pair, not a replacement: keep the
  * file path on a Node host (it is easier to provision and review) and the
- * inline value where there is no filesystem. Either way, TLS keeps certificate
- * and hostname verification ON — supplying a CA never weakens a connection.
+ * inline value where there is no readable file. Either way, TLS keeps
+ * certificate and hostname verification ON — supplying a CA never weakens a
+ * connection.
  */
 export const DATABASE_CA_CERT_VAR = "AURORA_DATABASE_CA_CERT";
 

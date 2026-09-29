@@ -14,9 +14,9 @@
  *    `https://auroramuzik.dpdns.org:24584/...`. No proxy configuration avoids
  *    that. See the note on `resolveBrowserOrigin`.
  * 2. A reverse proxy that appends the ORIGIN's port to the PUBLIC hostname -
- *    the Cloudflare Tunnel `originRequest.httpHostHeader: <public-host>:24584`
- *    mistake - supplies a header that is wrong to begin with, and the
- *    application cannot tell a correct Host header from a wrong one.
+ *    the `httpHostHeader: <public-host>:24584` mistake - supplies a header
+ *    that is wrong to begin with, and the application cannot tell a correct
+ *    Host header from a wrong one.
  *
  * Either way Google's `redirect_uri` becomes an address that was never
  * registered:

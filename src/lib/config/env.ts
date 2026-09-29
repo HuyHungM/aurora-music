@@ -61,10 +61,10 @@ const EnvSchema = z.object({
   // the connection is left exactly as `DATABASE_URL` wrote it and `pg` verifies
   // against the system trust store. Never carries a private key.
   AURORA_DATABASE_CA_CERT_PATH: z.string().optional(),
-  // Server-only, Workers-compatible alternative to the path above: the same
-  // public CA certificate(s) as inline PEM text, for runtimes with no
-  // filesystem (Cloudflare Workers / OpenNext). Set as a Worker secret or in
-  // `.dev.vars`; never carries a private key, and never weakens verification.
+  // Server-only, filesystem-less alternative to the path above: the same
+  // public CA certificate(s) as inline PEM text, for a serverless runtime with
+  // no readable file (Vercel Functions). Set as a hosting-provider environment
+  // variable; never carries a private key, and never weakens verification.
   // Takes precedence over the path when both are set.
   AURORA_DATABASE_CA_CERT: z.string().optional(),
   // Server-only. Enables the YouTube metadata provider (search/lookup).
