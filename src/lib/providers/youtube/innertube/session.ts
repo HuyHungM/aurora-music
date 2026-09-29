@@ -24,6 +24,12 @@
  * forever. Safe to call concurrently — the promise is memoised, so N
  * simultaneous first-calls share one `create()`.
  *
+ * EGRESS. `installYouTubeEgress()` runs first and, only when a proxy is
+ * configured, replaces the platform shim's fetch/Request/Headers before
+ * `create()`. youtubei.js captures `Platform.shim.fetch` when it builds its
+ * HTTP client, so the order matters; unset, the shim is left untouched. See
+ * `egress.ts`.
+ *
  * `generate_session_locally: true` avoids an extra round-trip. It can fail on
  * an environment without the crypto the generator expects; that failure is
  * the same class as any other transient create failure and is retried by the
@@ -34,6 +40,7 @@ import { Innertube } from "youtubei.js";
 import type { Misc, YT } from "youtubei.js";
 import { Platform } from "youtubei.js";
 import vm from "node:vm";
+import { installYouTubeEgress } from "./egress";
 
 type Format = Misc.Format;
 type VideoInfo = YT.VideoInfo;
@@ -54,12 +61,12 @@ export function resetSharedSession(): void {
 
 function defaultSessionFactory(): Promise<Innertube> {
   if (!sharedSession) {
-    sharedSession = Innertube.create({ generate_session_locally: true }).catch(
-      (error: unknown) => {
+    sharedSession = installYouTubeEgress()
+      .then(() => Innertube.create({ generate_session_locally: true }))
+      .catch((error: unknown) => {
         sharedSession = null;
         throw error;
-      },
-    );
+      });
   }
   return sharedSession;
 }

@@ -22,6 +22,17 @@
  * unconsumable candidate, because the browser would still fail on it. It
  * exists so the log can state which of the two happened instead of leaving an
  * operator to guess, which is what made this undiagnosable in the first place.
+ *
+ * REDIRECTS. googlevideo routinely answers a valid playback URL with a 302 to
+ * a different edge (`rr5---...` -> `rr10---...`); a browser media element
+ * follows it and gets 206. The probe MUST follow redirects for the same
+ * reason it sends the browser-shaped range: a probe that stops at the 302 is
+ * not mirroring the browser and rejects playable sources as
+ * `probe_status_other`. Observed 2026-09-29: every candidate resolved through
+ * a proxy egress landed on an edge outside the prober's network and 302'd,
+ * which is what turned a working URL into `resolved:false` in production.
+ * Following does not weaken the whole-body gate: the 403/416 refusals are not
+ * redirects and are still observed directly.
  */
 
 /** How long one format probe may take before the candidate is skipped. */
@@ -123,7 +134,10 @@ async function sendProbe(
   try {
     const response = await fetchFn(url, {
       headers: { Range: range },
-      redirect: "manual",
+      // Mirror the browser: a media element follows the CDN's edge redirect
+      // and only the final response is what it plays. `manual` here rejected
+      // a playable 302->206 with `probe_status_other`.
+      redirect: "follow",
       signal: controller.signal,
     });
     try {

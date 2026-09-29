@@ -233,11 +233,25 @@ identity / source → provider resolution → source validation → AudioSource
   URL can never be re-served); library objects treated as untrusted input, fail
   closed.
 
-`youtubei.js` is imported by exactly two boundaries, each with its own test:
-`playback/innertube-client.ts` (stream resolution) and `innertube/session.ts`
-(discovery and the shared session). Both consume the same `Innertube`
-instance — asserted as a count of `Innertube.create(`, with comments stripped,
-not merely as a convention. See §8a.
+`youtubei.js` is imported only inside the two provider-internal boundaries,
+each with its own test: `playback/innertube-client.ts` (stream resolution) and
+`innertube/` (discovery, the shared session, and the optional egress seam).
+Both halves consume the same `Innertube` instance — asserted as a count of
+`Innertube.create(`, with comments stripped, not merely as a convention. See §8a.
+- **Optional egress proxy (anti-bot):** from a datacenter egress (Vercel
+  Functions), YouTube's player endpoint answers some videos with
+  `playabilityStatus.status = "LOGIN_REQUIRED"` / "Sign in to confirm you're
+  not a bot" and no `streaming_data`, so extraction legitimately sees zero
+  formats and playback fails while the same video resolves from another
+  network. When `AURORA_YOUTUBE_EGRESS_PROXY` is set, `innertube/egress.ts`
+  replaces the platform shim's fetch/Request/Headers with one proxy-dispatched
+  triple **before** the session is created (the library captures
+  `Platform.shim.fetch` at HTTP-client construction), so discovery and playback
+  leave from the configured egress. Off by default: unset, the shim is
+  untouched and the global `fetch` is used, byte-for-byte as before. It carries
+  no cookies, tokens, or signed-in session, and proxies nothing but InnerTube:
+  the googlevideo media probe stays direct (the CDN is reachable from the
+  function and is fetched by the user's browser anyway).
 - **Format discovery:** adaptive audio formats preferred; muxed audio+video
   acceptable last resort; video-carrying formats never outrank audio-only;
   MIME `audio/mp4` > `audio/webm` > other; higher bitrate wins;
@@ -295,6 +309,16 @@ not merely as a convention. See §8a.
   (`audio/mp4; codecs="mp4a.40.2"` → `audio/mp4`) purely for diagnosis, because
   a strict content-type match is precisely the false negative that would reject
   a valid format.
+
+  **Redirects (2026-09-29).** The probe follows redirects, because a browser
+  media element does. googlevideo answers a valid playback URL with a 302 to a
+  different edge (`rr5---…` → `rr10---…`) and the browser then gets `206` for
+  the same request; the URL is playable. A probe using `redirect: "manual"`
+  stopped at the 302 and reported `probe_status_other`, which is what turned
+  working candidates into `resolved: false` once resolution moved to a proxy
+  egress whose exit edge differed from the prober's network. Following does not
+  weaken the whole-body gate: 403 and 416 are not redirects and are still
+  observed directly.
 
   **Skip reasons.** A rejected candidate logs `playback_format_skipped` with
   `itag`, `reason` (a stable `FormatProbeReason`: `probe_status_403`,

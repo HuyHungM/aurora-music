@@ -36,6 +36,38 @@ const publicOriginSchema = z
   // and still short-circuits `undefined` before the transform above runs.
   .optional();
 
+/**
+ * Optional forward-proxy URL for the YouTube InnerTube egress. Validated at
+ * the domain boundary like `AURORA_PUBLIC_URL`, so a malformed value fails the
+ * boot with a named rule instead of surfacing as an opaque tunnel error on the
+ * first playback. Only absolute `http(s)` URLs are accepted (credentials
+ * `user:password@` allowed); `socks*` is refused here because the tunnel
+ * implements HTTP CONNECT only. An empty string means "unset".
+ */
+export const EGRESS_PROXY_ERROR =
+  "AURORA_YOUTUBE_EGRESS_PROXY must be an absolute http(s) proxy URL";
+
+const egressProxySchema = z
+  .string()
+  .trim()
+  .optional()
+  .superRefine((value, ctx) => {
+    if (value !== undefined && value !== "" && parseHttpProxyUrl(value) === null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: EGRESS_PROXY_ERROR });
+    }
+  })
+  .optional();
+
+function parseHttpProxyUrl(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  return url.protocol === "http:" || url.protocol === "https:" ? value : null;
+}
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL must not be empty"),
@@ -70,6 +102,14 @@ const EnvSchema = z.object({
   // Server-only. Enables the YouTube metadata provider (search/lookup).
   // Absent key = YouTube provider stays unregistered; never NEXT_PUBLIC.
   YOUTUBE_API_KEY: z.string().optional(),
+  // Server-only, optional. Absolute http(s) URL of a forward proxy the shared
+  // YouTube InnerTube session sends through, for when this runtime's egress is
+  // treated as a datacenter and YouTube answers the player request with
+  // `LOGIN_REQUIRED` ("Sign in to confirm you're not a bot") and no streaming
+  // data. Covers discovery and playback (one shared session); nothing else is
+  // proxied. May carry credentials; never logged, never NEXT_PUBLIC.
+  // Unset or empty = direct egress, exactly as before.
+  AURORA_YOUTUBE_EGRESS_PROXY: egressProxySchema,
   // Server-only Client Credentials for the Spotify catalog provider.
   // Both required to register Spotify; absent = stays unregistered.
   SPOTIFY_CLIENT_ID: z.string().optional(),
@@ -111,6 +151,7 @@ export const envVarRequirements = {
   YOUTUBE_API_KEY: "optional",
   SPOTIFY_CLIENT_ID: "optional",
   SPOTIFY_CLIENT_SECRET: "optional",
+  AURORA_YOUTUBE_EGRESS_PROXY: "optional",
   AURORA_E2E_AUTH: "optional",
   AURORA_E2E_LIVE_PLAYBACK: "optional",
   AURORA_E2E_ALLOW_TEST_FLAGS: "optional",

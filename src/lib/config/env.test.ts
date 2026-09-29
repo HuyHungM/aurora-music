@@ -263,6 +263,57 @@ describe("AURORA_PUBLIC_URL", () => {
   });
 });
 
+/**
+ * `AURORA_YOUTUBE_EGRESS_PROXY` routes the shared InnerTube egress through a
+ * forward proxy when this runtime's own egress is treated as a datacenter.
+ * Validated at this boundary so a malformed URL fails the boot with a named
+ * rule instead of surfacing as an opaque tunnel error on the first playback.
+ */
+describe("AURORA_YOUTUBE_EGRESS_PROXY", () => {
+  it("is optional, and absent/empty means direct egress", () => {
+    expect(
+      parseEnv({ DATABASE_URL: "file:./dev.db" }).AURORA_YOUTUBE_EGRESS_PROXY,
+    ).toBeUndefined();
+    expect(
+      parseEnv({ DATABASE_URL: "file:./dev.db", AURORA_YOUTUBE_EGRESS_PROXY: "  " })
+        .AURORA_YOUTUBE_EGRESS_PROXY,
+    ).toBe("");
+  });
+
+  it("is classified as optional in the requirements registry", () => {
+    expect(envVarRequirements.AURORA_YOUTUBE_EGRESS_PROXY).toBe("optional");
+  });
+
+  it("accepts absolute http(s) proxy URLs, including credentials", () => {
+    for (const value of [
+      "http://proxy.example:8080",
+      "https://proxy.example",
+      "http://user:pass@proxy.example:3128",
+    ]) {
+      expect(
+        parseEnv({ DATABASE_URL: "file:./dev.db", AURORA_YOUTUBE_EGRESS_PROXY: value })
+          .AURORA_YOUTUBE_EGRESS_PROXY,
+        value,
+      ).toBe(value);
+    }
+  });
+
+  it("rejects anything that is not an absolute http(s) URL", () => {
+    for (const value of [
+      "proxy.example:8080",
+      "socks5://proxy.example:1080",
+      "ftp://proxy.example",
+      "not a url",
+    ]) {
+      expect(
+        () =>
+          parseEnv({ DATABASE_URL: "file:./dev.db", AURORA_YOUTUBE_EGRESS_PROXY: value }),
+        value,
+      ).toThrow(ConfigError);
+    }
+  });
+});
+
 describe("envVarRequirements", () => {
   it("classifies DATABASE_URL as required", () => {
     expect(envVarRequirements.DATABASE_URL).toBe("required");

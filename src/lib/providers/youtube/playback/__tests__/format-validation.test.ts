@@ -125,6 +125,21 @@ describe("probeFormatConsumability verdicts", () => {
     expect(verdict.contentType).toBe("application/octet-stream");
   });
 
+  it("follows a CDN edge redirect instead of rejecting the 302 (browser-shaped)", async () => {
+    // googlevideo answers a valid playback URL with 302 to another edge; a
+    // browser media element follows it and gets 206. Regression guard for a
+    // probe that passed redirect:"manual" and turned a working URL into
+    // probe_status_other / resolved:false in production.
+    const fetchFn = vi.fn(async (_url: string, init?: RequestInit) =>
+      init?.redirect === "follow" ? response(206, "audio/mp4") : response(302),
+    );
+    const verdict = await probeFormatConsumability("https://cdn.example/a.m4a", {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    expect(verdict).toMatchObject({ consumable: true, reason: "consumable", status: 206 });
+    expect((fetchFn.mock.calls[0]?.[1] as RequestInit | undefined)?.redirect).toBe("follow");
+  });
+
   it("rejects a missing url without touching the network", async () => {
     const fetchFn = vi.fn(async () => response(206));
     const verdict = await probeFormatConsumability("", {

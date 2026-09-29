@@ -121,6 +121,10 @@ export function createYouTubeResolver(
 
   async function verifyFormat(url: string): Promise<FormatProbeVerdict> {
     if (!injected) {
+      // Direct egress, deliberately: the googlevideo CDN is reachable from the
+      // function and is fetched by the user's browser directly, so only the
+      // anti-bot-challenged InnerTube API is proxied (see
+      // ../innertube/egress.ts).
       return await probeFormatConsumability(url);
     }
     try {

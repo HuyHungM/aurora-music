@@ -73,6 +73,9 @@ by automated gates. It is a statement of what holds, not a wishlist.
   `<project-id> Project CA`) is the canonical case: supply that CA as the trust
   anchor. It is a public certificate but is a host secret like any other — it
   is never committed to Git and never served. See `docs/deployment.md`.
+- `AURORA_YOUTUBE_EGRESS_PROXY` is optional and server-only: an operator's
+  forward proxy for the YouTube InnerTube egress. It may embed proxy
+  credentials, is never logged, and never reaches the client bundle.
 - No `NEXT_PUBLIC_*` variables anywhere in source or `.env.example`.
 - Never log secret values; `src/lib/diagnostics/logger.ts` drops
   secret-shaped fields and redacts URL shapes fail-closed.
@@ -232,7 +235,12 @@ introduces no new trust boundary:
 
 - googlevideo traffic is never intercepted or cached (service worker
   denylist + unit tests + live observation). Resolver accepts exact
-  provider ids only — there is no generic URL fetch endpoint and no proxy.
+  provider ids only — there is no generic URL fetch endpoint, and no user
+  request is proxied. The one proxy is an operator-configured, server-only
+  forward proxy for the YouTube InnerTube session
+  (`AURORA_YOUTUBE_EGRESS_PROXY`, `innertube/egress.ts`): it carries no
+  cookies, tokens, or signed-in session, applies only to InnerTube
+  discovery/playback, and is dormant unless the variable is set.
 
 ## Release smoke checks
 

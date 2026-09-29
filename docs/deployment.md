@@ -58,6 +58,7 @@ Production (and Preview, where useful) environment. Never commit values.
 | `AUTH_GITHUB_ID` / `AUTH_GITHUB_SECRET` | Optional; enables GitHub sign-in. |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Optional; enables the Spotify catalog provider. |
 | `YOUTUBE_API_KEY` | Optional; enables the YouTube metadata provider. |
+| `AURORA_YOUTUBE_EGRESS_PROXY` | Optional. Absolute `http(s)` forward proxy for the shared YouTube InnerTube session (discovery + playback). Set it only when this function's egress is treated as a datacenter and playback fails with YouTube's `LOGIN_REQUIRED` bot challenge. Only InnerTube traffic is proxied — never user traffic. May embed credentials. |
 | `AURORA_FEATURE_FLAGS` | Optional server-side kill switches (see below). |
 
 `AURORA_DATABASE_CA_CERT_PATH` and `SERVER_PORT` are Node-host file/port
@@ -65,6 +66,32 @@ mechanisms and are not used on Vercel, which supplies its own port and has no
 persistent file to point at. Supply the CA inline instead. `AUTH_TRUST_HOST`
 is not required when `AURORA_PUBLIC_URL` is set: the origin is pinned, not
 inferred from a proxy header.
+
+**YouTube anti-bot egress.** Vercel Functions egress from a datacenter range,
+and YouTube's player endpoint answers some videos there with
+`playabilityStatus.status = "LOGIN_REQUIRED"` ("Sign in to confirm you're not a
+bot") and no `streaming_data`; extraction then sees zero formats and playback
+fails with `No playable audio format available`, while the same video resolves
+from a non-datacenter network. The `playback_extraction_empty` log line now
+carries `hasStreamingData` / `playabilityStatus` / `playabilityReason` so this
+is unambiguous. The only legitimate remedy is a different egress: point
+`AURORA_YOUTUBE_EGRESS_PROXY` at an HTTP CONNECT proxy on such a network. Never
+satisfy the challenge by carrying cookies, tokens, or a signed-in session; see
+`ARCHITECTURE.md` §8.
+
+A minimal, CONNECT-only reference proxy with a strict InnerTube host allowlist
+ships in this repository at `tools/youtube-egress-proxy.mjs`. Run it on a
+non-datacenter host:
+
+```bash
+PROXY_USER=… PROXY_PASS=… PORT=8080 node tools/youtube-egress-proxy.mjs
+```
+
+then point `AURORA_YOUTUBE_EGRESS_PROXY` at `http://USER:PASSWORD@HOST:PORT`.
+It tunnels only the InnerTube hosts (`www.youtube.com`, `youtube.com`,
+`m.youtube.com`, `music.youtube.com`, `youtubei.googleapis.com`); googlevideo
+is deliberately **not** in its allowlist and must not be added — the CDN is
+probed and played directly, from the function and the browser respectively.
 
 ### Database migrations
 

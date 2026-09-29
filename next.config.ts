@@ -84,8 +84,11 @@ const nextConfig: NextConfig = {
   // E2E harness, Vercel Functions and the typecheck type graph) run the
   // application on Node, where `pg` must stay external rather than be bundled
   // by the server compiler. The driver is reached through Prisma's
-  // `@prisma/adapter-pg`, so only `pg` needs the exemption.
-  serverExternalPackages: ["pg"],
+  // `@prisma/adapter-pg`, so only `pg` needs the exemption. `undici` backs the
+  // optional YouTube egress proxy (src/lib/providers/youtube/innertube/
+  // egress.ts); it is imported only when AURORA_YOUTUBE_EGRESS_PROXY is set
+  // and stays external so its Node-only transport is not re-bundled.
+  serverExternalPackages: ["pg", "undici"],
 
   async headers() {
     return [
