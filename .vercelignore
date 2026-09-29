@@ -1,0 +1,25 @@
+# Never upload local environment files into a Vercel build.
+#
+# Runtime and build variables are configured in the Vercel project (Project →
+# Settings → Environment Variables). A local `.env` must not override them: it
+# can point at machine-local files (e.g. a CA certificate path such as
+# AURORA_DATABASE_CA_CERT_PATH) that do not exist on the build machine, and a
+# local `.env.local` carries a loopback `AURORA_PUBLIC_URL`/`AUTH_URL` that
+# would both confuse OAuth and trip the "one public origin" boot check.
+.env
+.env.*
+!.env.example
+
+# Local/generated artifacts that must never be part of a deployment upload.
+.next
+.vercel
+dist
+.vinext
+.wrangler
+stitch_aurora_music_redesign
+.qa
+.qa-*
+coverage
+test-results
+playwright-report
+*.out

@@ -34,6 +34,20 @@ bunx prisma studio               # database browser
 fresh install produces a working tree. See `docs/deployment.md` for the release
 order and `AGENTS.md` for the toolchain contract.
 
+## Deployment
+
+Aurora runs as a **native Next.js application on Vercel**. Vercel detects the
+framework, runs `next build` and serves the app through Node.js Functions;
+there is no `vercel.json`, no OpenNext adapter and no Workers bundle. Cloudflare
+provides **DNS only** (the apex `auroramuzik.dpdns.org` 301-redirects to the
+canonical `https://app.auroramuzik.dpdns.org`).
+
+Set `DATABASE_URL`, `AURORA_DATABASE_CA_CERT` (Aiven's public CA as inline PEM),
+`AURORA_PUBLIC_URL` and `AUTH_SECRET` as Vercel environment variables, and run
+`bunx prisma migrate deploy` before promoting a deployment. The full procedure —
+environment variables, migration order, readiness, smoke checks, TLS/CA, backup
+and rollback — is in [`docs/deployment.md`](docs/deployment.md).
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More
@@ -44,9 +58,3 @@ To learn more about Next.js, take a look at the following resources:
 - [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

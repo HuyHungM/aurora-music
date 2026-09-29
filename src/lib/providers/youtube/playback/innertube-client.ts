@@ -195,6 +195,17 @@ export function createInnertubePlaybackClient(
       throw new ExtractorError(PROVIDER_ID, OPERATION, `Video unavailable: ${videoId}`);
     }
 
+    // Playability is the OUTER verdict YouTube puts on the player response. When
+    // it is not OK, there is usually no `streaming_data` at all — which is how a
+    // datacenter egress that YouTube challenges (LOGIN_REQUIRED, "Sign in to
+    // confirm you're not a bot") reaches us: a valid player response with zero
+    // formats, not a network or decipher failure. Both values are short,
+    // provider-controlled strings (not a request echo), so recording them is what
+    // turns "empty extraction" into an actionable diagnosis.
+    const playability = asRecord((info as { playability_status?: unknown }).playability_status);
+    const playabilityStatus = asNonEmptyString(playability?.status);
+    const playabilityReason = asNonEmptyString(playability?.reason);
+
     const streaming = asRecord(info.streaming_data);
     // Both adaptive (usually audio-only) and regular (muxed) format lists
     // are candidates; format selection prefers audio-only and treats muxed
@@ -259,6 +270,14 @@ export function createInnertubePlaybackClient(
         decipherAttempts,
         decipherSuccesses,
         decipherFailures,
+        // WHY it was empty, not just that it was. A present player response with
+        // `hasStreamingData: false` and a challenge `playabilityStatus` is an
+        // egress/anti-bot condition; `hasStreamingData: true` with formatsSeen 0
+        // would instead point at a parser/shape regression. `playabilityReason`
+        // is provider copy (URL-redacted by the logger), truncated defensively.
+        hasStreamingData: streaming !== null,
+        ...(playabilityStatus ? { playabilityStatus } : {}),
+        ...(playabilityReason ? { playabilityReason: playabilityReason.slice(0, 120) } : {}),
       });
     }
 

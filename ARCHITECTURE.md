@@ -1093,22 +1093,18 @@ instrumentation boot validation → next start → health → smoke
   service worker (production smoke: 16/16; E2E: 77 passed under Bun).
   `typecheck` depends on `.next/types`, so a build precedes it on a clean
   tree.
-- **Cloudflare Workers (OpenNext):** the same server-rendered application
-  (API routes, Auth.js, Prisma/PostgreSQL, the YouTube resolver and server
-  actions — not a static export) deploys through the committed
-  `open-next.config.ts` and `wrangler.jsonc` and the
-  `preview`/`deploy`/`upload` scripts, which wrap `opennextjs-cloudflare`.
-  The Cloudflare build starts from those committed files and never
-  auto-runs `@opennextjs/cloudflare migrate`; `build` stays `next build`
-  because `opennextjs-cloudflare build` invokes it internally (pointing
-  `build` at the OpenNext command would recurse). Workers run with the
-  `nodejs_compat` compatibility flag so `pg`, `@prisma/adapter-pg` and
-  Auth.js execute server-side. `next.config.ts` lists `pg` and
-  `pg-cloudflare` in `serverExternalPackages`: `pg-cloudflare` exposes a
-  `workerd` export condition whose real socket files (`dist/index.js`,
-  `esm/index.mjs`) Next's tracer does not follow by default, and OpenNext
-  only restores them for packages named there. See
-  docs/deployment.md → "Cloudflare Workers (OpenNext)".
+- **Vercel (native Next.js):** the same server-rendered application (API
+  routes, Auth.js, Prisma/PostgreSQL, the YouTube resolver and server actions —
+  not a static export) deploys to Vercel, which detects the Next.js framework,
+  runs the real `build` script (`next build`) and serves the App Router through
+  Vercel's Node.js Functions. There is no `vercel.json`, no OpenNext adapter and
+  no Workers bundle. `next.config.ts` lists `pg` in `serverExternalPackages` so
+  the driver stays external rather than being bundled by the server compiler.
+  Cloudflare provides DNS only; the apex `auroramuzik.dpdns.org` 301-redirects
+  to the canonical `app.auroramuzik.dpdns.org` and is not an application route.
+  Database TLS uses the provider CA supplied inline via
+  `AURORA_DATABASE_CA_CERT` (see §14 and docs/deployment.md). See
+  docs/deployment.md → "Target platform: Vercel (native Next.js)".
 
 ## 20. Design system
 

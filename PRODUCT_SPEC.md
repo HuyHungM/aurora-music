@@ -94,11 +94,12 @@ Mechanics:
   `AURORA_PUBLIC_URL` (`https://app.auroramuzik.dpdns.org`), and that declaration —
   not the `Host` header — decides the `redirect_uri`. Two things make this
   necessary rather than cosmetic. The internal origin the process listens on
-  (`http://127.0.0.1:24584`) must never reach Google: with the port attached,
-  the callback is rejected as `redirect_uri_mismatch` and nobody can sign in.
+  (a loopback port, or Vercel's own deployment address) must never reach Google:
+  with the port attached, the callback is rejected as `redirect_uri_mismatch`
+  and nobody can sign in.
   And the port a server was *booted* with is not the port the *public* origin
   has, which is why the declaration exists rather than a port-stripping rule.
-  A tunnel's `Host` header cannot be the authority here, because a tunnel
+  A proxy's `Host` header cannot be the authority here, because a proxy
   configured to append the internal port to the public hostname is precisely
   the failure being fixed. Unset, the request headers decide — correct for
   localhost and LAN, which have no public origin to declare.
