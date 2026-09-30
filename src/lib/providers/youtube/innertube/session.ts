@@ -34,6 +34,12 @@
  * an environment without the crypto the generator expects; that failure is
  * the same class as any other transient create failure and is retried by the
  * next caller, not special-cased here.
+ *
+ * TEMPORARY DUAL-EGRESS EXCEPTION. Playback failover keeps one session per
+ * configured egress so primary and secondary can use different proxies at the
+ * same time. Discovery keeps using the shared session below. This is an
+ * explicitly temporary workaround; the no-second-session rule in
+ * `docs/scope-boundaries.md` is otherwise unchanged.
  */
 
 import { Innertube } from "youtubei.js";
@@ -73,6 +79,20 @@ function defaultSessionFactory(): Promise<Innertube> {
 
 export function sharedInnertubeSession(): Promise<Innertube> {
   return defaultSessionFactory();
+}
+
+/**
+ * Constructs one playback-only InnerTube session bound to an explicit fetch
+ * implementation (normally a proxy-dispatched fetch from `egress.ts`).
+ *
+ * The caller memoises the result per egress. No proxy URL, credential, or
+ * request payload is accepted or logged here; this is only the single
+ * repository seam where a session may be constructed.
+ */
+export function createProxyInnertubeSession(
+  fetchFn: typeof fetch,
+): Promise<Innertube> {
+  return Innertube.create({ generate_session_locally: true, fetch: fetchFn });
 }
 
 // ---------------------------------------------------------------------------

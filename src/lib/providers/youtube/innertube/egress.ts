@@ -81,17 +81,192 @@ export function buildProxiedEgress(
   return { fetch: proxied, Request: undici.Request, Headers: undici.Headers };
 }
 
+/**
+ * Creates a proxy-dispatched `fetch` that leaves `Request`/`Headers`
+ * construction to the caller.
+ *
+ * This is the temporary dual-egress seam: the two failover InnerTube
+ * sessions must send through different proxies while the shared session and
+ * the googlevideo probe keep their existing globals. Translating the request
+ * to URL + method + headers + body before calling `undici.fetch` keeps one
+ * undici module coherent with both dispatchers, instead of replacing the
+ * global shim triple twice. The proxy URL (which may embed credentials) is
+ * held only in the dispatcher closure and is never logged.
+ */
+export function createProxyFetch(
+  proxyUrl: string,
+  undici: UndiciEgressModule,
+): FetchFn {
+  const dispatcher = new undici.ProxyAgent(proxyUrl);
+  return (async (
+    input: Parameters<FetchFn>[0],
+    init?: Parameters<FetchFn>[1],
+  ) => {
+    const headers = new undici.Headers();
+    appendProxyHeaders(headers, requestHeaders(input));
+    appendProxyHeaders(headers, (init as { headers?: unknown } | undefined)?.headers);
+    const rest = { ...((init ?? {}) as Record<string, unknown>) };
+    // Body, headers, and dispatcher are always derived here: a caller must
+    // not smuggle a different dispatcher (or proxy URL) into the request.
+    delete rest.body;
+    delete rest.headers;
+    delete rest.dispatcher;
+    return undici.fetch(requestUrl(input), {
+      ...(rest as object),
+      method: requestMethod(input, init),
+      headers,
+      body: await requestBody(input, init),
+      dispatcher,
+    } as never);
+  }) as FetchFn;
+}
+
+function requestUrl(input: Parameters<FetchFn>[0]): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  const url = (input as { url?: unknown } | null)?.url;
+  if (typeof url === "string" && url.length > 0) {
+    return url;
+  }
+  throw new TypeError("Unsupported proxy fetch input");
+}
+
+function requestRecord(input: Parameters<FetchFn>[0]): {
+  method?: unknown;
+  headers?: unknown;
+  bodyUsed?: unknown;
+  text?: unknown;
+} | null {
+  if (typeof input === "object" && input !== null && !(input instanceof URL)) {
+    return input as {
+      method?: unknown;
+      headers?: unknown;
+      bodyUsed?: unknown;
+      text?: unknown;
+    };
+  }
+  return null;
+}
+
+function requestMethod(
+  input: Parameters<FetchFn>[0],
+  init?: Parameters<FetchFn>[1],
+): string {
+  const initMethod = (init as { method?: unknown } | undefined)?.method;
+  if (typeof initMethod === "string" && initMethod.length > 0) {
+    return initMethod;
+  }
+  const method = requestRecord(input)?.method;
+  if (typeof method === "string" && method.length > 0) {
+    return method;
+  }
+  return "GET";
+}
+
+function requestHeaders(input: Parameters<FetchFn>[0]): unknown {
+  return requestRecord(input)?.headers;
+}
+
+async function requestBody(
+  input: Parameters<FetchFn>[0],
+  init?: Parameters<FetchFn>[1],
+): Promise<BodyInit | undefined> {
+  const initBody = (init as { body?: unknown } | undefined)?.body;
+  if (initBody !== undefined) {
+    return initBody as BodyInit;
+  }
+  const record = requestRecord(input);
+  if (record?.bodyUsed !== true && typeof record?.text === "function") {
+    const text = await (record.text as (this: unknown) => Promise<unknown>).call(input);
+    return typeof text === "string" && text.length > 0 ? text : undefined;
+  }
+  return undefined;
+}
+
+function appendProxyHeaders(
+  target: { set(name: string, value: string): unknown },
+  source: unknown,
+): void {
+  if (!source || typeof source !== "object") {
+    return;
+  }
+  if (typeof (source as Headers).forEach === "function") {
+    (source as Headers).forEach((value, key) => {
+      target.set(key, value);
+    });
+    return;
+  }
+  if (Array.isArray(source)) {
+    for (const entry of source) {
+      if (Array.isArray(entry) && typeof entry[0] === "string") {
+        target.set(entry[0], String(entry[1] ?? ""));
+      }
+    }
+    return;
+  }
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === "string") {
+      target.set(key, value);
+    } else if (Array.isArray(value)) {
+      target.set(key, value.map((item) => String(item)).join(", "));
+    } else if (value !== undefined && value !== null) {
+      target.set(key, String(value));
+    }
+  }
+}
+
 let installPromise: Promise<void> | null = null;
+let undiciModulePromise: Promise<UndiciEgressModule> | null = null;
+const proxyFetchByUrl = new Map<string, Promise<FetchFn>>();
 
 /** Test hook: forgets any memoised install attempt. */
 export function resetYouTubeEgress(): void {
   installPromise = null;
 }
 
+/** Test hook: forgets memoised undici/proxy-fetch state. */
+export function resetProxyFetchCache(): void {
+  undiciModulePromise = null;
+  proxyFetchByUrl.clear();
+}
+
 async function loadUndici(): Promise<UndiciEgressModule> {
   // Dynamic so the default, proxy-less path never loads or bundles it.
-  const mod = await import("undici");
-  return mod as unknown as UndiciEgressModule;
+  if (!undiciModulePromise) {
+    undiciModulePromise = import("undici").then(
+      (mod) => mod as unknown as UndiciEgressModule,
+    ).catch((error: unknown) => {
+      undiciModulePromise = null;
+      throw error;
+    });
+  }
+  return undiciModulePromise;
+}
+
+/**
+ * Returns a memoised proxy-dispatched fetch for one proxy URL. One closure
+ * per URL keeps repeated playback resolutions from rebuilding agents; a
+ * failed build is not memoised, so the next attempt retries.
+ */
+export function proxyFetchFor(proxyUrl: string): Promise<FetchFn> {
+  const pending = proxyFetchByUrl.get(proxyUrl);
+  if (pending) {
+    return pending;
+  }
+  const created = loadUndici()
+    .then((undici) => createProxyFetch(proxyUrl, undici))
+    .catch((error: unknown) => {
+      if (proxyFetchByUrl.get(proxyUrl) === created) {
+        proxyFetchByUrl.delete(proxyUrl);
+      }
+      throw error;
+    });
+  proxyFetchByUrl.set(proxyUrl, created);
+  return created;
 }
 
 /**

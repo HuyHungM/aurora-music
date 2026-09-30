@@ -78,7 +78,13 @@ function mapInfoError(videoId: string, error: unknown): never {
   }
   const message = error instanceof Error ? error.message : "";
   if (/unavailable|deleted|not found|private|unplayable|login required/i.test(message)) {
-    throw new ExtractorError(PROVIDER_ID, OPERATION, `Video unavailable: ${videoId}`);
+    // Preserve the cause for the temporary egress-failover classifier. The
+    // public message stays a stable unavailable verdict, while the cause lets
+    // failover distinguish a LOGIN_REQUIRED anti-bot response from a
+    // genuinely unavailable video without logging provider text.
+    throw new ExtractorError(PROVIDER_ID, OPERATION, `Video unavailable: ${videoId}`, {
+      cause: error,
+    });
   }
   throw new ExtractorError(
     PROVIDER_ID,

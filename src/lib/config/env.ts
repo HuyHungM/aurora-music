@@ -46,17 +46,25 @@ const publicOriginSchema = z
  */
 export const EGRESS_PROXY_ERROR =
   "AURORA_YOUTUBE_EGRESS_PROXY must be an absolute http(s) proxy URL";
+export const EGRESS_PROXY_PRIMARY_ERROR =
+  "AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY must be an absolute http(s) proxy URL";
+export const EGRESS_PROXY_SECONDARY_ERROR =
+  "AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY must be an absolute http(s) proxy URL";
 
-const egressProxySchema = z
-  .string()
-  .trim()
-  .optional()
-  .superRefine((value, ctx) => {
-    if (value !== undefined && value !== "" && parseHttpProxyUrl(value) === null) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: EGRESS_PROXY_ERROR });
-    }
-  })
-  .optional();
+function egressProxySchemaFor(message: string) {
+  return z
+    .string()
+    .trim()
+    .optional()
+    .superRefine((value, ctx) => {
+      if (value !== undefined && value !== "" && parseHttpProxyUrl(value) === null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+      }
+    })
+    .optional();
+}
+
+const egressProxySchema = egressProxySchemaFor(EGRESS_PROXY_ERROR);
 
 function parseHttpProxyUrl(value: string): string | null {
   let url: URL;
@@ -110,6 +118,16 @@ const EnvSchema = z.object({
   // proxied. May carry credentials; never logged, never NEXT_PUBLIC.
   // Unset or empty = direct egress, exactly as before.
   AURORA_YOUTUBE_EGRESS_PROXY: egressProxySchema,
+  // Temporary dual-egress failover for playback resolution. The primary is
+  // tried first; the secondary is used only when the primary returns a
+  // retryable InnerTube failure. Values may carry credentials; never logged,
+  // never NEXT_PUBLIC. Unset or empty disables that leg of the failover.
+  AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY: egressProxySchemaFor(
+    EGRESS_PROXY_PRIMARY_ERROR,
+  ),
+  AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY: egressProxySchemaFor(
+    EGRESS_PROXY_SECONDARY_ERROR,
+  ),
   // Server-only Client Credentials for the Spotify catalog provider.
   // Both required to register Spotify; absent = stays unregistered.
   SPOTIFY_CLIENT_ID: z.string().optional(),
@@ -152,6 +170,8 @@ export const envVarRequirements = {
   SPOTIFY_CLIENT_ID: "optional",
   SPOTIFY_CLIENT_SECRET: "optional",
   AURORA_YOUTUBE_EGRESS_PROXY: "optional",
+  AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY: "optional",
+  AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY: "optional",
   AURORA_E2E_AUTH: "optional",
   AURORA_E2E_LIVE_PLAYBACK: "optional",
   AURORA_E2E_ALLOW_TEST_FLAGS: "optional",

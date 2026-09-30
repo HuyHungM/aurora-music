@@ -314,6 +314,45 @@ describe("AURORA_YOUTUBE_EGRESS_PROXY", () => {
   });
 });
 
+describe("AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY and AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY", () => {
+  it("are optional and classified as optional", () => {
+    const env = parseEnv({ DATABASE_URL: "file:./dev.db" });
+    expect(env.AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY).toBeUndefined();
+    expect(env.AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY).toBeUndefined();
+    expect(envVarRequirements.AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY).toBe("optional");
+    expect(envVarRequirements.AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY).toBe("optional");
+  });
+
+  it("accept absolute http(s) proxy URLs, including credentials", () => {
+    const env = parseEnv({
+      DATABASE_URL: "file:./dev.db",
+      AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY: "http://user:pass@primary.example:8080",
+      AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY: "https://secondary.example",
+    });
+    expect(env.AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY).toBe(
+      "http://user:pass@primary.example:8080",
+    );
+    expect(env.AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY).toBe("https://secondary.example");
+  });
+
+  it("rejects non-http(s) failover URLs on the offending leg", () => {
+    for (const [field, value] of [
+      ["AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY", "socks5://primary.example:1080"],
+      ["AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY", "secondary.example:8080"],
+    ] as const) {
+      try {
+        parseEnv({ DATABASE_URL: "file:./dev.db", [field]: value });
+        throw new Error(`should have rejected ${field}`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigError);
+        if (error instanceof ConfigError) {
+          expect(error.details.join(" ")).toContain(field);
+        }
+      }
+    }
+  });
+});
+
 describe("envVarRequirements", () => {
   it("classifies DATABASE_URL as required", () => {
     expect(envVarRequirements.DATABASE_URL).toBe("required");

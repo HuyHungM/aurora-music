@@ -260,6 +260,18 @@ Both halves consume the same `Innertube` instance — asserted as a count of
   no cookies, tokens, or signed-in session, and proxies nothing but InnerTube:
   the googlevideo media probe stays direct (the CDN is reachable from the
   function and is fetched by the user's browser anyway).
+- **Temporary dual-egress playback failover:** when
+  `AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY` and
+  `AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY` are set, playback resolution tries
+  primary first and secondary once on retryable InnerTube failures (timeout,
+  connection failure, `LOGIN_REQUIRED`, unusable playability, zero usable
+  candidates, invalid/missing streaming data). Failover is deterministic, one
+  attempt per egress per video, with a 3-consecutive-failure / 5-minute
+  per-egress circuit breaker; logs carry only proxy label, video id,
+  success/failure, candidate count, failure category, and latency. Playback
+  keeps one memoised session per configured egress while discovery keeps the
+  shared session; googlevideo validation still uses `redirect: "follow"` and
+  browsers still fetch media directly.
 - **Format discovery:** adaptive audio formats preferred; muxed audio+video
   acceptable last resort; video-carrying formats never outrank audio-only;
   MIME `audio/mp4` > `audio/webm` > other; higher bitrate wins;
