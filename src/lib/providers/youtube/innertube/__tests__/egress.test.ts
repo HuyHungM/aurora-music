@@ -30,10 +30,7 @@ vi.mock("undici", () => ({
 
 import {
   buildProxiedEgress,
-  createProxyFetch,
   installYouTubeEgress,
-  proxyFetchFor,
-  resetProxyFetchCache,
   resetYouTubeEgress,
   type UndiciEgressModule,
 } from "@/lib/providers/youtube/innertube/egress";
@@ -51,7 +48,6 @@ afterEach(() => {
   mocks.proxy = undefined;
   mocks.agentUrls.length = 0;
   resetYouTubeEgress();
-  resetProxyFetchCache();
 });
 
 describe("buildProxiedEgress", () => {
@@ -99,53 +95,5 @@ describe("installYouTubeEgress", () => {
 
     expect(mocks.agentUrls).toEqual(["http://proxy.example:8080"]);
     expect(Platform.shim.fetch).not.toBe(ORIGINAL_SHIM.fetch);
-  });
-});
-
-describe("createProxyFetch", () => {
-  it("translates a caller-built request onto one proxy dispatcher", async () => {
-    const calls: Array<{ input: unknown; init: Record<string, unknown> }> = [];
-    class FakeAgent {
-      constructor(readonly url: string) {}
-    }
-    const undici: UndiciEgressModule = {
-      fetch: (async (input: unknown, init?: unknown) => {
-        calls.push({ input, init: (init ?? {}) as Record<string, unknown> });
-        return { ok: true } as unknown as Response;
-      }) as unknown as typeof fetch,
-      ProxyAgent: FakeAgent as unknown as UndiciEgressModule["ProxyAgent"],
-      Request,
-      Headers,
-    };
-
-    const proxied = createProxyFetch("http://user:pass@proxy.example:8080", undici);
-    const request = new Request("https://www.youtube.com/youtubei/v1/player", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ videoId: "dQw4w9WgXcQ" }),
-    });
-    await proxied(request, { redirect: "follow" });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0].input).toBe("https://www.youtube.com/youtubei/v1/player");
-    expect(calls[0].init.method).toBe("POST");
-    expect(calls[0].init.redirect).toBe("follow");
-    expect(calls[0].init.body).toBe(JSON.stringify({ videoId: "dQw4w9WgXcQ" }));
-    const headers = calls[0].init.headers as Headers;
-    expect(headers.get("content-type")).toBe("application/json");
-    expect(calls[0].init.dispatcher).toBeInstanceOf(FakeAgent);
-    expect((calls[0].init.dispatcher as FakeAgent).url).toBe(
-      "http://user:pass@proxy.example:8080",
-    );
-  });
-
-  it("memoises one fetch closure per proxy URL", async () => {
-    const first = await proxyFetchFor("http://proxy.example:8080");
-    const second = await proxyFetchFor("http://proxy.example:8080");
-    expect(second).toBe(first);
-
-    resetProxyFetchCache();
-    const rebuilt = await proxyFetchFor("http://proxy.example:8080");
-    expect(rebuilt).not.toBe(first);
   });
 });

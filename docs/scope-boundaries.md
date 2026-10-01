@@ -285,11 +285,6 @@ Deliberately **not** done, each with the reason rather than left as a gap:
   the player scripts derived from it. Two sessions would mean two identities
   and no shared in-flight state, so the count is asserted by test rather than
   left to review.
-- **Temporary variance: dual-egress playback sessions.** The temporary
-  primary/secondary playback failover keeps one memoised playback-only session
-  per configured egress because each session's HTTP client is bound to one
-  proxy dispatcher. Discovery still uses the shared session. This is an
-  explicitly temporary workaround, not a repeal of the rule above.
 - **No `@distube/ytsr` or `ytpl`.** `youtubei.js` is already installed and
   already the playback adapter; a second InnerTube library would be a second
   parser and a second failure surface. `@distube/ytdl-core` stays forbidden —

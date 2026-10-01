@@ -160,11 +160,6 @@ Explicit rules:
 - **Source resolution:** `TrackIdentity` → `PlaybackResolver` (first
   resolvable source in identity order; Deezer/Spotify sources skipped as
   metadata-only) → YouTube resolver → `AudioSource`.
-- **Temporary dual-egress failover:** when primary/secondary YouTube egress
-  proxies are configured, InnerTube resolution tries primary first and
-  secondary once on retryable failures. Format ranking, browser-shaped
-  validation, direct browser→googlevideo media, and ephemeral `AudioSource`
-  semantics are unchanged.
 - **Format selection:** Innertube format discovery, audio-only preferred
   (MIME `audio/mp4` > `audio/webm` > other, higher bitrate wins,
   URL-lexicographic tie-break), **muxed audio+video as acceptable last

@@ -6,7 +6,7 @@ import { NormalizationError, PlaybackResolutionError } from "@/lib/domain";
 import { logger } from "@/lib/diagnostics/logger";
 import { idSchema, providerIdSchema } from "@/lib/validation/schemas";
 import { isYouTubeVideoId } from "@/lib/providers/youtube/normalize";
-import { createFailoverAwarePlaybackClient } from "@/lib/providers/youtube/playback/egress-failover";
+import { createInnertubePlaybackClient } from "@/lib/providers/youtube/playback/innertube-client";
 import { createYouTubeResolver } from "@/lib/providers/youtube/playback/youtube-resolver";
 import { guardServerAction, type GuardFailureMeta } from "@/lib/api/action-guard";
 
@@ -100,7 +100,7 @@ export async function resolveAudioSourceAction(
   }
 
   try {
-    const resolver = createYouTubeResolver(createFailoverAwarePlaybackClient());
+    const resolver = createYouTubeResolver(createInnertubePlaybackClient());
     const source = await resolver.resolveSource({
       source: "youtube",
       id: trackParsed.data,

@@ -59,8 +59,6 @@ Production (and Preview, where useful) environment. Never commit values.
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Optional; enables the Spotify catalog provider. |
 | `YOUTUBE_API_KEY` | Optional; enables the YouTube metadata provider. |
 | `AURORA_YOUTUBE_EGRESS_PROXY` | Optional. Absolute `http(s)` forward proxy for the shared YouTube InnerTube session (discovery + playback). Set it only when this function's egress is treated as a datacenter and playback fails with YouTube's `LOGIN_REQUIRED` bot challenge. Only InnerTube traffic is proxied — never user traffic. May embed credentials. |
-| `AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY` | Temporary failover primary for playback resolution. Explicit primary; falls back to `AURORA_YOUTUBE_EGRESS_PROXY` when unset. May embed credentials; never log values. |
-| `AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY` | Temporary failover secondary for playback resolution. Used once per video, only after a retryable primary failure. May embed credentials; never log values. |
 | `AURORA_FEATURE_FLAGS` | Optional server-side kill switches (see below). |
 
 `AURORA_DATABASE_CA_CERT_PATH` and `SERVER_PORT` are Node-host file/port
@@ -94,14 +92,6 @@ It tunnels only the InnerTube hosts (`www.youtube.com`, `youtube.com`,
 `m.youtube.com`, `music.youtube.com`, `youtubei.googleapis.com`); googlevideo
 is deliberately **not** in its allowlist and must not be added — the CDN is
 probed and played directly, from the function and the browser respectively.
-
-**Temporary failover rollout.** Set both `AURORA_YOUTUBE_EGRESS_PROXY_PRIMARY`
-and `AURORA_YOUTUBE_EGRESS_PROXY_SECONDARY` as Production secrets, then
-redeploy. Keep the existing primary secret until failover is verified; do not
-remove it first. Failover is primary-first, one secondary attempt per video,
-with a 3-failure / 5-minute per-egress cooldown. Operational logs use proxy
-labels only — never proxy URLs, usernames, passwords, headers, or signed
-googlevideo URLs.
 
 ### Database migrations
 
