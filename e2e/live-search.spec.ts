@@ -24,14 +24,22 @@ test.describe("live search-to-play (Scenario B)", () => {
     const results = page.getByRole("region", { name: "Tracks" });
     await expect(results).toBeVisible({ timeout: 60_000 });
     await results.getByRole("button", { name: /^Play / }).first().click();
+    // UI-LEVEL evidence, deliberately labelled as such.
+    //
+    // The real media oracle (`helpers/assertPlayback.ts`) reads a probe that is
+    // mounted ONLY by the `/e2e-playback` fixture route. This test drives
+    // `/search`, so no probe exists here and asserting media state would fail
+    // with UI_SELECTOR_FAILURE rather than test anything.
+    //
+    // So this asserts the strongest thing genuinely available on this route -
+    // the UI transitioned to playing - and does NOT dress it up as proof that
+    // audio advanced. Media-level playback proof lives in `live-playback.spec.ts`
+    // against the same production code path. The previous version here read
+    // `input[aria-label="Seek"]`, which is precisely the selector that produced
+    // the "missing slider means NOT_PLAYING" misdiagnosis.
     await expect(
       page.getByRole("button", { name: /^Pause / }).first(),
     ).toBeVisible({ timeout: 60_000 });
-    const slider = page.locator('input[aria-label="Seek"]').first();
-    const t0 = Number(await slider.inputValue());
-    await expect(async () => {
-      expect(Number(await slider.inputValue())).toBeGreaterThan(t0);
-    }).toPass({ timeout: 30_000 });
     await expect(page.getByRole("status")).toHaveCount(0);
   });
 });

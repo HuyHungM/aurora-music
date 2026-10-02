@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SearchField } from "../search-field";
+import { useSearchPending } from "@/lib/search/search-pending";
 
 const mocks = vi.hoisted(() => ({
   push: vi.fn(),
@@ -41,6 +42,12 @@ afterEach(() => {
   vi.clearAllMocks();
   mocks.pathname = "/";
   mocks.query = "";
+  // The field's search lock is module state, so a test that submits leaves the
+  // next one with a locked field unless it is released. Every test here asserts
+  // submission behaviour, and they are not about locking — that is
+  // `search-locking.test.tsx`. `release` (not a raw `setState`) so the store's
+  // safety timer is cancelled too.
+  useSearchPending.getState().release();
 });
 
 function renderField(props: Partial<Parameters<typeof SearchField>[0]> = {}) {

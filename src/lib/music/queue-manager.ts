@@ -44,6 +44,23 @@ export interface QueueSnapshot {
   repeat: QueueRepeatMode;
 }
 
+/**
+ * The order fields of a snapshot, without the queue view.
+ *
+ * `getSnapshot()` is O(n) in the queue because `items` maps every entry to a
+ * canonical identity (and mints an id per entry). Callers that only read
+ * cursor/shuffle/repeat/order — the engine's snapshot builder, and the
+ * `queue.length` / `queue.playOrder` accessors — must not pay that, and they
+ * run on every store notification for every subscriber. This is the same
+ * fields, read straight off the store.
+ */
+export interface QueueOrderState {
+  playOrder: readonly number[];
+  currentIndex: number;
+  shuffle: boolean;
+  repeat: QueueRepeatMode;
+}
+
 export interface QueueStoreState {
   queue: Track[];
   playOrder: number[];
@@ -86,6 +103,8 @@ export interface ReplaceOptions {
 
 export interface QueueManager {
   getSnapshot(): QueueSnapshot;
+  /** Order fields only — O(order), with no per-entry canonicalization. */
+  getOrderState(): QueueOrderState;
   getCurrentTrack(): QueueSnapshotItem | null;
   getCurrentIndex(): number;
   play(track: TrackIdentity | Track, options?: { autoplay?: boolean }): void;
@@ -126,25 +145,38 @@ function checkIndex(length: number, index: number, name: string): void {
 export function createQueueManager(deps: QueueManagerDeps): QueueManager {
   const { getState, actions } = deps;
 
-  function snapshot(): QueueSnapshot {
+  function repeatModeOf(repeat: QueueStoreState["repeat"]): QueueRepeatMode {
+    return repeat === "one" ? "track" : repeat === "all" ? "queue" : "off";
+  }
+
+  function orderState(): QueueOrderState {
     const state = getState();
     return {
-      items: state.queue.map(toSnapshotItem),
       playOrder: [...state.playOrder],
       currentIndex: state.position,
       shuffle: state.shuffle,
-      repeat:
-        state.repeat === "one"
-          ? "track"
-          : state.repeat === "all"
-            ? "queue"
-            : "off",
+      repeat: repeatModeOf(state.repeat),
+    };
+  }
+
+  function snapshot(): QueueSnapshot {
+    const order = orderState();
+    return {
+      items: getState().queue.map(toSnapshotItem),
+      playOrder: order.playOrder,
+      currentIndex: order.currentIndex,
+      shuffle: order.shuffle,
+      repeat: order.repeat,
     };
   }
 
   return {
     getSnapshot(): QueueSnapshot {
       return snapshot();
+    },
+
+    getOrderState(): QueueOrderState {
+      return orderState();
     },
 
     getCurrentTrack(): QueueSnapshotItem | null {

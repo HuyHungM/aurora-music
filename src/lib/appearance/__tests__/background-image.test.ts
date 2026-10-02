@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  BACKGROUND_LOAD_TIMEOUT_MS,
   BACKGROUND_MAX_BYTES,
   BACKGROUND_MAX_EDGE,
   BACKGROUND_MAX_PIXELS,
@@ -641,5 +642,75 @@ describe("the rejection set", () => {
         "unsupportedType",
       ].sort(),
     );
+  });
+});
+
+/* ==========================================================================
+   THE LOAD DEADLINE
+
+   `image.decode()` settles when the image arrives or the request fails.
+   Neither event fires when a host accepts the connection and then sends
+   nothing, which is what a wedged or rate-limiting image host looks like.
+   Measured in a real browser before the deadline existed: the settings panel
+   sat with Apply disabled and "Checking..." forever, no error, and no way out
+   short of a reload.
+   ========================================================================== */
+describe("validateBackgroundImage load deadline", () => {
+  it("gives up on an image that never settles, and says it is a network problem", async () => {
+    // Never resolves, never rejects: the shape of a stalled host.
+    const never = { naturalWidth: 0, naturalHeight: 0, decode: () => new Promise<never>(() => {}) };
+    const result = await validateBackgroundImage("https://img.test/photo.png", {
+      createImage: () => never,
+      // Milliseconds rather than the shipped twelve, so the test proves the
+      // deadline rather than merely waiting for it.
+      timeoutMs: 20,
+    });
+    expect(rejection(result)).toBe("networkError");
+  }, 2000);
+
+  it("still accepts an image that arrives in time", async () => {
+    // The regression the deadline could have caused: a bound that fires on a
+    // working image would turn the feature into "nothing ever applies".
+    const result = await validateBackgroundImage("https://img.test/photo.png", {
+      createImage: () => sizedImage(1920, 1080),
+      timeoutMs: 1000,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("still rejects an image that fails outright", async () => {
+    // The deadline must not swallow the fast, definite answers.
+    const failing = {
+      naturalWidth: 0,
+      naturalHeight: 0,
+      decode: async () => {
+        throw new Error("decode failed");
+      },
+    };
+    const result = await validateBackgroundImage("https://img.test/photo.png", {
+      createImage: () => failing,
+      timeoutMs: 1000,
+    });
+    expect(rejection(result)).toBe("networkError");
+  });
+
+  it("treats a stalled decode as a network problem, not a broken file", async () => {
+    // The cooperative path sniffed real PNG bytes, so a decode failure here
+    // would tell the user to go and inspect a file that is perfectly fine.
+    // The bytes arrived; the element stalled. That is a network problem.
+    const never = { naturalWidth: 0, naturalHeight: 0, decode: () => new Promise<never>(() => {}) };
+    const result = await validateBackgroundImage("https://img.test/photo.png", {
+      fetch: cooperativeFetch(bytesFor("png")),
+      createImage: () => never,
+      timeoutMs: 20,
+    });
+    expect(rejection(result)).toBe("networkError");
+  }, 2000);
+
+  it("falls back to the shipped deadline when none is supplied", () => {
+    // A bounded constant, asserted so the number cannot quietly become
+    // unbounded again.
+    expect(BACKGROUND_LOAD_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(BACKGROUND_LOAD_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
   });
 });

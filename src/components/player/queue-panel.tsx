@@ -62,6 +62,19 @@ interface QueueMenuPlacement {
   bottom: number;
 }
 
+/**
+ * Whether a key event originated in something the user is typing into.
+ *
+ * `queue-panel`'s arrow handling is registered on `document`, and the panel
+ * contains the add-to-playlist filter input and the share/rename fields. Arrow
+ * keys inside those must move the caret, not skip tracks.
+ */
+function isTextEntry(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element || typeof element.closest !== "function") return false;
+  return element.closest("input, textarea, select, [contenteditable]") !== null;
+}
+
 function QueueItemMenu({
   position,
   track,
@@ -271,7 +284,7 @@ function QueueItemMenu({
                     e.stopPropagation();
                     setShowPlaylistMenu(true);
                   }}
-                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
                 >
                   <ListMusicIcon size={16} className="text-text-muted" />
                   <span>{t("menus.addToPlaylist")}</span>
@@ -291,7 +304,7 @@ function QueueItemMenu({
                     }
                     setIsOpen(false);
                   }}
-                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
                 >
                   <RadioIcon size={16} className="text-text-muted" />
                   <span>{t("menus.startRadio")}</span>
@@ -306,7 +319,7 @@ function QueueItemMenu({
                     onMove?.("up");
                     setIsOpen(false);
                   }}
-                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none disabled:pointer-events-none disabled:opacity-50"
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2 disabled:pointer-events-none disabled:opacity-50"
                 >
                   <ArrowUpIcon size={16} className="text-text-muted" />
                   <span>{t("queue.moveUpShort")}</span>
@@ -321,7 +334,7 @@ function QueueItemMenu({
                     onMove?.("down");
                     setIsOpen(false);
                   }}
-                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none disabled:pointer-events-none disabled:opacity-50"
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2 disabled:pointer-events-none disabled:opacity-50"
                 >
                   <ArrowDownIcon size={16} className="text-text-muted" />
                   <span>{t("queue.moveDownShort")}</span>
@@ -334,7 +347,7 @@ function QueueItemMenu({
                     removeFromQueue(position);
                     setIsOpen(false);
                   }}
-                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
                 >
                   <XIcon size={16} className="text-text-muted" />
                   <span>{t("queue.removeFromQueue")}</span>
@@ -438,6 +451,12 @@ export function QueuePanel() {
   const playOrder = useMusicEngineState((s) => s.playOrder);
   const position = useMusicEngineState((s) => s.currentIndex);
   const isPlaying = useMusicEngineState((s) => s.isPlaying);
+  // The mini player's own visibility condition (`MiniPlayer` returns null
+  // without one), read from the same engine store so the two cannot disagree.
+  // The sheet's bottom anchor depends on whether the mini player is occupying
+  // the space above the navigation: with a track playing the sheet clears
+  // both, with an empty queue and no track it drops to just above the nav.
+  const hasCurrentTrack = useMusicEngineState((s) => s.currentTrack !== null);
   const listRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLLIElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -517,11 +536,18 @@ export function QueuePanel() {
         return;
       }
       if (e.key === "ArrowDown") {
+        // This listener is on `document` while the queue is open, and the
+        // queue contains a live playlist-filter `<input>` and other text
+        // fields. Arrow keys must still move the caret there, so the handler
+        // stands down for text entry rather than hijacking it into a track
+        // skip. Mirrors the target check in the row-menu handler above.
+        if (isTextEntry(e.target)) return;
         e.preventDefault();
         next();
         return;
       }
       if (e.key === "ArrowUp") {
+        if (isTextEntry(e.target)) return;
         e.preventDefault();
         prev();
         return;
@@ -718,20 +744,40 @@ export function QueuePanel() {
         // are removed rather than left behind.
         //
         // Phase 54: `max-h` is now bounded from the TOP as well as the bottom.
-        // The sheet is anchored `bottom-[calc(9rem + inset)]` with
-        // `max-h-[70svh]`, and 70svh of a 375px-tall landscape phone is 262px,
-        // which fits - but of a 320px viewport (a small phone with the browser
-        // chrome open) 70svh plus the 9rem anchor exceeds the screen and the
-        // header row rendered off the top with no way to scroll to it. Capping
-        // against the space actually available between the anchor and the
-        // safe-area top makes the sheet fit by construction.
+        // 70svh of a 375px-tall landscape phone is 262px, which fits - but of
+        // a 320px viewport (a small phone with the browser chrome open) 70svh
+        // plus the bottom anchor exceeds the screen and the header row rendered
+        // off the top with no way to scroll to it. Capping against the space
+        // actually available between the anchor and the safe-area top makes
+        // the sheet fit by construction.
+        //
+        // The bottom offset is `--p-queue-sheet-bottom` (globals.css), read by
+        // BOTH `bottom-` and `max-h` so the anchor and the cap cannot drift
+        // apart. The `sm` step lives on that variable, not in a second class.
+        // When no track is playing the mini player is gone, so the sheet
+        // drops to just above the navigation (4rem + breathing room) instead
+        // of floating over empty space where the mini player would be.
+        //
+        // Horizontal centering is by explicit insets, not `mx-auto` alone. A
+        // `fixed` element with `left/right: auto` resolves its horizontal
+        // position to the static position — the containing block's left edge —
+        // so `mx-auto` never centered anything and the sheet hugged the left
+        // edge with dead space on the right at every phone width. With left
+        // AND right set, `mx-auto` + `max-w-md` centers by construction:
+        // full-bleed minus 1rem below 480px, a centered 28rem sheet above it.
+        // (A translate-based centering is not an option: the `presence-sheet`
+        // animation owns `transform` and would override it mid-entrance.)
         //
         // No `overflow-hidden`, and that is deliberate: a row menu renders
         // into the layer below so it can be bigger than the list it opened
         // from, and the panel clipping its own layer would put the clipping
         // back one level up. The rounded corners never needed it —
         // `rounded-2xl` clips this element's own background and border.
-        className="presence-sheet aurora-glass-float fixed bottom-[calc(9rem+env(safe-area-inset-bottom))] z-dialog mx-auto flex max-h-[min(70svh,calc(100dvh-9rem-env(safe-area-inset-bottom)-env(safe-area-inset-top)))] w-[calc(100vw-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] max-w-md flex-col rounded-2xl border border-border-subtle sm:bottom-[calc(9.5rem+env(safe-area-inset-bottom))] lg:bottom-[calc(6rem+1.5rem)] lg:right-6 lg:left-auto lg:mx-0 lg:w-96 focus:outline-none"
+        className={`presence-sheet aurora-glass-float fixed z-dialog mx-auto flex flex-col rounded-2xl border border-border-subtle focus:outline-none left-[max(1rem,env(safe-area-inset-left))] right-[max(1rem,env(safe-area-inset-right))] max-w-md ${
+          hasCurrentTrack
+            ? "bottom-[calc(var(--p-queue-sheet-bottom)+env(safe-area-inset-bottom))] max-h-[min(70svh,calc(100dvh-var(--p-queue-sheet-bottom)-env(safe-area-inset-bottom)-env(safe-area-inset-top)))]"
+            : "bottom-[calc(4.5rem+env(safe-area-inset-bottom))] max-h-[min(70svh,calc(100dvh-4.5rem-env(safe-area-inset-bottom)-env(safe-area-inset-top)))]"
+        } lg:bottom-[calc(6rem+1.5rem)] lg:right-6 lg:left-auto lg:mx-0 lg:w-96`}
       >
       <div className="flex items-center gap-2 border-b border-border-subtle px-4 py-3">
         <QueueIcon size={18} className="text-text-muted" />

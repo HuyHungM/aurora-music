@@ -408,14 +408,13 @@ describe("video metadata caching is per id, not per batch (§26)", () => {
   });
 
   it("drops ids no source could resolve instead of inventing an entry", async () => {
-    const primary = fakeTransport({ getVideos: async () => ({ items: [], pageInfo: {} }) });
-    const fallback = fakeTransport({});
-    const result = await createTieredTransport({ primary, fallback }).getVideos([
-      "aaaaaaaaaaa",
-      "bbbbbbbbbbb",
-    ]);
-    // A deleted or private video simply is not in the response. Padding it
-    // would produce a Track with a fabricated title.
+    // Both sources empty: a deleted or private video is not in either
+    // response. Padding it would produce a Track with a fabricated title.
+    const empty = { getVideos: async () => ({ items: [], pageInfo: {} }) };
+    const result = await createTieredTransport({
+      primary: fakeTransport(empty),
+      fallback: fakeTransport(empty),
+    }).getVideos(["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     expect(result.items).toEqual([]);
   });
 
@@ -427,6 +426,38 @@ describe("video metadata caching is per id, not per batch (§26)", () => {
     const result = await createTieredTransport({ primary, fallback }).getVideos([VIDEO]);
     expect(result.items).toHaveLength(1);
     expect(fallback.calls).toEqual([`getVideos:${VIDEO}`]);
+  });
+
+  it("falls back when the primary source succeeds but resolves nothing", async () => {
+    // Every search path already routes an EMPTY primary to the official API.
+    // Video metadata had no such gate, and `getVideos` isolates per-item
+    // failures by swallowing them - so a dead session or a partition arrives
+    // here as a successful empty batch, never as the throw the catch expects.
+    // Without this gate a transient upstream fault emptied the whole playlist
+    // or track page with no error shown and no fallback consulted.
+    const primary = fakeTransport({ getVideos: async () => ({ items: [], pageInfo: {} }) });
+    const fallback = fakeTransport({});
+    const result = await createTieredTransport({ primary, fallback }).getVideos([VIDEO]);
+    expect(result.items).toHaveLength(1);
+    expect(fallback.calls).toEqual([`getVideos:${VIDEO}`]);
+  });
+
+  it("does not re-ask the official API for a partly-resolved batch", async () => {
+    // A partial answer is a real answer. Re-asking the quota-limited source
+    // for the remainder is exactly the double-spend the tiering avoids.
+    const primary = fakeTransport({
+      getVideos: async () => ({
+        items: [{ id: "aaaaaaaaaaa", title: "found" }],
+        pageInfo: {},
+      }),
+    });
+    const fallback = fakeTransport({});
+    const result = await createTieredTransport({ primary, fallback }).getVideos([
+      "aaaaaaaaaaa",
+      "bbbbbbbbbbb",
+    ]);
+    expect(result.items).toHaveLength(1);
+    expect(fallback.calls).toEqual([]);
   });
 });
 

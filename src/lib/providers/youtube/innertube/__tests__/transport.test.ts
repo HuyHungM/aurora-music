@@ -462,6 +462,60 @@ describe("video metadata", () => {
     }
   });
 
+  it("does not let a transient empty batch become an hour of 'no videos'", async () => {
+    // `getVideos` isolates per-item failures by swallowing them, so a dead
+    // session or a partition resolves the whole batch to `[]` - successfully.
+    // That value is recorded as a NEGATIVE cache entry, and the negative TTL
+    // used to be derived from the 6h positive TTL (`ttl / 6`), i.e. one hour
+    // of "these videos do not exist" served from cache with the official API
+    // fallback never consulted.
+    vi.useFakeTimers();
+    try {
+      const { session, getInfo } = fakeSession({
+        // A player response with no usable metadata normalizes to nothing -
+        // the same empty batch a dead session produces.
+        getInfo: { basic_info: undefined },
+      });
+      const transport = createInnerTubeTransport({
+        sessionFactory: async () => session as never,
+        videoTtlMs: 6 * 60 * 60_000,
+      });
+      expect((await transport.getVideos([VIDEO_ID])).items).toHaveLength(0);
+      // Still cached on the short negative clock: a genuine "no results" must
+      // not become a request storm.
+      vi.advanceTimersByTime(5_000);
+      await transport.getVideos([VIDEO_ID]);
+      expect(getInfo).toHaveBeenCalledOnce();
+
+      // But not for an hour. The upstream has recovered; we ask again.
+      vi.advanceTimersByTime(20_000);
+      await transport.getVideos([VIDEO_ID]);
+      expect(getInfo).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honours an explicit negative-ttl override for the video cache", async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, getInfo } = fakeSession({
+        getInfo: { basic_info: undefined },
+      });
+      const transport = createInnerTubeTransport({
+        sessionFactory: async () => session as never,
+        videoTtlMs: 6 * 60 * 60_000,
+        videoNegativeTtlMs: 1_000,
+      });
+      await transport.getVideos([VIDEO_ID]);
+      vi.advanceTimersByTime(2_000);
+      await transport.getVideos([VIDEO_ID]);
+      expect(getInfo).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("skips one unavailable video without sinking the batch", async () => {
     const getInfo = vi.fn(async (id: string) => {
       if (id === "badbadbadba") {

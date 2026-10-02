@@ -5,11 +5,13 @@
  *
  * ```text
  * query
+ *   -> normalizeSearchQuery()         (one canonical comparison view)
  *   -> ExtractorManager.searchAll()   (provider I/O, parallel fan-out)
  *   -> toTrackIdentity()              (canonicalization, one per track)
  *   -> TrackMatcher.match()           (pairwise equivalence, exact|strong only)
  *   -> mergeSourceReference()         (explicit enrichment, primary preserved)
- *   -> UnifiedSearchResult            (deterministic first-seen group order)
+ *   -> rankSearchResults()            (deterministic relevance order)
+ *   -> UnifiedSearchResult
  * ```
  *
  * Rules enforced here:
@@ -18,7 +20,12 @@
  * - Ties (two or more qualifying groups) stay separate: no ambiguous merges.
  * - Same provider+source id refreshes the existing group, never duplicates.
  * - Primary source and group identity id are preserved across merges.
- * - No provider ranking, no popularity, no playback, no persistence.
+ * - GROUPING IS NOT RANKING. `TrackMatcher` answers "are these two rows the
+ *   same recording?" and is never re-tuned; `rankSearchResults` answers "which
+ *   of these results does the person mean?" and only reorders. Neither reads
+ *   the other's thresholds, so improving one cannot silently move the other.
+ * - No popularity, no playback, no persistence. Ranking is local arithmetic
+ *   over rows the providers already returned — it issues no request.
  * - Provider tracks are never mutated; groups are new immutable values.
  * - Matcher thresholds are never adjusted here (Phase 07 stays calibrated).
  */
@@ -41,6 +48,9 @@ import {
   toTrackIdentity,
 } from "@/lib/domain";
 import { NormalizationError } from "@/lib/domain";
+import { normalizeSearchQuery } from "@/lib/search/normalize";
+import type { NormalizedQuery } from "@/lib/search/normalize";
+import { rankSearchResults } from "@/lib/search/rank";
 
 /** Minimal search backend surface; ExtractorManager satisfies it. */
 export interface SearchBackend {
@@ -52,6 +62,13 @@ export interface UnifiedSearchOptions extends FanoutSearchOptions {
   matcher?: TrackMatcher;
   /** Injected backend (default: shared extractor manager). */
   backend?: SearchBackend;
+  /**
+   * Rank results for relevance (default true). Set false only for a caller
+   * that deliberately wants provider order — nothing in the product does, and
+   * provider order is exactly the "first row wins" behaviour that put a live
+   * cover above the exact match.
+   */
+  rank?: boolean;
 }
 
 export interface UnifiedSearchDiagnostics {
@@ -65,11 +82,23 @@ export interface UnifiedSearchDiagnostics {
   skippedMalformed: number;
   /** Matcher classifications observed across pairwise evaluations. */
   matchCounts: Record<MatchClassification, number>;
+  /** Milliseconds spent ranking, excluding provider I/O and grouping. */
+  rankingMs: number;
+  /** Highest rank band the top result reached, or null for an empty result. */
+  topBand: string | null;
 }
 
 export interface UnifiedSearchResult {
   query: string;
-  /** Canonical groups in deterministic first-seen order. */
+  /**
+   * Canonical groups, best match first.
+   *
+   * Before ranking this was "first-seen order", which meant the first
+   * provider's first row took the top slot — measured on a realistic
+   * fan-out, a live cover outranked the exact match. Order is now relevance
+   * order; ties fall back to first-seen, so the determinism guarantee is
+   * unchanged.
+   */
   tracks: TrackIdentity[];
   /** Untouched provider outcomes (success/empty/unsupported/failed). */
   providers: ExtractorSearchOutcome[];
@@ -97,6 +126,8 @@ function emptyDiagnostics(): UnifiedSearchDiagnostics {
     ties: 0,
     skippedMalformed: 0,
     matchCounts: { exact: 0, strong: 0, possible: 0, rejected: 0 },
+    rankingMs: 0,
+    topBand: null,
   };
 }
 
@@ -122,6 +153,11 @@ export function createUnifiedSearch(backend: SearchBackend): UnifiedSearch {
         throw new NormalizationError("query", "Unified search requires a non-empty query");
       }
       const matcher = options.matcher ?? createTrackMatcher();
+      // The single canonical comparison view, built once per request and
+      // shared with ranking. Providers still receive `trimmed`: folding is a
+      // comparison concern, and sending a folded query upstream would ask
+      // YouTube to search for a spelling the person did not type.
+      const normalized = normalizeSearchQuery(trimmed);
       const fanout = await backend.searchAll(trimmed, {
         ...(options.providers !== undefined ? { providers: options.providers } : {}),
         ...(options.limit !== undefined ? { limit: options.limit } : {}),
@@ -181,6 +217,16 @@ export function createUnifiedSearch(backend: SearchBackend): UnifiedSearch {
       }
 
       diagnostics.groups = grouping.groups.length;
+
+      // Ranking runs last, on the merged groups, and only reorders. It is
+      // timed separately from grouping because the two have different causes:
+      // grouping cost scales with the pairwise matcher, ranking cost scales
+      // with the number of surviving groups. A regression in either should be
+      // attributable from the diagnostics alone.
+      const ranked = orderGroups(grouping.groups, normalized, options.rank !== false);
+      diagnostics.rankingMs = ranked.rankingMs;
+      diagnostics.topBand = ranked.topBand;
+
       const partial =
         fanout.succeeded &&
         fanout.outcomes.some(
@@ -188,13 +234,43 @@ export function createUnifiedSearch(backend: SearchBackend): UnifiedSearch {
         );
       return {
         query: fanout.query,
-        tracks: grouping.groups,
+        tracks: ranked.groups,
         providers: fanout.outcomes,
         succeeded: fanout.succeeded,
         partial,
         diagnostics,
       };
     },
+  };
+}
+
+interface OrderedGroups {
+  groups: TrackIdentity[];
+  rankingMs: number;
+  topBand: string | null;
+}
+
+/**
+ * Applies relevance order to the merged groups, or leaves provider order
+ * intact when ranking is switched off. A clock is passed in rather than read
+ * from `Date.now` directly so a test can make the timing assertion
+ * deterministic; the default stays the real clock.
+ */
+function orderGroups(
+  groups: TrackIdentity[],
+  query: NormalizedQuery,
+  rank: boolean,
+  now: () => number = Date.now,
+): OrderedGroups {
+  if (!rank || groups.length === 0) {
+    return { groups, rankingMs: 0, topBand: null };
+  }
+  const startedAt = now();
+  const ranked = rankSearchResults(query, groups);
+  return {
+    groups: ranked.map((entry) => entry.identity),
+    rankingMs: Math.max(0, now() - startedAt),
+    topBand: ranked[0]?.band ?? null,
   };
 }
 

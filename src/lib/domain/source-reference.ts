@@ -28,7 +28,32 @@ export interface SourceReference {
   metadata?: SourceReferenceMetadata;
 }
 
-const SOURCE_TYPES: readonly SourceType[] = ["youtube", "spotify", "deezer"];
+const SOURCE_TYPES: readonly SourceType[] = ["youtube", "spotify", "deezer", "local"];
+
+/**
+ * True for the three PROVIDER-backed source types.
+ *
+ * `isSourceType` deliberately answers true for `"local"` as well — a local
+ * file carries a stable source identity and must survive canonicalization.
+ * This narrower predicate exists for the places that must only ever talk to
+ * a provider: server-side resolution, provider matching, and catalog writes.
+ * A local track reaching one of those is a bug, and this is how it is caught
+ * rather than half-executed.
+ */
+export function isProviderSourceType(
+  value: unknown,
+): value is Exclude<SourceType, "local"> {
+  return (
+    typeof value === "string" &&
+    (PROVIDER_SOURCE_TYPES as readonly string[]).includes(value)
+  );
+}
+
+const PROVIDER_SOURCE_TYPES: readonly Exclude<SourceType, "local">[] = [
+  "youtube",
+  "spotify",
+  "deezer",
+];
 
 /** Type guard for the closed production source set. */
 export function isSourceType(value: unknown): value is SourceType {

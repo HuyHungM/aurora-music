@@ -9,8 +9,37 @@ import { Skeleton } from "@/components/ui/skeleton";
  * result layout section for section — header, field, top result, track rows,
  * then the artist and album grids — so the page does not jump when the real
  * results replace it. Each block reuses the same outer spacing and breakpoints
- * as `page.tsx`; the shimmer is `animate-pulse`, disabled under
+ * as `page.tsx`; the blocks themselves are the shared glass skeleton
+ * (translucent sweep in Glass Mode, pulse with it off), disabled under
  * `prefers-reduced-motion` (see `components/ui/skeleton.tsx`).
+ *
+ * WHY THE FIELD IS A BLOCK AND NOT THE REAL `SearchField`
+ *
+ * This was tried: a version of this file rendered the actual shared field
+ * instead of the placeholder, on the reasoning that the page field would then
+ * keep showing the submitted query and carry its own lock, spinner and
+ * `aria-busy`. It does not work, and the reason is structural rather than
+ * fixable here.
+ *
+ * `SearchField` calls `useSearchParams()`. A client component that does is not
+ * server-rendered inside a Suspense fallback — Next has no search params to give
+ * it while the navigation is still in flight, so it bails out and emits nothing.
+ * Measured in the browser: during a held RSC response this boundary rendered
+ * 57 skeleton blocks and ZERO `input[type=search]` elements, i.e. the field was
+ * simply absent rather than present-and-real.
+ *
+ * So the field's real behaviour during a search is delivered by the LAYOUT's
+ * header field instead. That one is never unmounted by this boundary, so it
+ * stays mounted, focused and locked for the whole request, and it is what
+ * `e2e/search-loading.spec.ts` asserts against. The page field's own lock is a
+ * correctness guard (it refuses a second submit) whose visible lifetime is
+ * almost nil, because it exists only once this boundary has been replaced.
+ *
+ * Giving the fallback a real, interactive field would mean removing
+ * `useSearchParams()` from `SearchField` — a client component with a great deal
+ * of carefully measured behaviour in it — to serve a below-`md` case where the
+ * header field is not rendered. That trade is not worth it, and it is not this
+ * file's to make.
  */
 export default function SearchLoading() {
   return (

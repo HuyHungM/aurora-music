@@ -27,6 +27,7 @@ const en: Messages = {
     home: "Home",
     search: "Search",
     library: "Library",
+    offline: "Local files",
     radio: "Radio",
     browse: "Browse",
   },
@@ -634,9 +635,6 @@ const en: Messages = {
     follow: "Follow",
     following: "Following",
   },
-  offline: {
-    message: "You're offline. Music playback requires an internet connection.",
-  },
   install: {
     title: "Install Aurora",
     description:
@@ -653,6 +651,7 @@ const en: Messages = {
     placeholder: "Search open music by track, artist, or album",
     clear: "Clear search",
     linkDetected: "{provider} link detected",
+    searching: "Searching…",
   },
   multiTab: {
     playingElsewhere: "Playing in another tab.",
@@ -662,6 +661,46 @@ const en: Messages = {
     fixtureLibrary: "E2E fixture library",
     fixtureDescription: "Deterministic catalog for authenticated persistence tests.",
     noFixtures: "No fixture tracks seeded. Run the authenticated E2E setup first.",
+  },
+  offline: {
+    // Two unrelated meanings live under one key: the offline NETWORK notice,
+    // and the local-files feature. They were merged rather than renamed
+    // because both are "the thing Aurora calls offline", and splitting the
+    // dictionary to avoid one collision would make the key space worse.
+    message: "You're offline. Music playback requires an internet connection.",
+    navLabel: "Local files",
+    title: "Local files",
+    subtitle:
+      "Play music you already have on this device. Your files stay where they are — nothing is uploaded to Aurora.",
+    chooseFolder: "Choose a folder",
+    changeFolder: "Choose a different folder",
+    forgetFolder: "Disconnect folder",
+    grantAccess: "Grant access",
+    reScan: "Scan again",
+    scanning: "Scanning folder…",
+    emptyFolder: "No playable audio was found in that folder.",
+    unsupportedTitle: "This browser can't open local folders",
+    unsupportedBody:
+      "Aurora uses the File System Access API to read a folder you pick, which only Chromium-based browsers provide. Try Chrome, Edge, or another Chromium browser.",
+    needsPermissionTitle: "Access needed",
+    needsPermissionBody:
+      "Aurora needs read access to this folder again before it can list it.",
+    deniedTitle: "Access refused",
+    deniedBody:
+      "This folder's read access was declined. You can grant it again, or choose a different folder.",
+    unavailableTitle: "Folder unavailable",
+    unavailableBody:
+      "This folder can no longer be opened — it may have been moved, deleted, or its access revoked. Choose the folder again.",
+    folderLabel: "Folder: {name}",
+    trackCount: "{count} tracks",
+    trackCountOne: "1 track",
+    truncatedWarning: "Showing the first tracks in this folder.",
+    noDuration: "--:--",
+    playTrack: "Play {title}",
+    queueTrack: "Add {title} to the queue",
+    fileNameLabel: "File: {name}",
+    privacyNote:
+      "Only the folder reference is remembered. Your audio is never uploaded, cached, or shared.",
   },
 };
 

@@ -18,6 +18,7 @@ import type {
 import type { QueueManager } from "./queue-manager";
 import type { EngineEventPayload } from "@/lib/player/engine";
 import { identityToTrack } from "./identity-track";
+import { claimIntentPrefetch } from "@/lib/playback/prefetch-intent";
 import type {
   MusicEngineAnyListener,
   MusicEngineEventName,
@@ -157,6 +158,11 @@ export interface MusicEngineDeps {
   queue: QueueManager;
   /** Store change notifications driving stateChange broadcasts. */
   subscribeStore: (listener: () => void) => () => void;
+  /**
+   * Background resolution for a likely-next track. Optional so tests can
+   * construct facades without a controller; absent means prefetch is a no-op.
+   */
+  prefetchTrack?: (track: Track) => void;
 }
 
 export interface PlayCollectionOptions {
@@ -179,6 +185,13 @@ export interface MusicEngine {
   setRepeat(mode: EngineRepeatMode): void;
   playCollection(tracks: Array<TrackIdentity | Track>, startIndex?: number): void;
   playAt(index: number): void;
+  /**
+   * Warms playback resolution for a track without playing it. Fire-and-forget:
+   * hover/focus intent and next-up warming flow through here; failures vanish
+   * and the slot is validated at consume time, so this can never break
+   * playback or surface an error.
+   */
+  prefetchTrack(track: TrackIdentity | Track): void;
   readonly queue: {
     add(track: TrackIdentity | Track): void;
     playNext(track: TrackIdentity | Track): void;
@@ -345,8 +358,8 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
   }
 
   function snapshotPlayOrder(): readonly number[] {
-    const playOrder = queueManager.getSnapshot().playOrder;
-    // Same reference-stabilization as snapshotQueue: getSnapshot() hands back
+    const playOrder = queueManager.getOrderState().playOrder;
+    // Same reference-stabilization as snapshotQueue: the manager hands back
     // a defensive copy, so without this every snapshot would look like a
     // reorder and useSyncExternalStore would re-render forever.
     if (
@@ -387,21 +400,33 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
 
   function buildSnapshot(): MusicEngineState {
     const state = getState();
-    const queueSnapshot = queueManager.getSnapshot();
+    // Order fields only. `getSnapshot()` would also map every queue entry to
+    // a canonical identity (one id minted per entry) and that array is
+    // discarded here — the queue itself is published by `snapshotQueue()`
+    // from the reference cache below. This runs once per store notification
+    // per subscriber, so at 4Hz engine ticks the discarded map was the
+    // single largest allocation on the playback path.
+    const order = queueManager.getOrderState();
     // Frozen at runtime (verified by tests); the cast reflects that the
     // shape is unchanged, only sealed against consumer mutation.
     const snapshot = {
       currentTrack: currentIdentity(),
       queue: snapshotQueue(),
       playOrder: snapshotPlayOrder(),
-      currentIndex: queueSnapshot.currentIndex,
+      currentIndex: order.currentIndex,
       isPlaying: state.isPlaying,
-      position: state.currentTime,
+      // Whole seconds, not the raw float. Progress UI renders seconds (time
+      // labels, 1s slider steps), so sub-second ticks would re-render every
+      // subscriber for a value nobody displays: flooring collapses the 4Hz
+      // engine ticks into 1Hz snapshot changes and the per-hook `Object.is`
+      // bail-out does the rest. The store keeps the raw float - seek math,
+      // persistence deltas and Media Session read it there, never here.
+      position: Math.floor(Math.max(0, state.currentTime)),
       duration: state.duration,
       volume: state.volume,
       muted: state.muted,
-      shuffle: queueSnapshot.shuffle,
-      repeat: queueSnapshot.repeat,
+      shuffle: order.shuffle,
+      repeat: order.repeat,
       isResolving: state.isLoading,
       error: snapshotError(),
     } as MusicEngineState;
@@ -578,10 +603,13 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
       return queueManager.getCurrentIndex();
     },
     get length(): number {
-      return queueManager.getSnapshot().playOrder.length;
+      // Not `getSnapshot().items.length`: reading a length must not
+      // canonicalize the whole queue, and radio/keep-listening poll this on
+      // every queue change.
+      return queueManager.getOrderState().playOrder.length;
     },
     get playOrder(): readonly number[] {
-      return queueManager.getSnapshot().playOrder;
+      return snapshotPlayOrder();
     },
   };
 
@@ -639,6 +667,35 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
     playAt(index: number): void {
       assertUsable();
       queueManager.playAt(index);
+    },
+
+    prefetchTrack(input: TrackIdentity | Track): void {
+      // No assertUsable: a hover that races unmount must vanish, not throw.
+      // Admission lives here, not in the component, so every UI entry point
+      // shares one policy without importing playback internals (the UI engine
+      // boundary forbids components from reaching past this facade):
+      //
+      // - youtube only. Server resolution is the expensive path being warmed;
+      //   local files need no warming, and offline rows must not mint object
+      //   URLs speculatively.
+      // - one intent gate for sweeps and re-hovers (throttle + remembered
+      //   keys). Programmatic next-up warming bypasses this on purpose — it
+      //   goes store → controller directly, because a throttle tuned for
+      //   pointer sweeps must never starve the actual next track.
+      try {
+        const track =
+          isTrackIdentity(input) ? identityToTrack(input) : input;
+        if (track.provider !== "youtube") {
+          return;
+        }
+        const key = `${track.provider}:${track.providerTrackId ?? track.id}`;
+        if (!claimIntentPrefetch(key)) {
+          return;
+        }
+        deps.prefetchTrack?.(track);
+      } catch {
+        // Speculation must never break playback.
+      }
     },
 
     stop(): void {

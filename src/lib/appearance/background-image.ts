@@ -102,6 +102,35 @@ export const BACKGROUND_MAX_PIXELS = 16_000_000;
 /** Refuse any single axis beyond this, independently of the pixel product. */
 export const BACKGROUND_MAX_EDGE = 8192;
 
+/**
+ * How long the browser is given to produce the image before we give up on it.
+ *
+ * WHY THIS EXISTS. `image.decode()` - and the `load`/`error` handlers it falls
+ * back to - settle when the image arrives OR when the request fails. There is a
+ * third case they do not cover: a host that accepts the connection and then
+ * sends nothing at all. Neither event fires, so the promise never settles.
+ *
+ * Measured in a browser before this constant existed, by stalling the response
+ * (which is what a wedged or rate-limiting image host actually looks like):
+ *
+ *   T+2s   Apply disabled, label "Checking…"
+ *   T+14s  Apply disabled, label "Checking…"
+ *   T+34s  Apply disabled, label "Checking…", no error shown
+ *
+ * The panel was left with a permanently dead control and no explanation, and
+ * the only way out was a reload. The background itself was never at fault: the
+ * previous selection stayed painted and the typed address stayed in the field,
+ * so nothing was lost - the UI simply could not report a wait that never ends.
+ *
+ * 12 seconds is chosen against the size limit rather than the connection: 4 MiB
+ * is the transfer ceiling, so on any connection fast enough to be usable that
+ * is comfortably inside this budget, while a host that has produced nothing in
+ * 12 seconds is not going to. Long enough that a slow mobile network with a
+ * large photograph is not failed for being slow; short enough that the user is
+ * given an answer while they are still looking at the form.
+ */
+export const BACKGROUND_LOAD_TIMEOUT_MS = 12_000;
+
 /* ==========================================================================
    FORMATS
    ========================================================================== */
@@ -306,6 +335,14 @@ export interface BackgroundImageEnvironment {
   fetch?: BackgroundImageFetch;
   /** Present in every browser; used for the no-CORS decode path. */
   createImage?: (src: string) => BackgroundImageElement;
+  /**
+   * Overrides `BACKGROUND_LOAD_TIMEOUT_MS`.
+   *
+   * Injectable rather than module-level mutable state, so a test can prove the
+   * timeout path in milliseconds and so a caller with a genuinely slow
+   * connection budget can be more generous without waiting on a wall clock.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -329,38 +366,67 @@ function readSize(image: BackgroundImageElement): {
 }
 
 /**
- * Waits for an image to be usable, without assuming a decode path.
+ * How an attempt to make an image usable ended.
+ *
+ * `failed` and `timedOut` are separate because the advice differs: a failure
+ * means the bytes arrived and the browser rejected them, while a timeout means
+ * they never arrived. Collapsing them would tell somebody whose host is
+ * down to go and check their file.
+ */
+type SettleOutcome = "loaded" | "failed" | "timedOut";
+
+/**
+ * Waits for an image to be usable, without assuming a decode path, and WITHOUT
+ * waiting forever.
  *
  * `decode()` is preferred because it settles only once the image is genuinely
  * ready to paint, which is the actual question being asked here. The
- * load/error handlers are the fallback for an element without it. Both are
- * guarded by a `done` latch because the two can race: an element that has
- * already fired `onload` by the time these are attached can call both, and a
- * second `resolve` is harmless but a lost `resolve` is a hung promise.
+ * load/error handlers are the fallback for an element without it. All three are
+ * guarded by a `done` latch because they can race: an element that has already
+ * fired `onload` by the time these are attached can call both, and a second
+ * `resolve` is harmless but a lost `resolve` is a hung promise.
+ *
+ * The timer is what makes this total. Without it, a host that accepts the
+ * connection and sends nothing leaves the promise unsettled forever - see
+ * `BACKGROUND_LOAD_TIMEOUT_MS` for the measurement that motivated it. The
+ * timer is cleared on every exit path, so a settled image never leaves one
+ * pending to fire into a dead promise.
  */
-async function settleImage(image: BackgroundImageElement): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+async function settleImage(
+  image: BackgroundImageElement,
+  timeoutMs: number,
+): Promise<SettleOutcome> {
+  return new Promise<SettleOutcome>((resolve) => {
     let done = false;
-    const finish = (value: boolean) => {
-      if (!done) {
-        done = true;
-        resolve(value);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (value: SettleOutcome) => {
+      if (done) {
+        return;
       }
+      done = true;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      resolve(value);
     };
+    // Armed before any decode work so a `decode()` that throws synchronously
+    // below still leaves a timer that `finish` owns and clears.
+    timer = setTimeout(() => finish("timedOut"), timeoutMs);
     try {
       if (typeof image.decode === "function") {
         void image.decode().then(
-          () => finish(true),
-          () => finish(false),
+          () => finish("loaded"),
+          () => finish("failed"),
         );
       } else if (image.onload || image.onerror) {
-        image.onload = () => finish(true);
-        image.onerror = () => finish(false);
+        image.onload = () => finish("loaded");
+        image.onerror = () => finish("failed");
       } else {
-        finish(image.naturalWidth > 0);
+        finish(image.naturalWidth > 0 ? "loaded" : "failed");
       }
     } catch {
-      finish(false);
+      finish("failed");
     }
   });
 }
@@ -414,10 +480,20 @@ export async function validateBackgroundImage(
   let size = readSize(image);
   const loaded = size !== null && size.width > 0 && size.height > 0;
   if (!loaded) {
-    const settled = await settleImage(image);
+    const settled = await settleImage(
+      image,
+      env.timeoutMs ?? BACKGROUND_LOAD_TIMEOUT_MS,
+    );
     // Re-read: `decode()` may have been what populated the size.
     size = readSize(image);
-    if (!settled && (size === null || size.width <= 0)) {
+    if (settled === "timedOut") {
+      // The host never finished sending. Nothing is wrong with the image, so
+      // this is a network problem rather than a decode failure - and reporting
+      // it is what lets the panel stop waiting and finally tell the user
+      // something, instead of holding the button disabled indefinitely.
+      return { ok: false, reason: "networkError" };
+    }
+    if (settled === "failed" && (size === null || size.width <= 0)) {
       // Nothing arrived and nothing decoded. Distinguished from a decode
       // failure of a real payload only by the absence of any dimensions, so
       // it is reported as a network problem, which is the likelier cause.
@@ -495,12 +571,22 @@ async function tryCooperative(
   } catch {
     return { ok: false, reason: "invalidUrl" };
   }
-  const settled = await settleImage(image);
+  const settled = await settleImage(
+    image,
+    env.timeoutMs ?? BACKGROUND_LOAD_TIMEOUT_MS,
+  );
   const size = readSize(image);
   if (size === null) {
     return { ok: false, reason: "decodeFailed" };
   }
-  if (!settled && size.width <= 0) {
+  if (settled === "timedOut") {
+    // The bytes were read, but the browser never finished decoding them. That
+    // is a stalled element rather than a malformed payload, so it is reported
+    // as a network problem - a decode failure here would send the user to
+    // inspect a file that is actually fine.
+    return { ok: false, reason: "networkError" };
+  }
+  if (settled === "failed" && size.width <= 0) {
     // The bytes sniffed as a real image but the browser would not decode
     // them. That is a truncated or deliberately malformed payload, not a
     // network problem, and it must not be stored.

@@ -128,6 +128,16 @@ describe("/api/app-config", () => {
     }
   });
 
+  it("is publicly cacheable and carries no per-request state", async () => {
+    // Static public contract: edge/CDN caching is safe and intended, and the
+    // body must be identical across requests so a cached copy is never stale
+    // in content, only in version.
+    const first = await GET();
+    expect(first.headers.get("Cache-Control")).toContain("public");
+    expect(first.headers.get("Cache-Control")).toContain("max-age=300");
+    expect(await first.json()).toEqual(await (await GET()).json());
+  });
+
   it("falls back rather than throwing when the manifest is unreadable", () => {
     // Defensive: a metadata endpoint must never become a 500.
     expect(FALLBACK_APP_VERSION).toBe("0.0.0");

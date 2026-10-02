@@ -44,8 +44,17 @@ import {
 
 const PROVIDER_NAME = "Spotify";
 
-/** Current search API cap per request; larger asks paginate boundedly. */
-const SEARCH_PAGE_SIZE = 10;
+/**
+ * Search API cap per request; larger asks paginate boundedly.
+ *
+ * This is the API's own maximum, not a conservative default. At 10 the search
+ * page — which asks for 20 — spent two sequential round trips per type-
+ * scoped search, three searches per render, for a result set the second
+ * request could not grow past. One request now covers every ask the product
+ * makes, and the loop below is only reached by a caller wanting more than the
+ * API returns in one page.
+ */
+const SEARCH_PAGE_SIZE = 50;
 const MAX_SEARCH_PAGES = 5;
 /** Collection page size for albums/playlists/artist-albums. */
 const COLLECTION_PAGE_SIZE = 50;

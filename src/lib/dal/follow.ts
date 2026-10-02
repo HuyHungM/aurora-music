@@ -112,8 +112,14 @@ export async function isFollowing(
   if (!artistId) {
     return false;
   }
-  const count = await db.follow.count({ where: { userId, artistId } });
-  return count > 0;
+  // `findFirst` on the `@@unique([userId, artistId])` index answers the
+  // boolean in one round trip; the COUNT it replaces computed a number nobody
+  // read and cost a second query to compute it.
+  const row = await db.follow.findFirst({
+    where: { userId, artistId },
+    select: { id: true },
+  });
+  return row !== null;
 }
 
 function isUniqueViolation(error: unknown): boolean {

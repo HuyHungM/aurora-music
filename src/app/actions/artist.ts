@@ -3,13 +3,22 @@
 import { requireUser } from "@/lib/dal/session";
 import { followArtist, unfollowArtist } from "@/lib/dal/follow";
 import type { Artist } from "@/lib/domain";
+import { followArtistSchema } from "@/lib/validation";
 
 export async function followArtistAction(
   artist: Artist,
 ): Promise<{ ok: boolean; following: boolean }> {
   try {
+    // `upsertArtist` writes this payload onto the SHARED, unowned `Artist`
+    // table — `name`, `image`, `bio` and `genres` — so it gets the same bound
+    // the track writers get. Without a schema there is no length ceiling on any
+    // of those columns, for any authenticated account.
+    const parsed = followArtistSchema.safeParse({ artist });
+    if (!parsed.success) {
+      return { ok: false, following: false };
+    }
     const user = await requireUser();
-    await followArtist(user.id, artist);
+    await followArtist(user.id, parsed.data.artist as Artist);
     return { ok: true, following: true };
   } catch {
     return { ok: false, following: false };

@@ -86,7 +86,17 @@ interface AppConfigBody {
     installable: boolean;
     serviceWorkerShell: boolean;
     offlineShell: boolean;
-    /** No offline download feature exists; never advertise one. */
+    /**
+     * No offline DOWNLOAD feature exists; never advertise one.
+     *
+     * Distinct from the same-named field in `@/lib/pwa/platform`, which is a
+     * measured browser capability and can be true. This endpoint may only
+     * state what the server can guarantee, and it cannot guarantee that a
+     * given browser can open a local folder (RULE 51, RULE 53). Keeping both
+     * named identically is a deliberate trap for the next reader; the
+     * distinction is that this one is a server fact and that one is a client
+     * measurement.
+     */
     offlineAudio: false;
     /** No push service is implemented. */
     pushNotifications: false;
@@ -136,5 +146,14 @@ export async function GET(request?: Request): Promise<NextResponse<AppConfigBody
   // Correlation id in a header only. This body is a published public contract
   // (`AppConfigBody`), and a wrapper pins the shape it understands; adding a
   // per-request field to it would make every response differ.
-  return jsonResponse(body, { request });
+  //
+  // Public and static, so edge/CDN caching is safe and intended: nothing here
+  // varies by user, session, or request. `stale-while-revalidate` keeps a
+  // deploy boundary cheap — a proxy serves the previous build's config for a
+  // minute rather than blocking on origin. Authenticated or personalized
+  // payloads must never take this header; see `transport.ts`.
+  return jsonResponse(body, {
+    request,
+    headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=60" },
+  });
 }

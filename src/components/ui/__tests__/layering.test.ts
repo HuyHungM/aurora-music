@@ -95,7 +95,19 @@ describe("layer tokens", () => {
     const anchor = /^[\t ]*role="dialog"[\t ]*$/m.exec(text);
     expect(anchor, `no dialog element found in ${label}`).not.toBeNull();
     const rest = text.slice(anchor!.index);
-    return rest.match(/className="[^"]*?\bz-([a-z]+)\b/)?.[1];
+    // The DIALOG's own class list is the first className attribute after the
+    // anchor, in JSX attribute order — a later literal (the queue's menu
+    // layer) must not answer for it. Either a string or a template; a
+    // template's layer must sit in the static head, ahead of the first
+    // interpolation, because a layer inside `${...}` would be conditional and
+    // the layer a dialog paints at is not.
+    const literal = /className="([^"]*)"/.exec(rest);
+    const template = /className=\{`([^`]*)/.exec(rest);
+    const first =
+      literal && (!template || literal.index < template.index)
+        ? literal[1]
+        : (template?.[1]?.split("${")[0] ?? "");
+    return first.match(/\bz-([a-z]+)\b/)?.[1];
   };
 
   it("orders the player surfaces so the queue is above the full player", () => {

@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { FIXTURE_A, fixtureUrl } from "./fixtures";
+import {
+  expectMediaLoaded,
+  expectPlaybackAdvancing,
+  expectPlaybackPaused,
+} from "./helpers/assertPlayback";
 
 const LIVE = process.env.AURORA_E2E_LIVE_PLAYBACK === "1";
 
@@ -30,9 +35,12 @@ test.describe("live media session smoke (Chromium)", () => {
       page.getByRole("heading", { name: FIXTURE_A.titleFragment }),
     ).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: /^Play / }).first().click();
-    await expect(
-      page.getByRole("button", { name: /^Pause / }).first(),
-    ).toBeVisible({ timeout: 60_000 });
+
+    // `mediaSession.playbackState` is the app's own report about playback. It
+    // can read "playing" for a stream that never moved, so it is corroborated
+    // here by the media element actually advancing.
+    await expectMediaLoaded(page);
+    await expectPlaybackAdvancing(page);
 
     // Observable browser integration (no lock-screen automation): the
     // metadata title matches the playing fixture and the state is playing.
@@ -52,5 +60,8 @@ test.describe("live media session smoke (Chromium)", () => {
       );
       expect(state).toBe("paused");
     }).toPass({ timeout: 15_000 });
+
+    // And the media element really stopped, not just the reported state.
+    await expectPlaybackPaused(page);
   });
 });

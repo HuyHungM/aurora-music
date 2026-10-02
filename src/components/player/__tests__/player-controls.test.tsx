@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { act } from "react";
 import { usePlayerStore } from "@/lib/player/store";
@@ -8,6 +8,7 @@ import { FakeAudioSurface, makePlayableTrack } from "@/lib/player/__tests__/fake
 import { mountTestFacade } from "@/components/player/__tests__/test-facade";
 import { PlayerBar } from "@/components/player/player-bar";
 import { MiniPlayer } from "@/components/player/mini-player";
+import { SeekSlider } from "@/components/ui/player-controls";
 
 function youtubeTrack(id: string, overrides: Record<string, unknown> = {}) {
   return makePlayableTrack(id, {
@@ -221,5 +222,42 @@ describe("seek slider semantics", () => {
     render(<PlayerBar />);
     const volume = bar().getByRole("slider", { name: "Âm lượng" });
     expect(volume.getAttribute("value")).toBe("1");
+  });
+});
+
+describe("seek slider drag state", () => {
+  it("holds the dragged value while progress ticks arrive", () => {
+    const onSeek = vi.fn();
+    const { rerender } = render(
+      <SeekSlider position={10} duration={200} onSeek={onSeek} />,
+    );
+    const slider = screen.getByRole("slider");
+    expect(slider.getAttribute("value")).toBe("10");
+
+    // The move still commits live (scrub preview preserved); only the
+    // DISPLAYED value decouples until release.
+    fireEvent.change(slider, { target: { value: "90" } });
+    expect(onSeek).toHaveBeenCalledWith(90);
+    expect(slider.getAttribute("value")).toBe("90");
+
+    // A progress tick arrives mid-drag: without transient state the
+    // controlled value would snap the thumb back under the hand.
+    rerender(<SeekSlider position={11} duration={200} onSeek={onSeek} />);
+    expect(slider.getAttribute("value")).toBe("90");
+  });
+
+  it("releases back to the prop on pointer up", () => {
+    const onSeek = vi.fn();
+    const { rerender } = render(
+      <SeekSlider position={10} duration={200} onSeek={onSeek} />,
+    );
+    const slider = screen.getByRole("slider");
+
+    fireEvent.change(slider, { target: { value: "90" } });
+    expect(slider.getAttribute("value")).toBe("90");
+
+    fireEvent.pointerUp(slider);
+    rerender(<SeekSlider position={11} duration={200} onSeek={onSeek} />);
+    expect(slider.getAttribute("value")).toBe("11");
   });
 });

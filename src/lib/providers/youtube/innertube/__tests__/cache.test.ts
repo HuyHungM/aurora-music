@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  CACHE_PREFIX,
   channelCacheKey,
   isTemporaryMediaUrl,
   normalizeQueryForKey,
+  playlistCacheKey,
   playlistItemsCacheKey,
   ProviderCache,
   searchCacheKey,
@@ -269,6 +269,47 @@ describe("ProviderCache — eviction and invalidation", () => {
     }
   });
 
+  it("holds its size bound across far more writes than the cache holds", () => {
+    // The expired-entry sweep is amortized rather than per-write, so this is
+    // the property that must survive it: the bound comes from the
+    // unconditional oldest-key delete, which still runs on every write.
+    const cache = new ProviderCache({ ttlMs: 60_000 }, 8);
+    for (let i = 0; i < 500; i += 1) {
+      cache.set(`k${i}`, i);
+      expect(cache.stats().entries).toBeLessThanOrEqual(8);
+    }
+    // The most recent write is always the one that survived.
+    expect(cache.peek("k499")).toBe(499);
+  });
+
+  it("still reaps expired entries once the sweep interval elapses", () => {
+    // Amortizing the sweep must not mean switching it off: a cache that only
+    // ever dropped the oldest live entry would retain expired entries
+    // indefinitely and hand back stale answers within its own TTL window.
+    vi.useFakeTimers();
+    try {
+      const cache = new ProviderCache({ ttlMs: 1_000 }, 64);
+      // Fill to exactly maxEntries so the next write triggers eviction.
+      for (let i = 0; i < 64; i += 1) {
+        cache.set(`k${i}`, i);
+      }
+      vi.advanceTimersByTime(1_001);
+      // Expired, but the sweep has not run yet: the oldest-key delete still
+      // keeps the bound, so this write is cheap.
+      cache.set("k64", 64);
+      expect(cache.stats().entries).toBeLessThanOrEqual(64);
+      // Now drive past the sweep interval with more writes; the sweep should
+      // have reaped the expired majority rather than only the single key the
+      // eviction path had to drop.
+      for (let i = 65; i < 200; i += 1) {
+        cache.set(`k${i}`, i);
+      }
+      expect(cache.stats().entries).toBeLessThanOrEqual(64);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("invalidates one key or a whole prefix", () => {
     const cache = new ProviderCache({ ttlMs: 60_000 });
     const videoKey = videoCacheKey("dQw4w9WgXcQ");
@@ -279,7 +320,7 @@ describe("ProviderCache — eviction and invalidation", () => {
 
     // Searches and single-video metadata are separate prefixes, so evicting
     // the search cache cannot quietly drop resolved video metadata.
-    expect(cache.invalidatePrefix(CACHE_PREFIX.search)).toBe(2);
+    expect(cache.invalidatePrefix("yt:search:")).toBe(2);
     expect(cache.peek(videoKey)).toBe(3);
     expect(cache.peek("yt:channels:UCabc")).toBe(4);
 
@@ -288,19 +329,40 @@ describe("ProviderCache — eviction and invalidation", () => {
     expect(cache.invalidate(videoKey)).toBe(false);
   });
 
-  it("gives every entry kind its own prefix", () => {
-    // A shared prefix between two kinds is a latent bug: nothing fails
-    // loudly, the cache just quietly loses the wrong things.
-    const prefixes = Object.values(CACHE_PREFIX);
-    expect(new Set(prefixes).size).toBe(prefixes.length);
-    const search = searchCacheKey({ provider: "p", query: "q", kind: "video", limit: 10 });
-    for (const prefix of prefixes) {
-      if (prefix === CACHE_PREFIX.search) {
-        expect(search.startsWith(prefix)).toBe(true);
-      } else {
-        expect(search.startsWith(prefix)).toBe(false);
-      }
-    }
+  it("gives every entry kind a distinct key namespace", () => {
+    // A shared namespace between two kinds is a latent bug: nothing fails
+    // loudly, the cache just quietly loses the wrong things. This is the shape
+    // that bit before, when a video SEARCH key was `yt:video:<query>` and
+    // therefore collided with single-video metadata (see `searchCacheKey`).
+    //
+    // The keys are read off the real builders rather than from a duplicated
+    // prefix table: `CACHE_PREFIX` was removed for being a second copy of
+    // strings the builders already own, and a second copy is exactly what can
+    // drift into a collision while still passing a test that only compared the
+    // table against itself.
+    const keys: Record<string, string> = {
+      search: searchCacheKey({
+        provider: "p",
+        query: "dQw4w9WgXcQ",
+        kind: "video",
+        limit: 10,
+      }),
+      video: videoCacheKey("dQw4w9WgXcQ"),
+      videoBatch: videoBatchCacheKey(["dQw4w9WgXcQ"]),
+      channels: channelCacheKey(["UCabc"]),
+      playlist: playlistCacheKey("PL1"),
+      playlistItems: playlistItemsCacheKey("PL1"),
+    };
+
+    // Pairwise distinct: no two kinds can produce the same key.
+    const values = Object.values(keys);
+    expect(new Set(values).size).toBe(values.length);
+
+    // The search/video separation that used to be broken, pinned directly.
+    // Same query and id, deliberately.
+    expect(keys.search).not.toBe(keys.video);
+    expect(keys.search.startsWith("yt:video:")).toBe(false);
+    expect(keys.video.startsWith("yt:search:")).toBe(false);
   });
 });
 

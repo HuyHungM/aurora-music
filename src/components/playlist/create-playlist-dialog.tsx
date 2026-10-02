@@ -23,6 +23,12 @@ function CreatePlaylistForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { t } = useLocale();
   const titleInputRef = useRef<HTMLInputElement>(null);
+  // Synchronous in-flight guard. `isSubmitting` state does not flush between
+  // same-tick activations, so a double-Enter/double-click before re-render
+  // would fire two `createPlaylistAction` calls and mint two playlists. A ref
+  // flips synchronously, which is what makes the second activation refuse.
+  // Same pattern as the add-to-playlist menu's `pendingRef`.
+  const submittingRef = useRef(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,16 +37,24 @@ function CreatePlaylistForm({
       setError(t("playlist.nameRequired"));
       return;
     }
+    if (submittingRef.current) {
+      return;
+    }
+    submittingRef.current = true;
 
     setIsSubmitting(true);
     setError(null);
 
-    const result = await createPlaylistAction({
-      title: trimmedTitle,
-      description: description.trim() || undefined,
-    });
-
-    setIsSubmitting(false);
+    let result: Awaited<ReturnType<typeof createPlaylistAction>>;
+    try {
+      result = await createPlaylistAction({
+        title: trimmedTitle,
+        description: description.trim() || undefined,
+      });
+    } finally {
+      submittingRef.current = false;
+      setIsSubmitting(false);
+    }
 
     if (result.ok && result.playlistId) {
       const createdId = result.playlistId;

@@ -83,11 +83,17 @@ export interface ClientCapabilities {
   /** Cache Storage available, so the application shell can be cached. */
   offlineShell: boolean;
   /**
-   * Always false. There is no offline audio: playback streams are
-   * single-use, signed provider URLs that expire, and caching them is
-   * explicitly forbidden (RULE 54, RULE 76).
+   * True when the browser can play audio the user already has locally, i.e.
+   * the File System Access API is present (RULE 34).
+   *
+   * This was a literal `false` and stayed one for a long time, because
+   * Aurora had no offline audio at all and advertising one would be a lie the
+   * service worker cannot back up (RULE 51, RULE 76). It is still NOT a
+   * statement about downloading provider media — that remains forbidden, and
+   * nothing here caches or persists a provider stream. It answers a different
+   * question: whether this browser can read a folder the user grants it.
    */
-  offlineAudio: false;
+  offlineAudio: boolean;
   /** `display_override: ["window-controls-overlay"]` is active. */
   windowControlsOverlay: boolean;
 }
@@ -194,7 +200,7 @@ export function detectCapabilities(
     standaloneMode: isStandaloneDisplay(displayMode),
     serviceWorkerControlled: Boolean(nav?.serviceWorker?.controller),
     offlineShell: typeof caches !== "undefined",
-    offlineAudio: false,
+    offlineAudio: typeof (nav as { showDirectoryPicker?: unknown })?.showDirectoryPicker === "function",
     windowControlsOverlay: hasWindowControlsOverlay(view),
   };
 }

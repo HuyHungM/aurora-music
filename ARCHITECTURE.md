@@ -200,9 +200,18 @@ TrackIdentity → PlaybackController → PlaybackResolver → AudioSource
   onto one in-flight promise, keyed `provider:id` (`resolveIdentity`); and
   re-loading the **same** identity while its active source is still unexpired
   and not suppressed reinstalls that source without a network call
-  (`loadReusingSource`). Both are economy on a live result, never a cache:
-  an expired source or a post-exhaustion suppression record forces a fresh
-  resolve.
+  (`loadReusingSource`). Upstream of both sits the server's short-TTL
+  resolution cache (§8) and the controller's one-entry prefetch slot: a repeat
+  or next-up load reuses a validated source instead of re-resolving, while an
+  expired source or a post-exhaustion suppression record still forces fresh
+  work.
+- **Prefetch:** `controller.prefetchTrack` warms the likely-next identity
+  through the same coalescer (never a second upstream call), filling a slot
+  that `loadTrack` consumes only on key + expiry + suppression match. The
+  store fires it on `playing` for the next queue entry; row hover/focus fires
+  it through a throttled intent gate (youtube only, data-saver aware).
+  Prefetch never reports, never touches the engine, and never poisons: a
+  failed or stale arrival fills nothing consumable.
 - Recovery execution: one cycle per generation, same stable identity, bounded
   attempts with backoff, reload at saved position (latest seek wins),
   pause-wins-on-intent, suppression after exhaustion.
@@ -227,8 +236,14 @@ identity / source → provider resolution → source validation → AudioSource
   validates the ID, rejects private/upcoming/live/mismatched responses with
   staged `PlaybackResolutionError(resolve | stream)`.
 - Temporary URLs are memory-only; expiry is checked before handoff
-  (`isAudioSourceExpired`). The resolver itself never caches or reuses; the
-  PlaybackController may reuse its own still-fresh same-identity source (§6).
+  (`isAudioSourceExpired`). The server holds resolved sources in a SHORT-TTL
+  process-local cache (`resolution-cache.ts`: 3-minute TTL, 60s stale grace
+  with background refresh, 30s expiry skew, 10s negative cooldown for hard
+  failures only, 500-entry LRU bound) keyed `youtube:{videoId}:v1` — never by
+  title — plus a module-level singleflight map so concurrent resolutions of
+  one video share one upstream chain. A dead URL reported back by an exhausted
+  recovery cycle invalidates its entry. The PlaybackController may additionally
+  reuse its own still-fresh same-identity source (§6).
 
 ## 8. YouTube playback adapter
 
@@ -237,15 +252,20 @@ identity / source → provider resolution → source validation → AudioSource
 `types.ts`). Server-only.
 
 - **Innertube:** format discovery; deciphering; in-flight request dedup
-  (simultaneous resolutions share one request); results never cached (an expired
-  URL can never be re-served); library objects treated as untrusted input, fail
-  closed.
+  (simultaneous resolutions share one request); library objects treated as
+  untrusted input, fail closed. Resolved playback sources live in the
+  short-TTL `resolution-cache.ts`, never in this client: an expired or
+  near-expiry URL is never re-served, and hard failures cool down for 10s
+  instead of storming.
 
 `youtubei.js` is imported only inside the two provider-internal boundaries,
 each with its own test: `playback/innertube-client.ts` (stream resolution) and
 `innertube/` (discovery, the shared session, and the optional egress seam).
 Both halves consume the same `Innertube` instance — asserted as a count of
 `Innertube.create(`, with comments stripped, not merely as a convention. See §8a.
+  The offline source (§8b) keeps every construction inside that same file, so
+  the boundary assertion still holds; it memoises one session per configured
+  egress rather than per consumer.
 - **Optional egress proxy (anti-bot):** from a datacenter egress (Vercel
   Functions), YouTube's player endpoint answers some videos with
   `playabilityStatus.status = "LOGIN_REQUIRED"` / "Sign in to confirm you're
@@ -330,16 +350,35 @@ Both halves consume the same `Innertube` instance — asserted as a count of
 
   **Skip reasons.** A rejected candidate logs `playback_format_skipped` with
   `itag`, `reason` (a stable `FormatProbeReason`: `probe_status_403`,
-  `probe_status_404`, `probe_status_416`, `probe_status_other`,
-  `probe_timeout`, `probe_network_error`, `missing_url`), `status`,
-  `contentType`, and `boundedRangeOk`. A 403 alone cannot distinguish a dead
-  URL from the whole-body refusal above, so a rejected 403/416 is confirmed
+  `probe_status_404`, `probe_status_416`, `probe_status_429`, `probe_status_5xx`,
+  `probe_status_other`, `probe_timeout`, `probe_network_error`, `missing_url`),
+  `status`, `contentType`, and `boundedRangeOk`. A 403 alone cannot distinguish a
+  dead URL from the whole-body refusal above, so a rejected 403/416 is confirmed
   with **one** extra bounded read that sets `boundedRangeOk`. That flag never
   promotes a candidate: the browser would still fail on it, and promoting it
   would reinstate the code-4 regression. When no candidate survives, one
   `playback_resolution_failed` record summarises `candidateCount` /
-  `validCount` / `rejectedCount` / `topRejectionReasons`, plus the boolean
-  `aliveButRefused` described next. No signed URL appears in any of it.
+  `validCount` / `rejectedCount` / `topRejectionReasons`, plus the booleans
+  `aliveButRefused` and `transientRejection` described next. No signed URL
+  appears in any of it.
+
+  **What counts as transient (2026-10-02).** `TRANSIENT_PROBE_REASONS` is the
+  set that says the UPSTREAM refused us rather than that the media is gone:
+  `probe_status_429`, `probe_status_5xx`, `probe_timeout`,
+  `probe_network_error`. `probe_status_404` is deliberately excluded. Both
+  membership and resolution require `every`, not `some`: one 404 among
+  otherwise-transient rejections keeps the verdict permanent. Before this,
+  429, every 5xx and every timeout collapsed into `probe_status_other`, which is
+  indistinguishable from a genuinely unknown status — so a rate limit or a
+  provider blip produced a `retryable: false` failure, a 10 s negative-cache
+  entry, and a client that finalised with no recovery attempt.
+  `pickPlayableFormat` also bounds the whole ranked walk with
+  `FORMAT_LADDER_BUDGET_MS` (20 s): the per-probe timeout bounds ONE probe and a
+  rejected 403 costs two, so an unbounded ladder over the documented
+  seven-candidate videos could spend ~70 s inside a single server action. The
+  budget can only make a total failure arrive earlier; it can never turn a
+  success into a failure, because the best-ranked candidate is probed first and
+  has a 5 s allowance.
 
   **Refused-but-alive is a transient failure (2026-09-27).** "No consumable
   format" is two different failures wearing one message, and the distinction
@@ -352,16 +391,97 @@ Both halves consume the same `Innertube` instance — asserted as a count of
   browser's whole-body read *at that moment*. So when every candidate was
   refused **and** each proved alive on the bounded read, the `stream`-stage
   error is raised with `retryable: true` and recovery performs its bounded
-  retry; every other combination (404, a 403 with no bounded confirmation, a
-  timeout, a network error, zero candidates) keeps the permanent default,
-  because re-resolving the same identity cannot change the answer. A single
-  dead candidate among alive ones is enough to stay permanent — a 404 means
-  the media is gone, so the surviving signed URLs point at nothing. The
+  retry; every other combination keeps the permanent default, because
+  re-resolving the same identity cannot change the answer. A single dead
+  candidate among alive ones is enough to stay permanent — a 404 means the
+  media is gone, so the surviving signed URLs point at nothing. The
   distinction is computed from the probe's own evidence, so an injected test
   validator (a bare boolean, reason `validator_injected`) can never make a
   source look recoverable.
+
+  Two combinations that previously sat on the permanent side are now
+  transient, because they say the same thing — *we did not get an answer* —
+  for a reason that can differ next time:
+
+  - **Every rejection in `TRANSIENT_PROBE_REASONS`** (429, 5xx, timeout,
+    network error). See "What counts as transient" above.
+  - **Zero candidates.** `info.formats.length === 0` is not "this video has no
+    media", it is what a challenged datacenter egress produces: a *successful*
+    player response carrying no `streaming_data`, which is the exact condition
+    `AURORA_YOUTUBE_EGRESS_PROXY` exists to mitigate. Nothing was even
+    examined, so every rejection summary was empty and the verdict was
+    indistinguishable from a genuinely empty format list — and the failure the
+    proxy is deployed to prevent was being reported as permanently unplayable.
+
+  `invalidatePlaybackResolutionAction` additionally cannot be defeated by a
+  resolution already in flight: `PlaybackResolutionCache.invalidate` bumps a
+  per-key **epoch**, and the resolver captures that epoch before it starts and
+  only writes on completion if the epoch is unchanged. Without it a resolution
+  that started before the client reported a dead URL re-inserted that URL
+  afterwards, so the invalidation silently did nothing — the same hazard the
+  sibling `ProviderCache` solves with an identity token on its in-flight
+  promise (`innertube/cache.ts`).
 - **Expiry:** `expiresAt` carried on the `AudioSource`; expired candidates
   skipped at selection and rejected at load.
+
+## 8b. Offline source: audio the user already has (local files)
+
+`src/lib/offline/` + `src/app/(app)/offline/` + `src/components/offline/`.
+Server-only types, client-only runtime.
+
+The offline source plays files from a folder the user grants to this browser
+profile. It is a **fourth `SourceType`, not a second player** — and that single
+decision is what keeps the change small.
+
+- **One engine, one queue (RULE 4).** `PlayerHost` mounts one
+  `PlaybackController`, and `PlayerHost` lives in `AppShell`, so every route
+  already shares it. `/offline` is just another route. The offline track joins
+  the existing queue and gets the existing seek, volume, repeat, shuffle,
+  recovery and Media Session for free. A second `<audio>` element would have
+  broken the multi-tab ownership protocol (§26.3), which is why the brief's
+  "own queue and playback controls" is read as *its own UI and queue contents*,
+  not a second playback authority.
+- **`PlaybackResolver` was already the plug-in point.** It is a registry of
+  `SourcePlaybackResolver` keyed by source type, so `createLocalSourceResolver()`
+  is registered next to the YouTube one and nothing else in the pipeline
+  changed. `engine.load` already did `surface.src = url`, so an object URL plays
+  with no engine signature change.
+- **No server call, ever.** The resolver reads the `File` through its
+  `FileSystemFileHandle` and returns `{ url: blobUrl, mimeType }`. There is no
+  resolve action, no DAL write, and no provider lookup. Explicit MIME types are
+  supplied per container because Chrome refuses a typeless blob URL for some.
+- **Nothing is persisted but the grant.** One `FileSystemDirectoryHandle` in
+  IndexedDB (`lib/offline/storage.ts`), written through an injectable key/value
+  store so the logic is testable without a browser. The scan is **on demand,
+  never on mount** — reading someone's music library unasked is the one thing
+  this feature must not do, so a returning user gets a button, not a surprise.
+- **The file registry is session state.** `lib/offline/session.ts` holds the
+  scan's handles in a module-level map because the resolver is constructed once
+  and the panel is a different component. It is deliberately NOT persisted: a
+  handle means nothing in the next session, and pretending otherwise would hand
+  the resolver a file it cannot open. After a reload the user re-opens
+  `/offline` and scans again.
+- **Object URLs are budgeted.** `createObjectURL` pins the file's bytes for the
+  life of the document, so a ring of at most two live URLs is kept and the rest
+  revoked; the session reset revokes everything. Unbounded, one per played
+  track, a listening session grows without limit.
+- **Three unhappy states stay distinct:** `needs-permission` (a returning user
+  whose browser restarted — ordinary, not an error), `denied` (the user's
+  decision) and `unavailable` (the grant is gone). Collapsing them is how a
+  revoked-permission UI lies about what happened.
+- **Isolation is enforced where a client cannot reach around it.**
+  `lib/offline/isolation.ts` refuses a `local` track in `recordPlayedAction`,
+  `likeTrackAction` and `addTrackToPlaylistAction`; `queue-snapshot.ts` drops
+  `local` entries so a restored session never resurrects an unplayable row. The
+  UI also hides those controls, but hiding a control is not a guard.
+- **Two capability contracts share one name, deliberately.** `/api/app-config`
+  keeps `offlineAudio: false` because it may only assert what the server can
+  guarantee; `pwa/platform.ts` measures the browser. Merging them would make one
+  of the two a lie.
+- **Known limits, stated not hidden.** No tag reader (filename heuristics only,
+  with the raw filename always shown); no duration column (the audio element
+  reports it on load); Chromium-only, with honest copy elsewhere; recursive
+  walk bounded at depth 6 and 5 000 files.
 
 ## 8a. YouTube discovery: InnerTube-first, Data API as fallback (Phase 55)
 
@@ -506,11 +626,64 @@ classifySearchInput(value)
   keeps a search from spending provider quota per prefix, from writing a
   search-history row per prefix, and from interrupting playback on every
   character. Repeated identical queries are collapsed server-side by the
-  provider L1/L2 cache, not by a client debounce.
+  search-result cache and by the provider L1/L2 cache, not by a client
+  debounce. There is no autocomplete endpoint: a suggestion pipeline would
+  either duplicate this fan-out at a smaller limit or need its own provider
+  plumbing, and neither is cheaper than what already happens on submit.
 - **The page fans out.** `/search` runs the unified track search, the artist
   search and the album search **concurrently** (`Promise.allSettled`), so a
   request waits for the slowest of the three rather than their sum. Result
   semantics are per-branch identical to the previous sequential version.
+- **One normalization pipeline** (`src/lib/search/normalize.ts`). Every search
+  layer that compares text reads `normalizeSearchQuery` / `normalizeSearchField`;
+  none of them re-implements trimming, case folding, accent folding, or
+  tokenization. The primitives themselves are the domain's
+  (`normalizeBase`, `foldDiacritics`, `tokenize` from `match-text.ts`), so a
+  ranking comparison and a `TrackMatcher` merge cannot disagree about what two
+  strings look like. Both views are kept: `normalized` keeps the spelling
+  typed, `folded` collapses diacritics and `đ`, and `raw` is what providers
+  receive and the UI displays. Nothing rewrites a title, a display name, or a
+  stored query — these are comparison views, never mutations.
+- **Results are ranked, in bands** (`src/lib/search/rank.ts`), and only
+  reordered — never dropped and never re-requested. The score is
+  `band * 100 + detail` with `detail` bounded to 0..99 and bands 100 apart, so
+  a higher band always wins: "exact beats fuzzy" is a property of the
+  representation, not a threshold somebody has to keep in tune. Bands, strongest
+  first: multi-field exact, title exact, artist exact, album exact, title
+  prefix, artist prefix, album prefix, complete token coverage, phrase
+  containment, bounded fuzzy, none. Grouping and ranking are separate
+  questions and neither reads the other's thresholds. Popularity is not a
+  score input — the schema and the provider DTOs carry no such signal — so
+  provider order is used only as the stable-sort tiebreak among textually
+  equal results, and can never promote a weak match over a strong one.
+- **Vietnamese is folded, not transliterated.** `Cảm Ơn` and `cam on` compare
+  equal in both directions. Folding is symmetric and total, so it cannot cause
+  an asymmetric miss, and it is deliberately NOT applied to identity,
+  deduplication, or merge decisions — those stay on `TrackMatcher`'s
+  calibrated path. A folded match is never sufficient on its own.
+- **Bounded fuzzy.** Typos are recovered (`mcck` → MCK, `tayor swift` →
+  Taylor Swift, `camm on` → Cảm Ơn) with a Levenshtein early-exit budget of
+  one edit for short tokens and two maximum for long ones, applied only to
+  candidates that already reached the phrase tier and only within
+  `fuzzyCandidateLimit` (default 40). A query shorter than 4 characters gets
+  no fuzzy pass at all, because one edit over 3 characters matches almost
+  anything. Fuzzy is the only super-linear work in ranking, so it is bounded
+  in both count and cost.
+- **Short queries are prefix-only.** One or two characters skip the exact,
+  token, phrase, and fuzzy tiers entirely and match on prefix against indexed
+  provider results, because at that length every catalog entry is a candidate
+  and a fuzzy pass produces noise instead of recall.
+- **Repeated and concurrent searches collapse** (`src/lib/search/search-cache.ts`).
+  A finished `UnifiedSearchResult` is held in a process-local, TTL-bounded LRU
+  keyed by the FOLDED query plus provider subset plus limit, and a concurrent
+  identical search joins one in-flight promise instead of starting a second
+  fan-out. Search is not personalized, so the cached value is identical for
+  every caller — that is the precondition that makes a shared process cache
+  safe, and it is why there is no user dimension in the key. A total failure is
+  never cached (a provider condition is not a result); a partial success is.
+  Entries are deleted on settle in both branches, so a rejected promise is
+  never replayed. Best-effort by construction: a cold function instance simply
+  re-runs the search, and correctness never depends on a hit.
 - **`?q=` is validated as a URL first.** The search page classifies before
   `searchQuerySchema`, whose 200-character prose cap would otherwise reject
   a long playlist URL with a schema error. Unsupported links render
@@ -662,6 +835,19 @@ Sole persistence + ownership authority (`src/lib/dal/*`):
   stale writes return `false`, never overwrite (a stale tab cannot clobber
   a newer session). Same-track seek discontinuities feed the debounced
   session snapshot.
+- **One persistence write lane.** The CAS resolves *which* write wins, not
+  *which is newest*: two concurrent writers carrying the same revision are
+  ordered by arrival, so an older snapshot can win and durably revert a newer
+  one, and the loser's payload is discarded rather than retried. Because every
+  writer persists the *whole* snapshot (track, position, queue, order, cursor,
+  volume), that is a lost update on the entire session, not on one field.
+  `PlaybackPersistenceController` therefore admits one write at a time: a
+  request arriving while the lane is busy parks in one of two slots and is
+  re-driven from the in-flight write's `finally`. The queue slot is rebuilt
+  from current state and needs only to say "something changed"; the checkpoint
+  slot carries an operation snapshot (the track the user just left and the
+  position they left it at) because that is not reconstructible. A checkpoint
+  rejected by a foreign writer's CAS is re-driven once, not in a loop.
 - **Save strategy** (`src/lib/player/persistence.ts`): persist on
   meaningful change (queue mutations, track changes, shuffle/repeat,
   volume/mute) through a trailing debounce, plus a periodic checkpoint
@@ -694,6 +880,26 @@ Sole persistence + ownership authority (`src/lib/dal/*`):
   real media element may advance before playback is audible — actual
   progression of a live stream is covered by the live playback suite, not
   by the deterministic restore test.
+- **Playback is asserted from the media element, never from the controls.**
+  The engine owns an element created with `new Audio()` and never attaches it
+  to the document, so there is no `audio` selector and nothing in the DOM can
+  answer "is audio playing?". The live suite previously used
+  `input[aria-label="Seek"]` for that, which produced a real misdiagnosis: a
+  missing seek control timed out and the failure was reported as NOT_PLAYING
+  for a stream that was playing. `PlayerEngine.mediaDiagnostics()` is now the
+  oracle — a read-only snapshot of `readyState`, `networkState`, `paused`,
+  `ended`, `seeking`, `muted`, `currentTime`, `duration` and the `MediaError`
+  code. It deliberately has no `src`: a googlevideo URL is signed, so the
+  snapshot reports `hasSource: boolean` instead. The probe publishing it
+  (`E2EMediaProbe`) is mounted only by `/e2e-playback/[videoId]`, which 404s
+  unless `AURORA_E2E_LIVE_PLAYBACK=1`; no production route mounts it and no
+  `NEXT_PUBLIC_` variable was added. `e2e/helpers/assertPlayback.ts` holds the
+  assertions and classifies a failure by the stage that broke
+  (`RESOLVER_FAILURE`, `MEDIA_REQUEST_FAILURE`, `MEDIA_DECODE_FAILURE`,
+  `PLAYER_STATE_FAILURE`, `PLAYBACK_TIMEOUT`, `UI_SELECTOR_FAILURE`) instead of
+  reporting one undifferentiated "not playing". Routes without the probe — the
+  `/search` live spec — keep a UI-level assertion and say so, rather than
+  claiming media proof they cannot make.
 - Every mutation takes a server-resolved `userId`; ownership rechecked
   (`requirePlaylistOwner` → `ResourceNotFoundError` / `AuthorizationError`).
   Client `isOwner` flags are display-only.
@@ -733,9 +939,81 @@ Sole persistence + ownership authority (`src/lib/dal/*`):
 ## 13. Database
 
 PostgreSQL via Prisma 7 (`prisma/schema.prisma`; migrations in
-`prisma/migrations/` — eight to date, the set kept explicit by the
+`prisma/migrations/` — nine to date, the set kept explicit by the
 allowlist test in `src/lib/dal/__tests__/playback-schema.test.ts`).
 Client emitted to `src/generated/prisma`.
+
+### 13.1 Query-shape rules
+
+Four rules, each adopted after measuring the query it replaces:
+
+- **Index the sort column, not just the predicate.** A user-owned collection
+  read newest-first under a `take` needs `@@index([userId, <sortColumn>])`.
+  A `@@index([userId])` cannot serve it: Postgres reads every row the user owns
+  and sorts before `LIMIT` applies. `RecentlyPlayed`, `Like` and `Follow` all
+  follow this shape, and the schema gate in `playback-schema.test.ts` fails if
+  any of them drops it. Where the compound index also answers the bare
+  `WHERE userId = ?` predicate, it *replaces* the plain index rather than
+  sitting beside it — two indexes on `Like`/`Follow` would be pure write
+  amplification for tables written on every like and every follow.
+- **Existence is not a count.** `@@unique([userId, trackId])` means the row is
+  present or absent, so a `COUNT` computes a number nobody reads. `isTrackLiked`
+  and `isFollowing` use `findFirst({ select: { id: true } })` on the unique
+  index: one round trip instead of two, and no intermediate lookup to resolve
+  the provider-scoped ref to an internal id first.
+- **Select the columns the mapper reads.** `listUserLikes` runs with
+  `take: 1000` on every authenticated page render to seed the client like
+  mirror, and `Like` needs five scalar fields — so it selects the track's
+  `provider`/`providerTrackId` rather than the whole `Track` row with its
+  `metadata` and `genres` JSON. `savePlaybackState` reads one integer and
+  selects `revision` alone, instead of shipping a 200-entry `queueSnapshot`
+  JSON back to the process on every checkpoint. Narrow selects live next to the
+  mapper that justifies them (`userColumns`, `likeIdentityInclude`), so a
+  mapper cannot widen past what it reads.
+- **Do not let a projection pay for a relation it does not read.**
+  `getLibraryOverview` returns liked, recent *and* playlists, and loading a
+  playlist means loading every one of its tracks with their artist and album
+  rows. Its rendering callers (`/library`, `/`) genuinely need that, but the
+  radio and recommendation readers only wanted artist names, and were paying for
+  the whole graph to get them. Two changes followed from measuring it:
+  `playlistLimit: 0` skips the playlists query outright rather than fetching
+  and discarding it, and `getLibraryArtistNames` is a separate projection
+  selecting `artist.name` alone. Both the default `likedLimit` and
+  `recentLimit` are now bounded, because `take: undefined` means "every row the
+  user has ever created". Measured against a seeded user with 8 playlists x 12
+  tracks, 30 plays and 30 likes: the rendering read cost 2614 ms/call, the
+  bounded read 1804 ms/call, and the projection 1403 ms/call.
+  `getLibraryArtistNames` does not apply the canonical duplicate collapse, and
+  `library-artist-names.db.test.ts` pins its output against
+  `getLibraryOverview` so the shortcut cannot drift from the full read.
+
+Batch-then-map is the rule for writes inside a transaction:
+`reorderPlaylist` and `compactPositions` shift the whole set with one
+`updateMany` and place it with one `unnest` UPDATE — 2N+5 round trips becomes 3
+at 200 tracks.
+
+> **KNOWN DEFECT (P0, pre-existing).** The shift step does **not** make the
+> batch safe, contrary to the reasoning this section previously carried.
+> `updateMany({ position: { increment: shift } })` emits a single `UPDATE`, and
+> a unique index is checked **per row as that row is updated** — it is not
+> `DEFERRABLE`. Postgres gives no ordering guarantee for which rows an `UPDATE`
+> touches, so a row can be shifted into a slot still held by a row the statement
+> has not visited yet, and `@@unique([playlistId, position])` fires:
+> `Unique constraint failed on PlaylistTrack_playlistId_position_key`
+> (reproduced by `playlist.db.test.ts` → "removes a track and compacts
+> positions"). Assigning final positions directly is no worse; both orderings
+> transiently collide, and the batch form merely made the collision rarer and
+> therefore harder to see. This is a write-path data-integrity bug that can fail
+> a real playlist edit, not a performance question.
+>
+> Fixing it properly needs the constraint deferred
+> (`@@unique(..., map: "…", )` plus `DEFERRABLE INITIALLY DEFERRED`, i.e. a
+> migration) or a per-row renumber in ascending order inside the transaction —
+> which trades the 3-statement win back for N. Neither is attempted here: both
+> change a write path, and the honest options need a production migration and a
+> full `playlist.db.test.ts` run (≈13 min against Aiven) to validate, which is
+> a deliberate change of its own rather than something to slip into a cleanup
+> pass. Until then the fast path is not safe to rely on.
 
 The connection runs through Prisma's PostgreSQL driver adapter
 (`@prisma/adapter-pg`), so the connection string is consumed by `pg`
@@ -751,6 +1029,21 @@ the CA. It also refuses, in production, the settings that disable verification
 `require`/`verify-ca`). The application, the `db:verify`/`db:check`/
 `db:integrity` scripts, and the E2E harness all build their client from this
 module, so one policy covers every path.
+
+This module stays provider-agnostic even though only one provider needs it.
+Production is Neon, whose certificate is in the public trust store, so the CA
+path is inert there; the CA variables are exercised solely by the local Aiven
+database. Removing them would delete a working trust anchor for local work to
+satisfy a production target that no longer has the problem, so they stay.
+
+**Two providers, one schema.** Production (Vercel) uses Neon; local development
+and `bun run test:db` use Aiven. They are not replicas and share no rows —
+nothing copies data between them, and the Aiven instance deliberately
+accumulates `@example.com` fixture users. Neon supplies both a pooled
+`DATABASE_URL` (application traffic) and a direct `DATABASE_URL_UNPOOLED`;
+migrations, `pg_dump`/`pg_restore` and the restore drill must use the direct URL,
+because Prisma Migrate over the pooled connection fails in ways that do not name
+pooling (`prepared statement "s0" already exists`).
 
 | Model | Purpose |
 |---|---|
@@ -776,6 +1069,33 @@ delete, and the rollback note for each of the eight migrations, is recorded
 in the allowlist test). Deploy explicitly via `prisma migrate deploy` —
 never auto-migrated at boot. New migrations fail the allowlist test closed
 until the rollback analysis is redone.
+
+**The database is not a search corpus, by design.** The `Track`/`Artist`/
+`Album` tables are a write-through catalog of what users have actually
+interacted with — a like, a playlist add, a play — and a repo-wide search for
+`pg_trgm`, `tsvector`, `ILIKE`, or `similarity(` returns nothing: there is no
+SQL-level text search anywhere, and no extension is enabled. That is the
+correct posture, not a gap:
+
+- The catalog holds what one user touched, not the catalog. A text search over
+  it can only ever return rows that user already had, which is a library
+  filter, not discovery — and search results are, by contract, public and
+  unpersonalized. Making them depend on a per-user write-through table would
+  make a public result set vary by who asked, and would break the moment
+  either provider went away.
+- Discovery is the providers' job and they already do it in one round trip.
+  Adding a trigram index and a generated normalized column would introduce a
+  migration, an extension dependency, backfill, and a second normalization
+  path — with nothing to search.
+- Normalized search columns would also duplicate comparison logic that
+  `match-text.ts` already owns in one place, which is the drift this
+  repository's canonical-identity work exists to prevent.
+
+So ranking happens in Node, over rows the providers already returned, where it
+costs ~0.1ms per call. If the catalog ever becomes a genuine corpus (a seed
+import, an owned catalog), that decision should be revisited on evidence, and
+it should reuse `normalizeSearchQuery` rather than introduce a second
+normalization definition in SQL.
 
 ## 14. Authentication architecture
 
@@ -879,6 +1199,17 @@ until the rollback analysis is redone.
   `setUserLocale` on the nullable `User.locale` column — not a dedicated
   table. Null means "no explicit preference" (falls back to cookie, then
   Vietnamese).
+- **Anonymous mutations show the control, then prompt — they never fail
+  silently.** Per-item actions (Follow, Like) stay visible while logged out
+  per PRODUCT_SPEC §3, and a failed anonymous mutation rolls back optimistically
+  and raises the shared sign-in dialog (`requestAuthPrompt()` →
+  `AuthPromptHost`). The auth signal travels as an explicit `isAuthenticated`
+  prop, never a default: `FollowButton` requires it with no default value, so a
+  call site that forgets it fails at compile time instead of silently assuming
+  "signed in"; `LikeButton` takes it for its standalone path (the shared
+  provider path carries the provider's own flag in the toggle closure). The
+  server boundary is independent — every mutation calls `requireUser()` first,
+  so UI hiding is display logic, never authorization.
 
 ## 15. PWA architecture
 
@@ -1048,9 +1379,26 @@ playback → PlayerError → controller classification → recovery or terminal 
   `strict-origin-when-cross-origin`, `DENY` framing, camera/mic/geolocation
   off; CSP compatibility-scoped (`unsafe-inline` kept for App Router
   hydration + style attributes; dev-only `unsafe-eval`); `frame-ancestors
-  'none'`, `object-src 'none'`, `media-src https:`, `form-action 'self'`.
+  'none'`, `object-src 'none'`, `media-src https: blob:`, `form-action 'self'`.
   Deliberately absent: HSTS (edge TLS concern), COOP/COEP/CORP (breaks
   cross-origin media/artwork).
+- **`media-src` carries `blob:`, and it is load-bearing.** Two media sources
+  exist and only one of them is remote: provider playback is `https:`
+  googlevideo, while every local file is played from a `blob:` object URL minted
+  from the user's own `File` (§15, `offline/session.ts`). With
+  `media-src https:` alone the entire offline feature was unplayable, and it
+  failed *silently and identically to a corrupt file*: Chromium refuses a
+  blocked media source with `MediaError.code === 4` and `Media load rejected by
+  URL safety check`, which the controller classifies as `category: "source"` and
+  reports as `playback_recovery_failed` after both recovery rounds. No amount of
+  retrying could have helped, because each round mints a fresh object URL and
+  CSP rejects all of them the same way.
+
+  The relaxation stays bounded: `blob:` is same-origin and page-generated, so it
+  grants no access to a remote or attacker-chosen resource, and `http:` is still
+  absent so there is no mixed-content or plaintext-downgrade vector. It also
+  makes `media-src` consistent with `img-src`, which has always allowed `blob:`
+  for artwork. `src/security-headers.test.ts` pins both halves.
 - **Auth/session protection:** JWT HttpOnly/SameSite=Lax cookies;
   server-side ownership enforcement; fixed sign-out target.
 - **Dev origin allowlist (`allowedDevOrigins`), development only.** Next
@@ -1144,9 +1492,14 @@ instrumentation boot validation → next start → health → smoke
   the driver stays external rather than being bundled by the server compiler.
   Cloudflare provides DNS only; the apex `auroramuzik.dpdns.org` 301-redirects
   to the canonical `app.auroramuzik.dpdns.org` and is not an application route.
-  Database TLS uses the provider CA supplied inline via
-  `AURORA_DATABASE_CA_CERT` (see §14 and docs/deployment.md). See
-  docs/deployment.md → "Target platform: Vercel (native Next.js)".
+  The production database is **Neon** (Lakebase Postgres), reached through the
+  Neon Vercel integration's pooled `DATABASE_URL`; migrations and dumps use its
+  direct `DATABASE_URL_UNPOOLED`. Neon presents a publicly-trusted certificate,
+  so production sets no provider CA — `AURORA_DATABASE_CA_CERT_PATH` /
+  `AURORA_DATABASE_CA_CERT` exist only for the local Aiven development
+  database, which signs with a per-project CA (see §13 and
+  docs/deployment.md). See docs/deployment.md → "Target platform: Vercel
+  (native Next.js)".
 
 ## 20. Design system
 
@@ -1272,6 +1625,62 @@ decide something, two files will eventually decide it differently.
   plus an optional `canShuffle` prop, so re-adopting it cannot reintroduce
   drift.
 
+### 20.2 Interaction-motion contracts
+
+Press, progress, and submission each have one rule, and each rule exists
+because the naive version produced a defect that was measured, not theorised:
+
+- **Press is structural, not decorative.** Every `Button` compresses through
+  the shared `aurora-press` class (motion-gated, compositor-only), and every
+  menu row carries an `active:` fill one step firmer than its hover. `:active`
+  is the touch equivalent of `:hover`: on a phone there is no hover to fall
+  back on, so a control without one gives no acknowledgement at all.
+- **Progress publishes whole seconds.** The engine ticks at 4Hz but the
+  facade snapshot floors `position`, because progress UI renders seconds and
+  sub-second ticks would re-render three transport surfaces for a value
+  nobody displays. The store keeps the raw float; seek math, persistence
+  deltas and Media Session read it there. The seek thumb additionally holds
+  transient drag state, so ticking progress cannot snap it back mid-drag
+  while live seeking continues underneath.
+- **Submission is ref-guarded, not state-guarded.** `isSubmitting` state does
+  not flush between same-tick activations, so the create-playlist form (like
+  the add-to-playlist menu before it) refuses a second submit through a
+  synchronous ref - otherwise one double-Enter mints two playlists.
+- **Loops never touch layout.** The now-playing bars animate `scaleY` from a
+  bottom origin rather than `height`; the sweep, drift and shimmer likewise
+  animate transform/opacity only. Enforced statically alongside the
+  reduced-motion paths (`interaction-motion.test.ts`), behaviourally for
+  seek, double-submit and press (`e2e/interaction-motion.spec.ts`).
+
+### 20.3 Hot-path complexity rules
+
+The playback and navigation paths run per store notification, not per user
+action, so a cost that looks negligible at n=1 is the largest line item in the
+app at n=200. Three rules came out of measurement:
+
+- **Never build a view a reader will not use.** `QueueManager.getSnapshot()`
+  maps every queue entry to a canonical identity (minting an id per entry) and
+  is O(n). `buildSnapshot()` calls it twice per notification and discards
+  `items` both times, because it needs only the order fields. Readers that want
+  cursor/order/shuffle/repeat use `getOrderState()` instead, which is O(order).
+  Measured at a 200-entry queue with 40 subscribers: 165.9 µs → 4.65 µs per
+  snapshot, i.e. 24.8 ms → 0.8 ms of CPU per second of playback.
+- **`playOrder` is a permutation, and that is load-bearing.** The queue array
+  slot IS the entry id; `playOrder` is a permutation of those slots and is
+  persisted verbatim. Two consequences are enforced by tests rather than
+  assumed: removing a play-order slot always orphans that queue index (so the
+  removal path needs no re-check), and no `Map` may stand in for `playOrder`
+  (a Map's iteration order is insertion order, which is not play order). Any
+  reverse lookup must be a side index that every queue mutation invalidates.
+- **A negative cache entry must never inherit the positive TTL.** `ProviderCache`
+  defaults `negativeTtlMs` to `ttl / 6`, which is right for a 5-minute search
+  and catastrophic for 6-hour video metadata: `getVideos` records a negative
+  entry whenever a batch resolves empty, and it isolates per-item failures by
+  swallowing them, so one dead session became an hour of "this video does not
+  exist". The video cache therefore sets its negative TTL explicitly, and the
+  tiered router treats a *successfully empty* primary as a reason to consult the
+  official API — the gate every search path already had.
+
 ## 21. Layer stack and presence
 
 ### 21.1 Layers are tokens, never numbers
@@ -1298,6 +1707,25 @@ orderings are load-bearing enough to be pinned by name:
 - **`z-player` > `z-rail`.** The bottom navigation and the mini player are
   `fixed` siblings with no shared parent, so nothing but geometry and layer
   keeps them from overlapping.
+
+The queue sheet's geometry is a contract of the same kind, and it is asserted
+both statically (`player/__tests__/queue-sheet-geometry.test.ts`) and
+behaviourally (`e2e/queue-position.spec.ts`):
+
+- **One offset.** `--p-queue-sheet-bottom` (`globals.css`) is the single
+  source of truth for how far above the viewport bottom the mobile sheet
+  sits. The sheet's `bottom-` and its `max-h` both derive from it, so the
+  anchor and the height cap cannot drift apart; the `sm` step lives on the
+  variable, not in a second class. The desktop side panel is a different
+  surface and does not read it.
+- **Centered by insets, not margins.** `mx-auto` does not center a `fixed`
+  element whose `left`/`right` are `auto` — the static position is the left
+  edge — so the sheet carries explicit left/right insets and `max-w-md` lets
+  `mx-auto` center by construction. A translate-based centering is excluded:
+  the `presence-sheet` entrance owns `transform`.
+- **Mini-player aware.** With no track playing there is no mini player, so the
+  sheet drops to just above the navigation; the condition is the mini
+  player's own visibility condition read from the same store.
 
 Unexpected stacking contexts are treated as causes, not escalation points.
 `transform`, `filter`, `backdrop-filter`, `opacity < 1`, `isolation`,
@@ -1525,6 +1953,35 @@ non-disabled item the topmost thing at its own centre — by
   walking into one makes the rule assert against a checkout that is not the one
   under test. A gate that fires on a neighbouring copy of the repository is a
   gate that gets disabled.
+- **Text encoding is gated structurally** (`src/text-encoding.test.ts`), not by
+  asserting one string. `UNKNOWN_ARTIST` once shipped as U+00E2 U+20AC U+201D
+  where a single em dash belonged, which is the exact signature of one encoding
+  pass too many: an em dash is U+2014, its UTF-8 is the bytes `E2 80 94`, and
+  decoding those as windows-1252 yields exactly those three characters. Nothing
+  was wrong in transit — every byte in the file was valid UTF-8, the response
+  headers were correct, and the database was clean — so the mojibake was written
+  into the *source* and rendered faithfully thereafter.
+
+  The gate looks for the **encoding signature** instead: a latin1 lead byte
+  (`U+00E2 U+00C3 U+00F0 …`) immediately followed by a code point only
+  reachable as a mis-decoded UTF-8 trail (`U+20AC U+0192 U+02C6 …`). A lead byte
+  alone is deliberately *not* a signal — `U+00C2` is the correct spelling of the
+  first letter of "Âm lượng", and a scan that "fixed" it would break the
+  dictionary. A companion test rejects `U+FFFD`, which catches a file whose bytes
+  are not valid UTF-8 at all — corruption with no recognisable sequence, and the
+  kind `readFileSync(…, "utf8")` reports as merely odd.
+
+  Two rules follow from this and are the reason the gate is shaped this way.
+  First, **expectations in that file are built from code points, never typed as
+  literals**: while investigating, an em dash written into a scratch script
+  through the same class of tooling reproduced the corruption exactly, its bytes
+  coming out mangled and its own comparison against the correct constant
+  failing. A test written that way would assert against mojibake while looking
+  correct to a reviewer. Second, **the corrupted sequence is never reproduced
+  in a comment**, because writing it out even inside prose is how the next
+  reader "fixes" it with a blind search and replace — which would leave the
+  encoding bug itself untouched. The constant's doc comment states the code
+  points numerically for the same reason.
 
 ## 23. What is not guaranteed
 
@@ -2229,7 +2686,14 @@ the property is asserted.
     interrupt playback, replace the queue, or drop a radio session.
     Enforced by `search-field.test.tsx` (no `action`/`method` on the form)
     and `search-navigation.spec.ts` (a `window` sentinel must survive
-    search navigation and must not survive a real reload).
+    search navigation and must not survive a real reload). While a submitted
+    search is in flight the field locks (read-only, clear disabled, second
+    submit refused at the single submit path) until the results page renders
+    and releases it — one lock in `lib/search/search-pending.ts`, opened by
+    the field and closed by the page, never derived from `useTransition`
+    (which does not observe `router.push`) or from the URL (which updates
+    optimistically). Enforced by `search-locking.test.tsx`,
+    `search-pending.test.ts` and `e2e/search-loading.spec.ts`.
 23. Recommendations are deterministic and local — the pipeline in
     `src/lib/recommendations/` reads Aurora's own signals, ranks with a
     documented rule set, and returns plain `Track`s. It never calls the
@@ -2381,6 +2845,51 @@ the property is asserted.
     collect. A list deduplicated before normalization is deduplicated against a
     key format that does not exist yet.
 
+    ### The recency ring asks no redundant question
+
+    `recordPlayed` trims the per-listener ring of at most 50 distinct tracks by
+    deleting everything past the 50th newest row. It used to do that by asking
+    `count()` first, and only running the row query when the count exceeded the
+    limit:
+
+    ```text
+    count() -> if (count > 50) -> findMany(skip: 50) -> if (rows) -> deleteMany()
+    ```
+
+    The count was never the input to the decision — the row list was.
+    `skip: 50` with no `take` returns every row past the limit, so the result is
+    empty exactly when the history is at or under it, and holds precisely the
+    excess otherwise. `rows.length > 0` is therefore the same predicate
+    `count > 50` was, computed by a query that had to run anyway to learn
+    *which* rows to delete. The old shape paid for `count()` purely to skip a
+    `findMany` that would have returned nothing, and paid for both once the trim
+    was genuinely needed. The `rows.length > 0` guard was already what made the
+    trim conditional, so removing the outer `count` could not change which rows
+    were deleted — only whether one extra question was asked.
+
+    Measured against the remote Postgres this project is configured against,
+    where one round trip is roughly 290 ms and the trim query itself executes in
+    0.23 ms against the existing `@@index([userId, playedAt])` — an index scan
+    backward, no sort node. Round trips are effectively the entire cost here,
+    which is why removing one is worth more than any amount of query tuning:
+
+    | path | statements before | statements after |
+    |---|---|---|
+    | under or at the limit | 9 | 9 |
+    | over the limit (trims) | 11 | **10** |
+
+    The saving is on the trimming path only, and that is worth stating plainly
+    rather than rounding up: replacing `count()` with the `skip` query keeps the
+    not-trimming path at one round trip, because the count *was* that path's
+    only round trip. A trim happens when a listener plays a track with no
+    existing row, not on a replay, so this is the discovery path and not the
+    common one. Retained-row fingerprints from
+    `scripts/bench-record-played.mts` are identical across the two algorithms at
+    every size, and `recently-played-trim.db.test.ts` pins both the retained rows
+    and the statement count — reintroducing the `count()` fails that file on the
+    count alone while every behavioural test in it still passes, which is what
+    distinguishes "same behaviour, more queries" from a behaviour change.
+
     Three things are explicitly NOT deduplicated, because collapsing them would
     destroy the evidence they exist to keep: analytics, per-play event streams
     and audit logs. Aurora has no per-play event table, so that exclusion is
@@ -2416,6 +2925,41 @@ the property is asserted.
     `src/components/player/__tests__/queue-panel.test.tsx` (the layer and the
     three dismissals), `e2e/menu-clipping.spec.ts` (the resolved geometry), and
     §21.4.
+
+### 32.11 Interaction states stay glass
+
+The four surface classes describe surfaces at rest. A component that is
+translucent at rest and opaque the moment it is touched is a second design
+system wearing the first one's name, so interaction states are tokens too —
+redefined, not reimplemented per component.
+
+In Glass Mode the six surface tokens become translucent lifts (same
+neutrals, ~70% alpha): `--surface-hover`, `--surface-active`, and the four
+static bases. Every existing `hover:bg-surface-*` and `bg-surface-*` call
+site — thirty of them, from nav items to menu rows to skeleton blocks —
+stays glass with no class changing, because `@theme inline` resolves those
+utilities through the tokens live at runtime. Uniform alpha is deliberate:
+the base/raised/overlay lightness steps survive, so hierarchy keeps reading
+through lightness while translucency stays constant. Deliberately excluded:
+canvas tokens (the full player is an intentional opaque takeover), accent
+(solid by design), and `--surface-selected` (no call site). With the
+attribute absent none of it is parsed, so Glass Mode off keeps rendering
+exactly as before.
+
+Loading blocks are glass surfaces first: `.glass-skeleton` is a translucent
+fill with a hairline and a slow 8%-white sweep, `animate-pulse` only with
+Glass Mode off, the sweep gated on `no-preference`, and no
+`backdrop-filter` of its own — a track list paints twenty of them, which is
+the nested-blur cost pattern §32.3 forbids. Disabled controls dim
+(`disabled:opacity-60` on the `Button` primitive); focus stays the global
+accent outline, drawn around the control rather than as its fill, so it
+survives every wallpaper.
+
+Enforced by `src/components/ui/__tests__/glass-states.test.ts` (the token
+overrides, the skeleton contract, the component-blur and opaque-black
+allowlists) and `e2e/glass-states.spec.ts` (computed translucency of chrome,
+row/menu/nav hovers, the running sweep, and screenshots over bright and dark
+wallpapers).
 
 ---
 

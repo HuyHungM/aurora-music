@@ -133,15 +133,29 @@ describe("capability detection", () => {
     expect(capabilities.pushNotifications).toBe(false);
   });
 
-  it("never advertises offline audio", () => {
-    // RULE 51 / RULE 76: there is no offline download feature. Playback URLs
-    // are single-use signed provider streams that must never be cached, so
-    // claiming offline audio would be a promise the system cannot keep.
-    const capabilities = detectCapabilities(
+  it("reports local-file playback only where the File System Access API exists", () => {
+    // This capability answers "can this browser read a folder the user
+    // grants it", NOT "does Aurora download provider audio". That remains
+    // forbidden (RULE 54, RULE 76) and is asserted separately against the
+    // server contract in `api/app-config`.
+    const chromium = detectCapabilities(
+      fakeWindow([], {
+        navigator: {
+          serviceWorker: { controller: {} },
+          showDirectoryPicker: () => undefined,
+        },
+      }),
+      "standalone",
+    );
+    expect(chromium.offlineAudio).toBe(true);
+
+    // Firefox and Safari: honest false, so /offline can show copy rather than
+    // a button that cannot work (RULE 34).
+    const firefox = detectCapabilities(
       fakeWindow([], { navigator: { serviceWorker: { controller: {} } } }),
       "standalone",
     );
-    expect(capabilities.offlineAudio).toBe(false);
+    expect(firefox.offlineAudio).toBe(false);
   });
 
   it("reports standalone mode from the display mode", () => {

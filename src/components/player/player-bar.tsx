@@ -205,8 +205,13 @@ export function PlayerBar() {
               step={0.01}
               value={displayVolume}
               aria-label={t("player.volume")}
+              // "0.5" is not a volume to a screen reader; the full player
+              // already applies `aurora-touch` to the same control, and this
+              // one renders from `xl` up, which includes coarse-pointer
+              // tablets — so it needs the 44px floor too.
+              aria-valuetext={`${Math.round(displayVolume * 100)}%`}
               onChange={(event) => engine?.setVolume(Number(event.currentTarget.value))}
-              className="hidden w-24 accent-accent xl:block"
+              className="aurora-touch hidden w-24 accent-accent xl:block"
             />
           </div>
         </div>

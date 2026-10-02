@@ -308,7 +308,20 @@ describe("recently played holds one row per canonical track", () => {
     } finally {
       await prisma.user.deleteMany({ where: { id: fresh } });
     }
-  });
+    // ROUND-TRIP-BOUND, and the timeout is local to this test on purpose.
+    //
+    // Proving a cap of 50 means writing 55 rows, one `recordPlayed` at a time -
+    // there is no way to assert the cap without exceeding it. Each call is
+    // ~6-8 round trips (catalog upsert, bounded read, upsert, count, and the
+    // trim once past the limit), so this is ~400 round trips. Against the
+    // remote Postgres this project is configured against, at the measured
+    // ~296 ms per round trip, that is ~2 minutes: this test measured 136.6 s.
+    //
+    // It is not hung and there is nothing to fix in the query - the writes are
+    // sequential by nature, since each one trims the rows the previous wrote.
+    // The budget is therefore set here, where the reason is visible, rather
+    // than by raising the suite's for every other test too.
+  }, 200_000);
 });
 
 describe("the migration's duplicate cleanup is exact and deterministic", () => {

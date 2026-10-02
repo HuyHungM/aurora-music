@@ -14,6 +14,7 @@ import {
 } from "@/lib/player/persistence";
 import { createPlaybackResolver } from "@/lib/playback/resolver";
 import { createServerSourceResolver } from "@/lib/playback/client-resolver";
+import { createLocalSourceResolver } from "@/lib/offline/local-resolver";
 import { createPlaybackController } from "@/lib/playback/controller";
 import { createUnifiedSearch } from "@/lib/music/unified-search";
 import { createMusicEngine } from "@/lib/music/music-engine";
@@ -23,7 +24,7 @@ import { setMusicEngine } from "@/lib/music/instance";
 import { extractorManager } from "@/lib/providers/extractor-manager";
 import { logger } from "@/lib/diagnostics/logger";
 import { recordPlayedAction } from "@/app/actions/playback";
-import { resolveAudioSourceAction } from "@/app/actions/playback-resolve";
+import { invalidatePlaybackResolutionAction, resolveAudioSourceAction } from "@/app/actions/playback-resolve";
 import {
   clearPlaybackStateAction,
   getPlaybackStateAction,
@@ -79,6 +80,12 @@ export function PlayerHost() {
     const controller = createPlaybackController({
       resolver: createPlaybackResolver([
         createServerSourceResolver(resolveAudioSourceAction),
+        // Offline (local-file) resolver. Same contract, same controller, same
+        // engine: a local file is a SOURCE TYPE, not a second player, so it
+        // flows through the identical resolve -> load path. It is registered
+        // AFTER the server resolver so it can never shadow a provider-backed
+        // identity; only an identity whose own source is `local` reaches it.
+        createLocalSourceResolver(),
       ]),
       engine,
       reportError: (error) => {
@@ -88,6 +95,13 @@ export function PlayerHost() {
       // final outcome (or a successful resume) determines the visible state.
       clearError: () => {
         usePlayerStore.getState().clearError();
+      },
+      // A URL recorded dead after an exhausted cycle is usually the same
+      // signed URL the server cache still holds. Invalidating it is
+      // fire-and-forget by contract: the next attempt re-resolves either way,
+      // and a reporting failure must never disturb playback.
+      reportDeadSource: (ref) => {
+        void invalidatePlaybackResolutionAction(ref.source, ref.id).catch(() => {});
       },
     });
     setPlaybackController(controller);
@@ -118,6 +132,10 @@ export function PlayerHost() {
         getTrack: (ref) => extractorManager.getTrack(ref),
       },
       queue: queueManager,
+      // Hover/next-up warming flows through the store into the controller's
+      // prefetch slot. Read fresh per call: the store object is replaced on
+      // every set, so capturing it once would go stale.
+      prefetchTrack: (track) => usePlayerStore.getState().prefetchTrack(track),
     });
     music.initialize();
     setMusicEngine(music);

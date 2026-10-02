@@ -1,3 +1,4 @@
+export { LOCAL_SOURCE_TYPE } from "./common";
 export type { ProviderId, SourceType, TrackRef } from "./common";
 export type { Track } from "./track";
 export type { Artist } from "./artist";
@@ -29,6 +30,7 @@ export type {
 } from "./source-reference";
 export {
   fromTrackRef,
+  isProviderSourceType,
   isSourceType,
   sourceReferenceKey,
   toTrackRef,
@@ -109,6 +111,7 @@ export type { ParsedTitle, VersionComparison, VersionKind } from "./match-text";
 export {
   DISTINCT_VERSION_KINDS,
   compareVersions,
+  foldAsciiComparison,
   foldDiacritics,
   identityIsrcs,
   normalizeArtistName,

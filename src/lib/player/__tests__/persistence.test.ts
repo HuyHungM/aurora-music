@@ -468,6 +468,243 @@ describe("PlaybackPersistenceController", () => {
     });
   });
 
+  /**
+   * The single write lane.
+   *
+   * Every writer persists the whole snapshot under one revision CAS, so two
+   * concurrent writers race and the server drops the loser's payload. The
+   * loser is not necessarily the newer write — it is whichever request
+   * reached the database second — so a track checkpoint racing a queue write
+   * could durably revert a queue the user had just extended.
+   *
+   * These tests pin the lane itself: at most one write in flight, and a
+   * request made while the lane is busy is re-driven afterwards rather than
+   * dropped.
+   */
+  describe("single write lane", () => {
+    async function readyHarness() {
+      const h = reg(createHarness());
+      await h.controller.initialize("user-1");
+      vi.clearAllMocks();
+      return h;
+    }
+
+    it("never has two writes in flight", async () => {
+      const h = await readyHarness();
+      h.store.queue = [makeTrack("a"), makeTrack("b")];
+      h.store.playOrder = [0, 1];
+      h.store.position = 0;
+      h.store.currentTrack = h.store.queue[0];
+      h.store.currentTime = 17;
+
+      let inFlight = 0;
+      let peak = 0;
+      h.deps.savePlaybackStateAction.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await Promise.resolve();
+        inFlight -= 1;
+        return { ok: true as const };
+      });
+
+      // Both writers, fired together: a track change and a queue change.
+      h.controller.notifyTrackChanged(makeTrack("old"), 10);
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(peak, "two persistence writes were in flight at once").toBe(1);
+    });
+
+    it("re-drives a queue write that arrives while a checkpoint is in flight", async () => {
+      const h = await readyHarness();
+      h.store.queue = [makeTrack("a")];
+      h.store.playOrder = [0];
+      h.store.position = 0;
+      h.store.currentTrack = h.store.queue[0];
+
+      const gate = deferred<{ ok: true }>();
+      h.deps.savePlaybackStateAction
+        .mockImplementationOnce(async () => gate.promise)
+        .mockImplementation(async () => ({ ok: true as const }));
+
+      // Checkpoint first, with a one-entry queue, and hold it open.
+      h.controller.notifyTrackChanged(makeTrack("old"), 10);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+
+      // The user extends the queue while that write is still in flight.
+      h.store.queue = [makeTrack("a"), makeTrack("b")];
+      h.store.playOrder = [0, 1];
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+      // The debounced write cannot compete, so it parks in the lane.
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+
+      gate.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // The parked write ran, and the LAST payload to reach the row is the
+      // two-entry queue. This is the assertion the revert violated: the
+      // durable state must never end up older than the newest request.
+      const calls = h.deps.savePlaybackStateAction.mock.calls;
+      const last = calls[calls.length - 1]?.[0];
+      expect(
+        last?.queueSnapshot?.entries.map(
+          (e: { providerTrackId: string }) => e.providerTrackId,
+        ),
+        "the newest queue did not win the lane",
+      ).toEqual(["a", "b"]);
+    });
+
+    it("re-drives a checkpoint that arrives while a queue write is in flight", async () => {
+      const h = await readyHarness();
+      h.store.queue = [makeTrack("a")];
+      h.store.playOrder = [0];
+      h.store.position = 0;
+      h.store.currentTrack = h.store.queue[0];
+
+      const gate = deferred<{ ok: true }>();
+      h.deps.savePlaybackStateAction
+        .mockImplementationOnce(async () => gate.promise)
+        .mockImplementation(async () => ({ ok: true as const }));
+
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+
+      h.controller.notifyPaused(h.store.queue[0], 42);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(1);
+
+      gate.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // The parked checkpoint was not dropped: its operation snapshot - the
+      // position the user paused at - survives the lane.
+      const calls = h.deps.savePlaybackStateAction.mock.calls;
+      const last = calls[calls.length - 1]?.[0];
+      expect(last?.position, "the parked checkpoint was lost").toBe(42);
+    });
+
+    it("retries a checkpoint once after losing a revision CAS", async () => {
+      const h = await readyHarness();
+      h.store.queue = [makeTrack("a")];
+      h.store.playOrder = [0];
+      h.store.position = 0;
+      h.store.currentTrack = h.store.queue[0];
+
+      h.deps.savePlaybackStateAction
+        .mockImplementationOnce(async () => ({ ok: true as const, stale: true }))
+        .mockImplementation(async () => ({ ok: true as const }));
+
+      h.controller.notifyPaused(h.store.queue[0], 33);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // Stale means a foreign writer won; the cursor this checkpoint carries
+      // is not reconstructible, so it is re-driven rather than discarded.
+      expect(h.deps.savePlaybackStateAction).toHaveBeenCalledTimes(2);
+      expect(h.deps.savePlaybackStateAction.mock.calls[1]?.[0]?.position).toBe(33);
+    });
+
+    it("gives up after one CAS retry rather than spinning", async () => {
+      const h = await readyHarness();
+      h.store.queue = [makeTrack("a")];
+      h.store.playOrder = [0];
+      h.store.position = 0;
+      h.store.currentTrack = h.store.queue[0];
+
+      h.deps.savePlaybackStateAction.mockImplementation(async () => ({
+        ok: true as const,
+        stale: true,
+      }));
+
+      h.controller.notifyPaused(h.store.queue[0], 33);
+      await vi.advanceTimersByTimeAsync(5000);
+
+      // Bounded: a tab that is not the live session must not turn a lost
+      // cursor update into an unbounded request loop.
+      expect(h.deps.savePlaybackStateAction.mock.calls.length).toBeLessThanOrEqual(3);
+    });
+  });
+
+  /**
+   * The offline isolation invariant, on the persistence path specifically.
+   *
+   * The queue SNAPSHOT already refuses to serialize a local track. The legacy
+   * `provider`/`providerTrackId` columns of the same row did not, and a local
+   * track's id is its folder-relative path - so playing a local file wrote the
+   * user's local folder structure into the durable server-side session, on
+   * every checkpoint. Asserted on the arguments that would actually reach the
+   * server, not on internal state.
+   */
+  describe("offline isolation", () => {
+    const localTrack = makeTrack("Album/Song.mp3", {
+      provider: "local",
+      id: "Album/Song.mp3",
+      providerTrackId: "Album/Song.mp3",
+    });
+
+    async function readyHarness() {
+      const h = reg(createHarness());
+      await h.controller.initialize("user-1");
+      vi.clearAllMocks();
+      return h;
+    }
+
+    it("never persists a local track's path in a checkpoint", async () => {
+      const h = await readyHarness();
+      h.store.queue = [localTrack];
+      h.store.playOrder = [0];
+      h.store.position = 0;
+      h.store.currentTrack = localTrack;
+
+      h.controller.notifyPaused(localTrack, 12);
+      await vi.advanceTimersByTimeAsync(0);
+
+      for (const call of h.deps.savePlaybackStateAction.mock.calls) {
+        const input = call[0];
+        expect(input?.provider, "a local provider reached the server").not.toBe(
+          "local",
+        );
+        expect(JSON.stringify(input)).not.toContain("Album/Song.mp3");
+      }
+    });
+
+    it("never persists a local track's path in the queue write", async () => {
+      const h = await readyHarness();
+      h.store.queue = [localTrack];
+      h.store.playOrder = [0];
+      h.store.position = 0;
+      h.store.currentTrack = localTrack;
+
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+
+      for (const call of h.deps.savePlaybackStateAction.mock.calls) {
+        expect(JSON.stringify(call[0])).not.toContain("Album/Song.mp3");
+      }
+    });
+
+    it("still persists a provider-backed cursor when a local track is playing", async () => {
+      // The guard must not throw away the whole write: with a provider track
+      // in the queue the row should still carry it, because dropping the
+      // session write would lose the user's queue.
+      const h = await readyHarness();
+      const remote = makeTrack("yt-1");
+      h.store.queue = [localTrack, remote];
+      h.store.playOrder = [0, 1];
+      h.store.position = 1;
+      h.store.currentTrack = localTrack;
+
+      h.controller.notifyQueueChanged();
+      await vi.advanceTimersByTimeAsync(600);
+
+      const input = h.deps.savePlaybackStateAction.mock.calls.at(-1)?.[0];
+      expect(input?.provider).toBe("mock");
+      expect(input?.providerTrackId).toBe("yt-1");
+    });
+  });
+
   describe("user intent beats restore", () => {
     it("discards restore when user plays a track mid-restore", async () => {
       const h = reg(createHarness());

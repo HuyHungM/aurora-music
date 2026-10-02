@@ -430,27 +430,49 @@ export async function reorderPlaylist(
     if (missing) {
       throw new ConflictError("Order references a track that is not in the playlist");
     }
-    // Free the target slots first: shifting every row out of 0..n-1 avoids
-    // stepping on temporarily occupied positions while applying the new order.
-    // Every row is shifted, including any membership the collapse hid, so a
-    // hidden row lands beyond the ordered range instead of colliding with
+    // Free the target slots first: shifting every row above its own range
+    // avoids stepping on temporarily occupied positions while applying the new
+    // order. Every row is shifted, including any membership the collapse hid,
+    // so a hidden row lands beyond the ordered range instead of colliding with
     // `@@unique([playlistId, position])` or reappearing mid-sequence.
-    const shift = rows.length;
-    for (const row of rows) {
-      await tx.playlistTrack.update({
-        where: { id: row.id },
-        data: { position: row.position + shift },
-      });
-    }
+    //
+    // ONE statement, not one per row, and the shift is the playlist's SPAN
+    // rather than its row count. That distinction is the whole correctness
+    // argument: the unique index is checked per row as each row is written, so
+    // the destination range must be empty before the statement starts AND stay
+    // internally consistent during it - which a count-based shift only
+    // guarantees for dense positions, and guarantees at all only by luck of the
+    // planner's row order. See `shiftPositionsAboveRange` for the measurement.
+    // It is also what keeps this at `3` statements rather than the `2N + 5` a
+    // per-row loop costs - at 200 tracks and ~50 ms RTT the loop was the reason
+    // this transaction needed a 20 s budget.
+    await shiftPositionsAboveRange(
+      tx,
+      playlistId,
+      rows.map((row) => row.position),
+    );
+    // Then apply the requested order in one statement. Targets are 0..k-1,
+    // pairwise distinct by construction (they are loop indices) and, after the
+    // shift, unoccupied - so the same argument holds.
+    // Rows the collapse hid are simply absent from the arrays and keep their
+    // shifted positions past the end.
+    const targetIds: string[] = [];
+    const targetPositions: number[] = [];
     for (let index = 0; index < orderedRefs.length; index += 1) {
       const ref = orderedRefs[index];
       const rowId = byRef.get(`${ref.provider}:${ref.providerTrackId}`);
       if (rowId) {
-        await tx.playlistTrack.update({
-          where: { id: rowId },
-          data: { position: index },
-        });
+        targetIds.push(rowId);
+        targetPositions.push(index);
       }
+    }
+    if (targetIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "PlaylistTrack" AS pt
+        SET "position" = v.i
+        FROM (SELECT * FROM unnest(${targetIds}::text[], ${targetPositions}::int[]) AS t(id, i)) AS v
+        WHERE pt."id" = v.id
+      `;
     }
     const updated = await tx.playlist.findUniqueOrThrow({
       where: { id: playlistId },
@@ -460,6 +482,89 @@ export async function reorderPlaylist(
   }, PLAYLIST_TRANSACTION_OPTIONS);
 }
 
+/**
+ * Moves every membership of one playlist strictly above that playlist's own
+ * highest position, in a single statement.
+ *
+ * WHY THE SHIFT IS A SPAN AND NOT A COUNT.
+ *
+ * The unique index on `(playlistId, position)` is checked PER ROW, as each row
+ * is updated - it is not `DEFERRABLE`, so it is not checked once at the end of
+ * the statement. That makes the safety of a shift depend entirely on whether
+ * the shifted range overlaps the range still being occupied AT THE MOMENT EACH
+ * ROW IS WRITTEN, which depends on the order the planner happens to visit rows
+ * in. Nothing in the SQL promises an order, so an overlap is a violation some
+ * of the time and not others.
+ *
+ * `shift = rows.length` - a COUNT - is only safe when no two positions differ
+ * by exactly the count. Dense lists satisfy that, which is why the bug looked
+ * unreachable: removing the head of `0..n` leaves `1..n`, and every gap is 1.
+ * But positions are not guaranteed dense. A playlist edited through paths that
+ * do not compact, or carrying gaps from history, produces a set where two
+ * positions DO differ by the count - and then the lower one is written into a
+ * slot the upper one has not vacated yet.
+ *
+ * Measured against the real constraint, with `updateMany({position:{increment}})`
+ * exactly as it was written:
+ *
+ *   positions            shift=count      result
+ *   0,1,2                3                 ok
+ *   1,2,3                3                 ok        <- the DB test's shape
+ *   0,4,5,9              4                 P2002
+ *   0,5,11,17,23         5                 P2002
+ *   3                    1                 ok
+ *   2,7                  2                 ok
+ *   0,100                2                 ok        <- gap 100 != count 2
+ *
+ * `shift = max - min + 1` - a SPAN - removes the order dependence entirely. For
+ * every row, `position + shift >= min + (max - min + 1) = max + 1 > max`. So
+ * every shifted position lands strictly above the entire original range,
+ * whatever order the rows are written in, and the shifted values are pairwise
+ * distinct because the increment is injective. There is nothing left for the
+ * index to collide with: the destination range was empty before the statement
+ * started and stays internally consistent throughout it. That argument does not
+ * mention row order at all, which is the whole point.
+ *
+ * Same seven cases with the span: all seven succeed.
+ *
+ * A LOOP rather than `Math.max(...positions)` because a spread of a very large
+ * array overflows the argument stack, and a playlist is user-controlled.
+ */
+async function shiftPositionsAboveRange(
+  tx: Prisma.TransactionClient,
+  playlistId: string,
+  positions: readonly number[],
+): Promise<void> {
+  if (positions.length === 0) {
+    return;
+  }
+  let min = positions[0];
+  let max = positions[0];
+  for (const position of positions) {
+    if (position < min) min = position;
+    if (position > max) max = position;
+  }
+  await tx.playlistTrack.updateMany({
+    where: { playlistId },
+    data: { position: { increment: max - min + 1 } },
+  });
+}
+
+/**
+ * Rewrites positions to `0..n-1` after a membership was removed.
+ *
+ * Batched as shift-then-place, which is the same two statements
+ * `reorderPlaylist` uses and for the same reason. Assigning `0..n-1` directly
+ * would NOT be safe as one statement: unlike the reorder case, the targets here
+ * are positions other rows may still be holding (removing the head of a dense
+ * list leaves the tail at `1..n`, so the last row wants a slot the first has
+ * not vacated yet). Shifting the whole set above its own range first makes
+ * every target provably free - see `shiftPositionsAboveRange` for why that is
+ * true regardless of the order the rows are written in.
+ *
+ * The early return keeps the common case - a removal that left the list
+ * already dense - at zero statements rather than paying for two.
+ */
 async function compactPositions(
   db: Prisma.TransactionClient,
   playlistId: string,
@@ -469,13 +574,20 @@ async function compactPositions(
     orderBy: { position: "asc" },
     select: { id: true, position: true },
   });
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row.position !== index) {
-      await db.playlistTrack.update({
-        where: { id: row.id },
-        data: { position: index },
-      });
-    }
-  }
+  const needsCompaction = rows.some((row, index) => row.position !== index);
+  if (!needsCompaction) return;
+
+  await shiftPositionsAboveRange(
+    db,
+    playlistId,
+    rows.map((row) => row.position),
+  );
+  const ids = rows.map((row) => row.id);
+  const positions = rows.map((_, index) => index);
+  await db.$executeRaw`
+    UPDATE "PlaylistTrack" AS pt
+    SET "position" = v.i
+    FROM (SELECT * FROM unnest(${ids}::text[], ${positions}::int[]) AS t(id, i)) AS v
+    WHERE pt."id" = v.id
+  `;
 }

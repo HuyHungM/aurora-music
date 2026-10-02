@@ -286,11 +286,18 @@ describe("Phase 47: one keep-listening control", () => {
   // source, so the coordinator's guards are untouched. It writes only after
   // `resolveSearchLink` has cross-source matched and deduplicated on
   // canonical identity, so a duplicate cannot reach the queue through it.
+  // The seventh entry is the local-files list's per-row "add to queue". It is
+  // a user-initiated append through `QueueManager` of the same shape as
+  // `track-action-menu.tsx`, not a generation source, so the coordinator's
+  // epoch guards are untouched — and it has to exist, because the offline
+  // source plays through the one shared engine (RULE 4) and therefore has to
+  // reach the one queue.
   it("has no queue writer beyond the known ones", () => {
     const writers = productionOffenders(/\.queue\.(add|replace|clear|remove|reorder)\(/);
     expect(writers.sort()).toEqual([
       "app/(app)/search/link-result.tsx",
       "app/(app)/track/[id]/track-player.tsx",
+      "components/offline/offline-library.tsx",
       "components/player/queue-panel.tsx",
       "components/tracks/track-action-menu.tsx",
       "lib/listening/coordinator.ts",

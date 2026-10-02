@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   rankAudioFormats,
-  selectAudioFormat,
 } from "@/lib/providers/youtube/playback/format-selection";
 import type { PlaybackFormatCandidate } from "@/lib/providers/youtube/playback/types";
 
@@ -12,7 +11,21 @@ function audio(
   return { url, hasAudio: true, hasVideo: false, ...overrides };
 }
 
-describe("selectAudioFormat", () => {
+/**
+ * "The best candidate" = the head of the ranked list.
+ *
+ * This replaces the removed `selectAudioFormat` wrapper, which was exactly
+ * this expression with no production caller. Defining it here keeps every
+ * ranking assertion below pointed at `rankAudioFormats`, the one canonical
+ * implementation, instead of at a convenience alias over it.
+ */
+function selectAudioFormat(
+  candidates: PlaybackFormatCandidate[],
+): PlaybackFormatCandidate | null {
+  return rankAudioFormats(candidates)[0] ?? null;
+}
+
+describe("rankAudioFormats / best candidate", () => {
   it("prefers audio-only over video-carrying formats", () => {
     const video = audio("https://cdn.example/v", {
       hasVideo: true,

@@ -53,6 +53,7 @@ export type YouTubeMetricName =
   | "search.data_api"
   | "video.innertube"
   | "video.data_api"
+  | "video.fallback"
   | "search.fallback"
   | "search.fallback_denied"
   | "channel.data_api"

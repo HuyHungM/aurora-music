@@ -126,6 +126,15 @@ function cleanStringArray(value: unknown): string[] | undefined {
 
 function toEntry(track: Track): PersistedQueueEntry | null {
   const provider = cleanString(track.provider);
+  // OFFLINE TRACKS ARE NEVER PERSISTED. A `local` source names a file in a
+  // folder the user granted to this browser profile; the next session has no
+  // such grant, so a restored entry would be a track that can never play and
+  // cannot be repaired by retrying. Dropping it here is deliberate: the slot
+  // disappears from the saved queue rather than coming back broken, and the
+  // index rebuild below is already defined to survive dropped entries.
+  if (provider === "local") {
+    return null;
+  }
   const providerTrackId = cleanString(track.providerTrackId ?? track.id);
   const title = cleanString(track.title);
   const artistId = cleanString(track.artistId);

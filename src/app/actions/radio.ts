@@ -5,7 +5,7 @@ import { toTrackIdentity } from "@/lib/domain";
 import { identityToTrack } from "@/lib/music/identity-track";
 import { getSessionUserId } from "@/lib/dal/session";
 import { listRecent } from "@/lib/dal/recently-played";
-import { getLibraryOverview } from "@/lib/dal/library";
+import { getLibraryArtistNames } from "@/lib/dal/library";
 import { listFollowedArtists } from "@/lib/dal/follow";
 import { idSchema, providerIdSchema } from "@/lib/validation/schemas";
 import {
@@ -200,18 +200,14 @@ export async function startDiscoveryRadioAction(): Promise<StartRadioActionResul
     const signals: string[] = [];
     if (userId) {
       try {
-        // Reuses the existing library overview (recent + liked tracks
-        // with artist names) and follows — no new queries, no profiling.
-        const [overview, follows] = await Promise.all([
-          getLibraryOverview(userId, { likedLimit: 20, recentLimit: 10 }),
+        // Artist names only, via the narrow projection: the rendering read
+        // also loads every playlist with all of its tracks and albums, none of
+        // which a radio seed looks at.
+        const [names, follows] = await Promise.all([
+          getLibraryArtistNames(userId, { likedLimit: 20, recentLimit: 10 }),
           listFollowedArtists(userId, { limit: 10 }),
         ]);
-        for (const entry of overview.recent) {
-          signals.push(entry.track.artistName);
-        }
-        for (const entry of overview.liked) {
-          signals.push(entry.track.artistName);
-        }
+        signals.push(...names.recentArtists, ...names.likedArtists);
         for (const follow of follows) {
           signals.push(follow.artist.name);
         }

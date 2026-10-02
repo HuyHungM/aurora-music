@@ -93,19 +93,36 @@ export async function recordPlayed(
     update: { playedAt },
   });
 
-  const count = await db.recentlyPlayed.count({ where: { userId } });
-  if (count > RECENT_LIMIT) {
-    const oldest = await db.recentlyPlayed.findMany({
-      where: { userId },
-      orderBy: { playedAt: "desc" },
-      select: { id: true },
-      skip: RECENT_LIMIT,
+  // Trim to the ring. NO PRE-COUNT, and the reason is that the count was never
+  // the input to the decision - the row list was.
+  //
+  // `skip: RECENT_LIMIT` with no `take` returns every row PAST the limit, so the
+  // result is empty exactly when the user's history is at or under it, and holds
+  // precisely the excess otherwise. `oldest.length > 0` is therefore the same
+  // predicate `count > RECENT_LIMIT` was, computed by a query that had to run
+  // anyway to learn WHICH rows to delete. The old shape paid for `count()` only
+  // to skip a `findMany` that returned nothing - and paid for both when the trim
+  // did happen.
+  //
+  // The `oldest.length > 0` guard was already load-bearing before this change:
+  // it is what made the trim conditional, so removing the outer `count` cannot
+  // change WHICH rows are deleted, only whether one extra question is asked.
+  // Same ordering, same `skip`, same `deleteMany` predicate, same rows.
+  //
+  // Ordering is `playedAt DESC` alone and is deliberately NOT tie-broken, so when
+  // two rows share a `playedAt` the identity of the boundary row is whatever the
+  // planner returns. That was equally true before this change - `count` never
+  // ordered anything - so this is unchanged ambiguity, not new ambiguity.
+  const oldest = await db.recentlyPlayed.findMany({
+    where: { userId },
+    orderBy: { playedAt: "desc" },
+    select: { id: true },
+    skip: RECENT_LIMIT,
+  });
+  if (oldest.length > 0) {
+    await db.recentlyPlayed.deleteMany({
+      where: { userId, id: { in: oldest.map((row) => row.id) } },
     });
-    if (oldest.length > 0) {
-      await db.recentlyPlayed.deleteMany({
-        where: { userId, id: { in: oldest.map((row) => row.id) } },
-      });
-    }
   }
 }
 

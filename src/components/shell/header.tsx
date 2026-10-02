@@ -81,6 +81,7 @@ export function Header({
         label={t("header.searchLabel")}
         placeholder={t("header.searchPlaceholder")}
         clearLabel={t("searchForm.clear")}
+        searchingLabel={t("searchForm.searching")}
       />
       {/* Elastic spacer: absorbs the slack below `md` so the account group
           stays hard against the trailing edge. `flex-1 md:hidden` - the

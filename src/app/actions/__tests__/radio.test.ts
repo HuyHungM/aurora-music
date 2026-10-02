@@ -11,6 +11,13 @@ vi.mock("@/lib/dal/session", () => ({
 }));
 
 vi.mock("@/lib/dal/library", () => ({
+  // Only the narrow projection is on the action's import list, but the
+  // rendering read is still mocked so a test can assert it is NOT called -
+  // that is the regression guard for this switch. If the mock omits an export
+  // the action imports, the call throws and is swallowed by the best-effort
+  // catch, so the suite goes green while the seeding path stops running. Keep
+  // it in step with what `radio.ts` actually imports.
+  getLibraryArtistNames: vi.fn(async () => ({ recentArtists: [], likedArtists: [] })),
   getLibraryOverview: vi.fn(async () => ({ liked: [], recent: [], playlists: [] })),
 }));
 
@@ -27,6 +34,9 @@ vi.mock("@/lib/radio/backend", () => ({
 }));
 
 import { getRadioBackend } from "@/lib/radio/backend";
+import { getLibraryArtistNames, getLibraryOverview } from "@/lib/dal/library";
+import { getSessionUserId } from "@/lib/dal/session";
+import { rateLimiter } from "@/lib/http/rate-limit";
 import {
   extendRadioBatchAction,
   startArtistRadioAction,
@@ -69,6 +79,12 @@ describe("radio server actions (Phase 41)", () => {
   beforeEach(() => {
     clearProviders();
     vi.clearAllMocks();
+    // `radioStart` is a shared, module-level rate-limit bucket. Every radio
+    // test in this file draws from it, so without a reset the suite has an
+    // order-dependent call budget: adding one test silently denies the next,
+    // the action returns early, and an assertion about what it seeded never
+    // runs. Reset per test so each one starts from a full budget.
+    rateLimiter.reset();
   });
 
   afterEach(() => {
@@ -123,6 +139,66 @@ describe("radio server actions (Phase 41)", () => {
         popularTracks: async () => [makeTrack("deezer", "pop1", { title: "Big Hit" })],
       }),
     );
+    const result = await startDiscoveryRadioAction();
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.station.tracks.map((t) => t.providerTrackId)).toContain("pop1");
+  });
+
+  it("seeds discovery radio from the listener's own artists, via the narrow read", async () => {
+    // Regression guard for the projection switch. Discovery used to call
+    // `getLibraryOverview`, which also loads EVERY playlist with all of its
+    // tracks, artist rows and album rows - none of which a radio seed reads.
+    // Not `Once`: the rate-limit guard resolves the session identity too, so a
+    // one-shot value is consumed by the guard and the action still reads null.
+    vi.mocked(getSessionUserId).mockResolvedValue("user-1");
+    vi.mocked(getLibraryArtistNames).mockResolvedValueOnce({
+      recentArtists: ["Nova", "Aster"],
+      likedArtists: ["Nova", "Cobalt"],
+    });
+    const seen: string[][] = [];
+    vi.mocked(getRadioBackend).mockReturnValue(
+      backend({
+        popularTracks: async () => [makeTrack("deezer", "pop1", { title: "Big Hit" })],
+        searchTracks: async (query: string) => {
+          seen.push([query]);
+          return [makeTrack("deezer", `s-${query}`, { title: query, artistName: query })];
+        },
+      }),
+    );
+
+    const result = await startDiscoveryRadioAction();
+    expect(result.ok).toBe(true);
+
+    // Reads artist names through the narrow projection...
+    expect(getLibraryArtistNames).toHaveBeenCalledWith("user-1", {
+      likedLimit: 20,
+      recentLimit: 10,
+    });
+    // ...and never through the rendering read.
+    expect(getLibraryOverview).not.toHaveBeenCalled();
+
+    // Recent artists lead, then liked, then follows; duplicates collapse and
+    // the whole set is capped at 10.
+    const queries = seen.map(([q]) => q);
+    expect(queries).toEqual(["Nova", "Aster", "Cobalt"]);
+  });
+
+  it("still starts discovery radio when the personalization read fails", async () => {
+    // The read is best-effort. It must degrade to the popular catalog, never
+    // fail the action - which is also why a broken mock is easy to miss.
+    // Not `Once`: the rate-limit guard resolves the session identity too, so a
+    // one-shot value is consumed by the guard and the action still reads null.
+    vi.mocked(getSessionUserId).mockResolvedValue("user-1");
+    vi.mocked(getLibraryArtistNames).mockRejectedValueOnce(new Error("db down"));
+    vi.mocked(getRadioBackend).mockReturnValue(
+      backend({
+        popularTracks: async () => [makeTrack("deezer", "pop1", { title: "Big Hit" })],
+      }),
+    );
+
     const result = await startDiscoveryRadioAction();
     expect(result.ok).toBe(true);
     if (!result.ok) {

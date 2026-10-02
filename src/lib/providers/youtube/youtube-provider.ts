@@ -332,6 +332,9 @@ export function createYouTubeProvider(
       const limit = pagination?.limit ?? 50;
       const offset = pagination?.offset ?? 0;
       const orderedVideoIds: string[] = [];
+      // Insertion-ordered companion to the array above: same order, O(1)
+      // membership. See the loop for why the scan was not affordable.
+      const seenVideoIds = new Set<string>();
       let pageToken: string | undefined;
       let total: number | undefined;
       // Bounded page walk (§23, §28).
@@ -363,7 +366,12 @@ export function createYouTubeProvider(
           const videoId = videoIdFromPlaylistItem(
             item as Parameters<typeof videoIdFromPlaylistItem>[0],
           );
-          if (videoId && !orderedVideoIds.includes(videoId)) {
+          // Membership test on a Set, not a linear `includes` scan: the page
+          // walk tests every item against every id collected so far, so the
+          // scan is quadratic in the playlist size. Insertion order is
+          // preserved either way, so the emitted order is unchanged.
+          if (videoId && !seenVideoIds.has(videoId)) {
+            seenVideoIds.add(videoId);
             orderedVideoIds.push(videoId);
           }
         }

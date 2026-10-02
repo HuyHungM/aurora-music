@@ -154,10 +154,6 @@ export function asPositiveInt(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
-export function asBoolean(value: unknown): boolean {
-  return value === true;
-}
-
 /**
  * Reads a youtubei.js text value as a trimmed string.
  *

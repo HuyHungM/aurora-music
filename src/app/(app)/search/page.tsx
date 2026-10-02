@@ -20,6 +20,7 @@ import { SearchDegradationNotice } from "./search-notice";
 import { TopResultCard } from "./top-result-card";
 import { SearchHistorySection } from "./search-history";
 import { RecordSearch } from "./record-search";
+import { SearchPendingRelease } from "./search-pending-release";
 import { LinkSearchResult } from "./link-result";
 import { identityToTrack } from "@/lib/music/identity-track";
 import { getRequestLocale } from "@/lib/i18n/server";
@@ -209,6 +210,14 @@ export default async function SearchPage({
         defaultValue={isValidQuery ? query : isLinkInput ? rawQuery.trim() : ""}
         locale={locale}
       />
+
+      {/* Releases the search lock: this page rendering at all means the request was
+          answered. Rendered on EVERY outcome — results, an empty result set, an
+          error, a resolved link, and the idle route an empty query submits to —
+          because each of those is a settled request. The field that opened the
+          lock lives in the layout and cannot observe this page arriving. It
+          renders nothing, so the layout the skeleton matches is untouched. */}
+      <SearchPendingRelease />
 
       {isValidQuery ? <RecordSearch query={query} /> : null}
       {!isValidQuery && linkResult ? (

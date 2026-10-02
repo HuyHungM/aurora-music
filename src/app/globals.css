@@ -427,6 +427,25 @@
   --p-layout-sidebar: 15rem;
   --p-layout-player: 6rem;
 
+  /* --- Queue sheet geometry (mobile) --------------------------------------
+     Single source of truth for the floating queue sheet's bottom offset: the
+     bottom navigation (4rem) + the mini player (~4.5rem with its padding) +
+     breathing room. The sheet's `bottom-` AND its `max-h` both derive from
+     this one value, so the anchor and the height cap cannot drift apart —
+     the cap is `100dvh - offset - top inset`, which is what keeps the header
+     reachable on a short landscape phone by construction.
+
+     The `sm` step preserves the wider offset the sheet already used at that
+     breakpoint; it lives here rather than in a second Tailwind class so there
+     is exactly one place that answers "how far above the viewport bottom does
+     the sheet sit". The desktop side panel (`lg:`) is a different surface
+     with its own anchor and does not read this value.
+     The `sm` step below preserves the wider offset the sheet already used at
+     that breakpoint; it lives beside this declaration rather than in a second
+     Tailwind class so there is exactly one place that answers "how far above
+     the viewport bottom does the sheet sit". */
+  --p-queue-sheet-bottom: 9rem;
+
   --p-artwork-thumb: 40px;
   --p-artwork-small: 48px;
   --p-artwork-medium: 80px;
@@ -987,6 +1006,17 @@
   --font-mono: var(--p-font-mono);
 }
 
+/* Queue sheet breakpoint step. Top-level — NOT nested inside `:root` above,
+   where a nested `:root` selector would resolve against the parent and match
+   nothing. Plain CSS is the right tool here rather than a Tailwind variant:
+   a custom property is not a utility, and this keeps the single source of
+   truth in one place instead of splitting it across a `sm:` class. */
+@media (min-width: 640px) {
+  :root {
+    --p-queue-sheet-bottom: 9.5rem;
+  }
+}
+
 /* --------------------------------------------------------------------------
    Theme mapping — scales that generate utilities.
 
@@ -1488,6 +1518,95 @@ body {
 }
 
 /* ==========================================================================
+   GLASS-MODE INTERACTION SURFACES
+
+   The pre-glass interaction tokens are SOLID neutrals (`--surface-hover` is
+   plain neutral-3), so in Glass Mode every `hover:bg-surface-hover`,
+   `hover:bg-surface-2` and `bg-surface-1` card in the application either
+   turns opaque on hover or sits opaque on the wallpaper from the start.
+   Redefining the six surface tokens here - rather than editing thirty call
+   sites - makes every existing state translucent at once: the component
+   classes do not change, and with the attribute absent none of this is
+   parsed, so Glass Mode off keeps rendering exactly as before.
+
+   Uniform ~70% alpha is deliberate, not a placeholder. The
+   base/raised/overlay lightness steps survive (neutral-1/2/3 still differ),
+   so hierarchy keeps reading through lightness while translucency stays
+   constant; and hover/active sit one lightness step above the surface they
+   replace, which is what makes a hover read as a lift rather than a flash.
+   `bg-surface-2/60`-style opacity modifiers keep working on top - they mix
+   toward transparent from an already-translucent base, which only makes a
+   menu hover quieter, never solid.
+
+   Deliberately NOT redefined here: `--surface-selected` (no call site; the
+   selected states that exist - nav `bg-surface-active`, the current row's
+   `bg-accent-muted/70` - are already translucent through the tokens below),
+   the canvas tokens (the full player is an intentional opaque takeover), and
+   anything accent (solid by design).
+   ========================================================================== */
+[data-aurora-glass="on"] {
+  --surface-base: color-mix(in oklab, var(--p-neutral-1) 72%, transparent);
+  --surface-raised: color-mix(in oklab, var(--p-neutral-2) 72%, transparent);
+  --surface-overlay: color-mix(in oklab, var(--p-neutral-3) 72%, transparent);
+  --surface-elevated: color-mix(in oklab, var(--p-neutral-2) 72%, transparent);
+  --surface-hover: color-mix(in oklab, var(--p-neutral-3) 68%, transparent);
+  --surface-active: color-mix(in oklab, var(--p-neutral-4) 74%, transparent);
+}
+
+/* ==========================================================================
+   GLASS SKELETON
+
+   Loading blocks are glass surfaces first and loading indicators second: a
+   translucent fill with a hairline and a slow translucent sweep, never an
+   opaque grey rectangle with a pulse. The sweep is deliberately low
+   contrast - an 8% white highlight over ~3 seconds - so it reads as light
+   moving across glass rather than a cheap loading bar.
+
+   Two modes, one component. With Glass Mode off this rule does not exist and
+   the component's own `animate-pulse` over an opaque fill is the whole
+   rendering, exactly as before. With Glass Mode on the pulse is removed (it
+   would fight the sweep), the fill goes translucent, and the `::after`
+   sweep takes over. The sweep's animation lives inside
+   `prefers-reduced-motion: no-preference` like the other decorative motion;
+   under reduced motion the block is a static translucent surface, which the
+   blanket rule at the end of this file would enforce anyway.
+
+   No `backdrop-filter` here, on purpose. A track list paints twenty of
+   these; a per-block blur would be twenty backdrop copies, which is the
+   nested-blur cost pattern §44 forbids. Translucency plus the sweep reads
+   as glass without it.
+   ========================================================================== */
+.glass-skeleton {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid transparent;
+  background-color: var(--surface-raised);
+}
+
+[data-aurora-glass="on"] .glass-skeleton {
+  animation: none;
+  background-color: color-mix(in oklab, var(--p-neutral-2) 55%, transparent);
+  border-color: var(--glass-border-subtle);
+}
+
+[data-aurora-glass="on"] .glass-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 25%,
+    oklch(1 0 0 / 0.08) 50%,
+    transparent 75%
+  );
+  transform: translateX(-100%);
+}
+
+/* The sweep itself is declared inside the shared `no-preference` block
+   further down, beside the other decorative motion: a user who has asked
+   for reduced motion must never have it parsed into the cascade at all. */
+
+/* ==========================================================================
    TYPOGRAPHY UTILITIES
 
    One role per class, each backed by a size / line-height / tracking
@@ -1629,9 +1748,12 @@ body {
   background-image: var(--aurora-gradient);
 }
 
-/* Now-playing bars: tiny GPU-friendly bars, paused under reduced motion. */
+/* Now-playing bars: transform-only, paused under reduced motion. `scaleY`
+   from a bottom origin renders the same grow-from-the-baseline motion the
+   `height` version did, without a layout property in an infinite loop. */
 .playing-bar {
-  height: 40%;
+  height: 100%;
+  transform-origin: bottom;
   animation: aurora-playing-bars 0.9s var(--p-ease-standard) infinite alternate;
 }
 .playing-bar-2 {
@@ -1642,16 +1764,16 @@ body {
 }
 @keyframes aurora-playing-bars {
   from {
-    height: 25%;
+    transform: scaleY(0.25);
   }
   to {
-    height: 100%;
+    transform: scaleY(1);
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .playing-bar {
     animation: none;
-    height: 60%;
+    transform: scaleY(0.6);
   }
 }
 
@@ -1697,6 +1819,18 @@ body {
   ::view-transition-old(root),
   ::view-transition-new(root) {
     animation-duration: var(--p-duration-normal);
+  }
+
+  /* Loading sweep for the glass skeleton. Same contract as the drift below:
+     a decorative loop, so it is declared here and nowhere else. 8% white
+     over 2.8s: light moving across glass, not a loading bar. */
+  @keyframes glass-shimmer {
+    to {
+      transform: translateX(100%);
+    }
+  }
+  [data-aurora-glass="on"] .glass-skeleton::after {
+    animation: glass-shimmer 2.8s ease-in-out infinite;
   }
 
   /* Ambient backdrop drift (Phase 53, §41, §42).

@@ -411,7 +411,7 @@ export function AddToPlaylistMenu({
                         ? t("playlist.addingToLabel", { title: playlist.title })
                         : t("playlist.addToLabel", { title: playlist.title })
                   }
-                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2 disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
                 >
                   {alreadyAdded ? (
                     <CheckIcon size={16} className="shrink-0 text-accent" />
@@ -443,7 +443,7 @@ export function AddToPlaylistMenu({
               type="button"
               role="menuitem"
               onClick={handleCreateNew}
-              className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+              className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
             >
               <PlusIcon size={16} className="shrink-0 text-text-muted" />
               <span>{t("playlist.createNew")}</span>

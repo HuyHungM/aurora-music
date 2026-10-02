@@ -6,6 +6,7 @@ import type { SearchHistory } from "@/lib/domain";
 import { ClockIcon, XIcon } from "@/components/ui/icons";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { clearSearchHistoryAction } from "@/app/actions/search";
+import { useSearchPending } from "@/lib/search/search-pending";
 
 export function SearchHistorySection({
   history,
@@ -15,8 +16,19 @@ export function SearchHistorySection({
   const router = useRouter();
   const { t } = useLocale();
   const [isPending, startTransition] = useTransition();
+  const beginSearch = useSearchPending((state) => state.begin);
 
   function runSearch(query: string) {
+    // Opens the SAME lock the search field opens. This path used to
+    // `router.push` directly, so a chip-initiated search ran entirely
+    // unlocked — and the user could then type a query and press Enter while it
+    // was still in flight, putting two searches on the wire at once. That is
+    // precisely the state the lock exists to make impossible.
+    //
+    // Nothing is debounced here, and nothing is deferred: the lock only marks
+    // "a search is in flight" so the field cannot start a second one. See
+    // `search-pending.ts`.
+    beginSearch(query);
     router.push(`/search?q=${encodeURIComponent(query)}`);
   }
 

@@ -111,7 +111,7 @@ function TrackActionMenuContent({
         type="button"
         role="menuitem"
         onClick={handlePlayNext}
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+        className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
       >
         <SkipForwardIcon size={16} className="text-text-muted" />
         <span>{t("menus.playNext")}</span>
@@ -121,7 +121,7 @@ function TrackActionMenuContent({
         type="button"
         role="menuitem"
         onClick={handleAddToQueue}
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+        className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
       >
         <PlusIcon size={16} className="text-text-muted" />
         <span>{t("menus.addToQueue")}</span>
@@ -132,7 +132,7 @@ function TrackActionMenuContent({
         role="menuitem"
         aria-label={t("menus.startRadioFor", { title: track.title })}
         onClick={handleStartRadio}
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+        className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
       >
         <RadioIcon size={16} className="text-text-muted" />
         <span>{t("menus.startRadio")}</span>
@@ -143,7 +143,7 @@ function TrackActionMenuContent({
           type="button"
           role="menuitem"
           onClick={onLikeToggle}
-          className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+          className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
         >
           {isLiked ? (
             <CheckIcon size={16} className="text-accent" />
@@ -159,7 +159,7 @@ function TrackActionMenuContent({
           type="button"
           role="menuitem"
           onClick={onAddToPlaylist}
-          className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none"
+          className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
         >
           <ListMusicIcon size={16} className="text-text-muted" />
           <span>{t("menus.addToPlaylist")}</span>
@@ -280,7 +280,7 @@ export function TrackActionMenu({
         aria-haspopup="menu"
         aria-expanded={isOpen}
         onClick={handleToggle}
-        className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-2 hover:text-text-primary"
+        className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-muted transition-colors aurora-press hover:bg-surface-2 hover:text-text-primary"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <circle cx="12" cy="5" r="1.5" />

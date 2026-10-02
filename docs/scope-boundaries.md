@@ -115,18 +115,21 @@ target could not trust Aiven's per-project CA in-app: on workerd `pg` resolves
 to `pg-cloudflare`, whose `startTls(options)` forwards the caller's options to
 `cloudflare:sockets`' `Socket.startTls`, which accepts **only**
 `expectedServerHostname` and drops `pg`'s `ca`/`rejectUnauthorized`; the
-database TLS upgrade therefore failed and the only external fixes were
-Hyperdrive or a publicly-trusted certificate. This is retained as **history,
-not as an open deferral**: the production target is now native Next.js on
-Vercel (docs/deployment.md), where the inline-CA mechanism works.
+database TLS upgrade therefore failed. This is retained as **history, not as an
+open deferral**: the production target is now native Next.js on Vercel
+(docs/deployment.md).
+
+The private-CA obstacle is now moot for production for a second, independent
+reason: production runs on **Neon**, whose certificate is publicly trusted, so
+there is no custom CA to supply in the first place. The inline-CA mechanism is
+therefore no longer a production mechanism at all — it is a **local development**
+facility for the Aiven database, which does sign with a per-project CA.
 
 `AURORA_DATABASE_CA_CERT` carries the public CA as inline PEM text, is read by
 the shared TLS builder (`src/lib/db-tls.ts`), takes precedence over the file
 path `AURORA_DATABASE_CA_CERT_PATH` when both are set, fails closed on a value
-that is not a PEM certificate, and keeps verification ON. It is the production
-mechanism for the filesystem-less Vercel Functions runtime, and it is proven to
-connect to the Aiven database with verification on (system trust store fails
-with `SELF_SIGNED_CERT_IN_CHAIN`; the inline CA succeeds).
+that is not a PEM certificate, and keeps verification ON. Neither variable is
+set in any deployed environment.
 
 Certificate and hostname verification must stay ON on every target:
 `sslmode=disable`, `no-verify`, `ssl=false` and `NODE_TLS_REJECT_UNAUTHORIZED=0`
@@ -442,9 +445,30 @@ behavior and added no dependency. The following were considered and are
 - **No offline music.** There is no audio download, no stream-URL persistence,
   and no cache entry for provider media. Playback URLs are single-use signed
   provider streams; caching them would both break on expiry and violate the
-  googlevideo passthrough rule. `offlineAudio` is therefore permanently
-  `false` in every capability surface, and the manifest advertises only an
-  offline *shell*.
+  googlevideo passthrough rule. `offlineAudio` is therefore `false` in the
+  **server** capability contract, and the manifest advertises only an offline
+  *shell*.
+  - **Superseded in part by local-file playback.** `/offline` reads files the
+    user ALREADY has on their own disk, through the File System Access API.
+    That is a different capability and it is measured CLIENT-side
+    (`pwa/platform.ts`), never asserted by the server, which cannot know what a
+    given browser can open. Downloading provider media remains forbidden.
+  - **Local-file audio is not an offline cache.** Nothing is copied into
+    Aurora, nothing reaches the server, and the folder is scanned only when the
+    user opens the page. A local track is never persisted as catalog data, so a
+    restored session can contain a provider queue but never an unplayable
+    `local` row.
+  - **The one browser-storage exception.** The folder HANDLE is persisted in
+    IndexedDB. It is the sole exception to the browser-storage quality gate
+    (`quality-gates.test.ts`), allowlisted to exactly two files, with a second
+    gate asserting that allowlist has not grown.
+  - **Not every browser can do this.** `showDirectoryPicker` is Chromium-only,
+    so Firefox and Safari get honest copy rather than a dead control; there is
+    deliberately no full-file-picker fallback.
+  - **No tag reading, no duration column.** Artist/title come from filename
+    heuristics, stated as heuristics, and the raw filename is always shown. A
+    duration is never precomputed: it needs a media element per file, and the
+    audio element reports the true value when the track loads anyway.
 - **No push notifications.** No push service, no VAPID keys, no subscription
   storage. `pushNotifications` is `false` everywhere. Adding it is a separate
   product decision (it implies a server-side delivery pipeline and a user

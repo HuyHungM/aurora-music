@@ -35,6 +35,10 @@ export function LocaleSwitcher({ compact = false }: { compact?: boolean }) {
       return;
     }
     const onPointerDown = (event: MouseEvent) => {
+      // The container owns the trigger: a `mousedown` that STARTS inside it is
+      // the toggle working, not an outsider to dismiss for. Without this the
+      // trigger's own `onClick` opens and this document listener closes in the
+      // same gesture, and the switcher can never open (or reopens then dies).
       if (
         containerRef.current &&
         !containerRef.current.contains(event.target as Node)
@@ -75,7 +79,7 @@ export function LocaleSwitcher({ compact = false }: { compact?: boolean }) {
         onClick={() => setOpen(!open)}
         className={
           compact
-            ? "grid h-11 w-11 place-items-center rounded-full text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            ? "grid h-11 w-11 place-items-center rounded-full text-text-secondary transition-colors aurora-press hover:bg-surface-hover hover:text-text-primary"
             : "aurora-press aurora-glass-nested flex w-full items-center gap-2 rounded-xl border border-border-subtle px-3 py-2 text-left transition-colors hover:border-accent/50"
         }
       >
@@ -141,7 +145,7 @@ export function LocaleSwitcher({ compact = false }: { compact?: boolean }) {
                 aria-checked={selected}
                 data-testid={`locale-option-${code}`}
                 onClick={() => choose(code)}
-                className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-hover focus:bg-surface-hover focus:outline-none"
+                className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-hover focus:bg-surface-hover focus:outline-none active:bg-surface-active"
               >
                 <span className="grid h-4 w-4 shrink-0 place-items-center">
                   {selected ? (

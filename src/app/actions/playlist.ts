@@ -27,6 +27,7 @@ import {
   playlistVisibilityUpdateSchema,
 } from "@/lib/validation";
 import { guardServerAction, type GuardFailure } from "@/lib/api/action-guard";
+import { isOfflineTrack } from "@/lib/offline/isolation";
 
 /**
  * Playlist writes are the only mutation surface in Aurora that changes durable,
@@ -72,7 +73,13 @@ export async function updatePlaylistAction(
   }
   try {
     const user = await requireUser();
-    const parsed = updatePlaylistSchema.safeParse({ playlistId, ...input });
+    // `input` first, so the POSITIONAL `playlistId` wins. The reverse order let a
+    // `playlistId` key inside the second argument — which arrives as JSON over
+    // the wire and is therefore not type-checked — override the id the caller
+    // was actually invoked with. Ownership is still re-checked against the
+    // effective id, so this was argument confusion rather than an authorization
+    // bypass, but a durable write should key off the argument it was given.
+    const parsed = updatePlaylistSchema.safeParse({ ...input, playlistId });
     if (!parsed.success) {
       return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
     }
@@ -168,6 +175,12 @@ export async function addTrackToPlaylistAction(
     return { ok: false, error: denied.error };
   }
   try {
+    // A playlist entry is catalog data every user of the playlist can read.
+    // An offline track has no resolvable identity outside the folder grant it
+    // came from, so adding one would publish a permanently broken row.
+    if (isOfflineTrack(track)) {
+      return { ok: false, error: "Local files cannot be added to a playlist" };
+    }
     const user = await requireUser();
     const parsed = addTrackSchema.safeParse({ playlistId, track });
     if (!parsed.success) {

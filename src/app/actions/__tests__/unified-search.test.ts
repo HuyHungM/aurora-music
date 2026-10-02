@@ -6,6 +6,7 @@ import {
   makeTrack,
 } from "@/lib/providers/__tests__/fake-provider";
 import { searchUnifiedTracksAction } from "@/app/actions/unified-search";
+import { configureSearchCache } from "@/lib/search/search-cache";
 
 function sameSong(provider: string, id: string): Track {
   return {
@@ -20,10 +21,17 @@ function sameSong(provider: string, id: string): Track {
 describe("searchUnifiedTracksAction", () => {
   beforeEach(() => {
     clearProviders();
+    // The action now serves a repeated query from a process-local cache. Two
+    // of these cases search the SAME query ("x") with DIFFERENT provider
+    // registrations, so without a reset the second would read the first's
+    // cached answer and assert against the wrong fixture. Production gets a
+    // 60-second window; a test suite needs a clean one per case.
+    configureSearchCache();
   });
 
   afterEach(() => {
     clearProviders();
+    configureSearchCache();
   });
 
   it("returns one merged group per canonical track", async () => {

@@ -245,7 +245,7 @@ export function DialogClose({
          `focus:outline-none focus:ring-2`, which both suppressed that rule
          and showed a ring on plain mouse clicks, since `focus:` matches
          any focus, not just keyboard. */
-      className="absolute right-4 top-4 grid h-11 w-11 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-2 hover:text-text-primary"
+      className="absolute right-4 top-4 grid h-11 w-11 place-items-center rounded-full text-text-muted transition-colors aurora-press hover:bg-surface-2 hover:text-text-primary"
     >
       <XIcon size={16} />
     </button>

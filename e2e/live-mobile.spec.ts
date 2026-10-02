@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
 import { FIXTURE_A, fixtureUrl } from "./fixtures";
+import {
+  expectMediaLoaded,
+  expectPlaybackAdvancing,
+} from "./helpers/assertPlayback";
 
 const LIVE = process.env.AURORA_E2E_LIVE_PLAYBACK === "1";
 
@@ -23,18 +27,15 @@ test.describe("live playback on a mobile viewport", () => {
       page.getByRole("heading", { name: FIXTURE_A.titleFragment }),
     ).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: /^Play / }).first().tap();
-    await expect(
-      page.getByRole("button", { name: /^Pause / }).first(),
-    ).toBeVisible({ timeout: 60_000 });
-    // MiniPlayer is the small-screen surface; the (visually hidden)
-    // desktop seek input still exposes numeric progress.
+
+    // Media-state oracle, not the (visually hidden) desktop seek input: the
+    // slider exists on this viewport but is hidden, so reading it told us
+    // about a control rather than about playback. See helpers/assertPlayback.ts.
+    await expectMediaLoaded(page);
+    await expectPlaybackAdvancing(page);
+
     await expect(
       page.getByRole("region", { name: "Mini player" }),
     ).toBeVisible();
-    const slider = page.locator('input[aria-label="Seek"]').first();
-    const t0 = Number(await slider.inputValue());
-    await expect(async () => {
-      expect(Number(await slider.inputValue())).toBeGreaterThan(t0);
-    }).toPass({ timeout: 30_000 });
   });
 });

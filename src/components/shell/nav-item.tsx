@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { navItems, isActivePath } from "./nav-config";
 import { useLocale } from "@/components/i18n/locale-provider";
 import {
+  FolderIcon,
   HomeIcon,
   LibraryIcon,
   RadioIcon,
@@ -16,6 +17,7 @@ const icons: Record<string, ComponentType<{ size?: number; className?: string }>
   home: HomeIcon,
   search: SearchIcon,
   library: LibraryIcon,
+  offline: FolderIcon,
   radio: RadioIcon,
 };
 

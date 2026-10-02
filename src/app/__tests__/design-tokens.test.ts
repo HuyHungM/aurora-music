@@ -241,8 +241,18 @@ describe("design token integrity", () => {
   it("gives every primitive a reachable use", () => {
     // Unreachable primitives are the usual way a token file grows forever.
     // A primitive is reachable if something references it, or if a @theme
-    // block publishes it as a Tailwind utility.
+    // block publishes it as a Tailwind utility. Component references count:
+    // a `var(--p-*)` inside a Tailwind arbitrary value
+    // (`bottom-[calc(var(--p-queue-sheet-bottom)+...)]`) resolves at runtime
+    // and the stylesheet scanner cannot see it, so the scan covers
+    // components too rather than forcing a decorative CSS alias for every
+    // token a component consumes directly.
     const referenced = new Set(referencedTokens(GLOBALS));
+    for (const file of COMPONENT_FILES) {
+      for (const token of referencedTokens(readFileSync(file, "utf-8"))) {
+        referenced.add(token);
+      }
+    }
     const themeBlockNames = THEME_BLOCK_NAMES;
 
     const orphans = DECLARATIONS.filter(

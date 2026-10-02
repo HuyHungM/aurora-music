@@ -42,11 +42,14 @@ there is no `vercel.json`, no OpenNext adapter and no Workers bundle. Cloudflare
 provides **DNS only** (the apex `auroramuzik.dpdns.org` 301-redirects to the
 canonical `https://app.auroramuzik.dpdns.org`).
 
-Set `DATABASE_URL`, `AURORA_DATABASE_CA_CERT` (Aiven's public CA as inline PEM),
-`AURORA_PUBLIC_URL` and `AUTH_SECRET` as Vercel environment variables, and run
-`bunx prisma migrate deploy` before promoting a deployment. The full procedure —
-environment variables, migration order, readiness, smoke checks, TLS/CA, backup
-and rollback — is in [`docs/deployment.md`](docs/deployment.md).
+Production runs on **Neon**: connect the Neon Vercel integration to the project
+and it writes `DATABASE_URL` (pooled) and `DATABASE_URL_UNPOOLED` (direct) for
+you. Add `AURORA_PUBLIC_URL` and `AUTH_SECRET` by hand, then run
+`bunx prisma migrate deploy` against the **direct** URL before promoting a
+deployment. No CA variable is needed — Neon presents a publicly-trusted
+certificate. The full procedure — environment variables, migration order,
+readiness, smoke checks, TLS, backup and rollback — is in
+[`docs/deployment.md`](docs/deployment.md).
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 

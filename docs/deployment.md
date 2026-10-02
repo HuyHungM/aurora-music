@@ -10,6 +10,9 @@
   Node runtime (Prisma's engine spawn, Next's own helpers). It is not used to
   install dependencies or to run project scripts.
 - PostgreSQL reachable; `DATABASE_URL` set (required in every environment).
+  Deployed environments use **Neon** (Lakebase Postgres); local development and
+  the DB test suite use a separate **Aiven** service. See "Databases: Neon in
+  production, Aiven in development" below.
 - `AUTH_SECRET` set when `NODE_ENV=production` (dummy values only ever in
   CI placeholders, never real secrets in logs or VCS).
 
@@ -22,7 +25,7 @@ Functions. API routes, Auth.js, Prisma/PostgreSQL, the YouTube playback
 resolver and server actions all keep running server-side.
 
 ```text
-Browser → Cloudflare DNS → Vercel (Next.js) → Node.js Functions → Aiven PostgreSQL
+Browser → Cloudflare DNS → Vercel (Next.js) → Node.js Functions → Neon PostgreSQL
 ```
 
 Repository configuration is framework-driven. There is deliberately **no
@@ -50,8 +53,8 @@ Production (and Preview, where useful) environment. Never commit values.
 
 | Variable | Notes |
 | --- | --- |
-| `DATABASE_URL` | Aiven PostgreSQL connection string. Keep `sslmode=require` (or `verify-full`); never weaken verification. |
-| `AURORA_DATABASE_CA_CERT` | Inline public PEM for Aiven's per-project CA. Vercel Functions have no readable file to point a path at, so supply the CA as a value. Takes precedence over the path variable. |
+| `DATABASE_URL` | Neon **pooled** connection string, written by the Neon Vercel integration. This is the application-traffic URL. Keep `sslmode=require` (or `verify-full`); never weaken verification. |
+| `DATABASE_URL_UNPOOLED` | Neon **direct** (non-pooled) connection string, same database, host without the `-pooler` suffix. **Required for `prisma migrate deploy`, `pg_dump`/`pg_restore` and the restore drill.** See "Pooled vs direct" below. |
 | `AURORA_PUBLIC_URL` | `https://app.auroramuzik.dpdns.org` — required in production. |
 | `AUTH_SECRET` | Required in production (Auth.js). Generate with `openssl rand -base64 32`. |
 | `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Optional; enables Google sign-in. |
@@ -61,11 +64,40 @@ Production (and Preview, where useful) environment. Never commit values.
 | `AURORA_YOUTUBE_EGRESS_PROXY` | Optional. Absolute `http(s)` forward proxy for the shared YouTube InnerTube session (discovery + playback). Set it only when this function's egress is treated as a datacenter and playback fails with YouTube's `LOGIN_REQUIRED` bot challenge. Only InnerTube traffic is proxied — never user traffic. May embed credentials. |
 | `AURORA_FEATURE_FLAGS` | Optional server-side kill switches (see below). |
 
-`AURORA_DATABASE_CA_CERT_PATH` and `SERVER_PORT` are Node-host file/port
-mechanisms and are not used on Vercel, which supplies its own port and has no
-persistent file to point at. Supply the CA inline instead. `AUTH_TRUST_HOST`
-is not required when `AURORA_PUBLIC_URL` is set: the origin is pinned, not
-inferred from a proxy header.
+`AURORA_DATABASE_CA_CERT_PATH` / `AURORA_DATABASE_CA_CERT` are **not set in any
+deployed environment.** Neon presents a publicly-trusted certificate, so the
+provider-CA mechanism has nothing to do there; both variables exist for the
+**local development** database (Aiven) only. Setting one on Vercel is not merely
+unnecessary — an unrelated CA cannot validate a Neon certificate, so it would
+break the connection rather than leave it as-is.
+
+`AUTH_SECRET` and `AURORA_PUBLIC_URL` are the only Aurora-specific variables a
+fresh deployment must set by hand; everything database-related is written by the
+Neon integration.
+
+### Pooled vs direct
+
+Neon publishes two URLs for the same database. The pooled one routes through
+PgBouncer in transaction mode and is correct for application traffic; the direct
+one is required for anything that depends on session state.
+
+| Operation | Which URL |
+| --- | --- |
+| Application requests, server actions, DAL reads/writes | `DATABASE_URL` (pooled) |
+| `prisma migrate deploy` | `DATABASE_URL_UNPOOLED` (direct) |
+| `pg_dump` / `pg_restore`, the restore drill | `DATABASE_URL_UNPOOLED` (direct) |
+
+Running a migration over the pooled URL fails in a way that never names pooling
+— `prepared statement "s0" already exists`, or a `SET search_path` that does not
+survive its own transaction and is then reported as `relation "…" does not
+exist`. **Migrate against the direct URL.**
+
+Two variables this runbook used to name do not exist and must not be set:
+`SERVER_PORT` (Vercel supplies its own port; there is no such variable) and
+`AUTH_TRUST_HOST` (host trust is not configurable — `trustHost: true` is set in
+`src/lib/auth/options.ts` and cannot be turned off by an environment variable).
+The origin is pinned by setting `AURORA_PUBLIC_URL`; it is NOT taken from a
+proxy header when that is present.
 
 **YouTube anti-bot egress.** Vercel Functions egress from a datacenter range,
 and YouTube's player endpoint answers some videos there with
@@ -101,8 +133,13 @@ to mutate a database other processes depend on. Run them explicitly, before
 promoting the new deployment:
 
 ```bash
-DATABASE_URL="postgresql://…" bunx prisma migrate deploy
+DATABASE_URL="$DATABASE_URL_UNPOOLED" bunx prisma migrate deploy
 ```
+
+Migrate against the **direct** Neon URL, not the pooled `DATABASE_URL` — see
+"Pooled vs direct" above. On a machine linked to the project,
+`neon connection-string` prints the direct string by default; confirm the host
+has no `-pooler` suffix before running the deploy.
 
 Migrate **before** promoting the new artifact: every migration to date is
 additive to the schema — the one exception is the reviewed duplicate-row
@@ -137,7 +174,7 @@ install (`bun install`)
 → build (`bun run build`)          ← must precede typecheck on a clean clone
 → validate (`bun run typecheck`, `bun run lint`, `bun run test`)
 → migration review (`git status` + allowlist test)
-→ migration deploy (`bunx prisma migrate deploy`)   ← separate, pre-promote step
+→ migration deploy (`bunx prisma migrate deploy`, direct Neon URL)   ← separate, pre-promote step
 → deploy to Vercel (Vercel builds `next build` and starts the deployment)
 → readiness (`GET /api/health` → 200 `{"status":"ok"}`)
 → smoke (`bun run smoke:prod https://app.auroramuzik.dpdns.org`)
@@ -192,17 +229,37 @@ behaviour and is unrelated to the package manager.
   `db:verify`, which upserts a probe track, when you only need to prove the
   connection and the adapter path.
 
+## Databases: Neon in production, Aiven in development
+
+Two PostgreSQL providers are in play, deliberately:
+
+| Environment | Provider | Why |
+| --- | --- | --- |
+| Vercel production and preview | **Neon** (Lakebase Postgres), `aws-ap-southeast-1` | Branches for preview deployments, instant copy-on-write clones, and a publicly-trusted certificate. Provisioned and wired by the Neon Vercel integration. |
+| Local development, `bun run test:db`, E2E | **Aiven** | A scratch database the DB suite can write to freely. It accumulates `@example.com` fixture users continuously and its rows are disposable. |
+
+They are **not** replicas and must not be treated as one: no data is copied
+between them, and a row written locally is not in production. Local
+`DATABASE_URL` points at Aiven; the deployed one is written by the Neon
+integration.
+
+Neon presents a publicly-trusted certificate, so **production needs no CA
+variable**. Everything below about provider CAs applies to the local Aiven
+database only.
+
 ## Database TLS and the provider CA
 
 The application reaches PostgreSQL through Prisma's driver adapter
 (`@prisma/adapter-pg`) with the connection in `DATABASE_URL`. TLS is decided by
 that URL: `sslmode=require`, `verify-ca` and `verify-full` all perform full
 certificate **and** hostname verification against the runtime's trust store
-(`pg-connection-string` currently treats all three as `verify-full`).
+(`pg-connection-string` currently treats all three as `verify-full`). Against
+Neon that succeeds with no extra configuration.
 
-When the provider signs with its own CA — the production
-`self-signed certificate in certificate chain` failure — point the application
-at that CA instead of weakening the connection:
+When a provider signs with its own CA — the
+`self-signed certificate in certificate chain` failure, which is what the local
+Aiven database produces — point the application at that CA instead of weakening
+the connection:
 
 ```env
 AURORA_DATABASE_CA_CERT_PATH="/etc/aurora/postgres-ca.pem"
@@ -216,16 +273,18 @@ AURORA_DATABASE_CA_CERT_PATH="/etc/aurora/postgres-ca.pem"
   and removes any conflicting SSL parameters from the URL, so the CA cannot be
   silently overridden. Certificate and hostname verification stay ON.
 - When unset, the connection string is used exactly as written and `pg`
-  verifies against the system trust store — the pre-existing behaviour.
+  verifies against the system trust store — the pre-existing behaviour, and what
+  Neon uses.
 
-On a filesystem-less runtime such as Vercel, supply the same public CA as
-inline PEM text instead, in `AURORA_DATABASE_CA_CERT` (it takes precedence over
-the path and never weakens verification).
+`AURORA_DATABASE_CA_CERT` carries the same public CA as inline PEM text for a
+filesystem-less runtime, and takes precedence over the path. No current Aurora
+runtime needs it: Vercel talks to Neon, and the Aiven database is reached from
+a Node host that can read a file.
 
 The same variables are honoured by `db:verify`, `db:check`, `db:integrity` and
 the E2E harness, so every path trusts the same CA.
 
-### Managed provider with a per-project CA (Aiven)
+### Managed provider with a per-project CA (local Aiven database)
 
 Aiven PostgreSQL signs the server certificate with a **per-project CA**
 (`<project-id> Project CA`) that is self-signed and therefore absent from every
@@ -236,13 +295,14 @@ CA; never weaken the connection:
 
 1. In the Aiven Console, open the service and download its **CA certificate**
    (`ca.pem`). Do not take a CA from a third-party site.
-2. Provide it to the runtime: on a Node host, store it outside the repository
-   and outside the web root (e.g. `/home/container/secrets/aiven-ca.pem`) and
-   set `AURORA_DATABASE_CA_CERT_PATH` to that absolute path; on Vercel, set
-   `AURORA_DATABASE_CA_CERT` to the certificate text.
+2. Store it outside the repository and outside any web root (e.g.
+   `~/.secrets/aiven-ca.pem`) and set `AURORA_DATABASE_CA_CERT_PATH` to that
+   absolute path in `.env`.
 3. Leave `sslmode=require` (and the rest of `DATABASE_URL`) unchanged.
-4. Restart/redeploy, then run `bun run db:check` (`SELECT 1` plus the
-   `getUserByAccount` lookup against a sentinel key).
+4. Run `bun run db:check` (`SELECT 1` plus the `getUserByAccount` lookup
+   against a sentinel key).
+
+This is a **development-machine** step. It is not part of deploying Aurora.
 
 The CA file is a **public** certificate (no private key). Never commit it to
 Git — `.gitignore` already ignores `*.pem` — and never serve it. Certificate
@@ -258,12 +318,17 @@ problem by supplying the CA, never by disabling verification.
 **Back up before any migration that touches data.** A migration is the only
 kind of change in this project that can destroy data.
 
+**Neon's history window is not a substitute for a dump.** The production
+project retains **6 hours** of point-in-time history, so instant restore can
+only undo a very recent mistake. Treat `pg_dump` as the real backup.
+
 Take a dump (custom format, so the restore carries indexes and constraints
-rather than replaying SQL):
+rather than replaying SQL). Use the **direct** Neon URL — `pg_dump` over the
+pooled connection is not supported:
 
 ```
 pg_dump --format=custom --no-owner --no-privileges \
-  --file aurora-$(date +%Y%m%d-%H%M%S).pgc "$DATABASE_URL"
+  --file aurora-$(date +%Y%m%d-%H%M%S).pgc "$DATABASE_URL_UNPOOLED"
 ```
 
 Keep the archive off the database host. A backup that dies with the host is not
@@ -303,6 +368,11 @@ bug.
 refuses if the target equals the source database, and requires a plain lowercase
 name. It is not part of the default pipeline and must never be.
 
+**Unverified against Neon.** The drill was written and last run against Aiven.
+Neon supports multiple databases per branch and logical dumps, so it is expected
+to work, but it has not been re-run since production moved. Run it once against
+Neon — on a **branch**, not on `main` — and confirm before relying on it.
+
 ## Feature flags and kill switches
 
 Server-side flags are read from one variable and need no deploy to change:
@@ -333,6 +403,13 @@ always permitted: revocation must work even when the feature is being killed.
   (today: playback persistence); core playback of catalog metadata is
   unaffected. The migration allowlist test fails closed on any new
   migration so the above analysis is redone explicitly.
+- `like_follow_recency_indexes` adds two indexes and drops two narrower ones,
+  storing and moving nothing. Old artifact on new schema: identical results,
+  the planner just stops sorting likes and follows before `LIMIT`. New artifact
+  on old schema: identical results via the sort it does today. It is the only
+  migration that changes an index the old code depends on for *speed* rather
+  than for correctness, which is why the dropped `@@index([userId])` is called
+  out here rather than left in the migration comment alone.
 
 ## Live playback credentials
 

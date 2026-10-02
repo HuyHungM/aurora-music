@@ -14,16 +14,19 @@ import { useLocale } from "@/components/i18n/locale-provider";
 export function FollowButton({
   artist,
   initialFollowing,
-  isAuthenticated = true,
+  isAuthenticated,
 }: {
   artist: Artist;
   initialFollowing: boolean;
   /**
-   * When false, a failed mutation raises the shared sign-in prompt
-   * instead of failing silently. Defaults to true (silent rollback)
-   * to preserve standalone behavior.
+   * Whether a signed-in session exists. REQUIRED, with no default, on purpose:
+   * when false, a failed mutation raises the shared sign-in prompt instead of
+   * failing silently. The previous `= true` default meant a call site that
+   * forgot the prop silently assumed "signed in" and swallowed the prompt for
+   * anonymous users — a missing prop must fail at compile time, not at runtime
+   * in front of a logged-out user.
    */
-  isAuthenticated?: boolean;
+  isAuthenticated: boolean;
 }) {
   // Client-side navigation between two artist routes reconciles the same
   // element in the same position, so React preserves this component's state

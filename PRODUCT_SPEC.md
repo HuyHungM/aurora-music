@@ -160,6 +160,21 @@ Explicit rules:
 - **Source resolution:** `TrackIdentity` → `PlaybackResolver` (first
   resolvable source in identity order; Deezer/Spotify sources skipped as
   metadata-only) → YouTube resolver → `AudioSource`.
+- **Offline (local-file) playback:** audio the user already has on their own
+  device is playable from `/offline`, through a folder the user grants with the
+  File System Access API. The grant is the only thing remembered — a
+  `FileSystemDirectoryHandle` in IndexedDB — and the folder is scanned only when
+  the user opens the page. **No audio is ever uploaded, cached, or proxied.**
+  A local track plays through the same engine, queue, transport controls,
+  recovery and Media Session as a provider track, and is isolated from the
+  server: it never resolves server-side and never becomes catalog data (not a
+  playlist entry, not a like, not recently-played, not part of a persisted
+  queue snapshot). Provider audio remains non-downloadable.
+- **Offline tracks are queue-only:** the `/offline` list is re-scanned from the
+  folder on each visit, because a server-side "local track" has no identity
+  that outlives the folder grant. Unsupported browsers (no File System Access
+  API) and revoked permissions get honest copy and a recovery action, never a
+  control that cannot work.
 - **Format selection:** Innertube format discovery, audio-only preferred
   (MIME `audio/mp4` > `audio/webm` > other, higher bitrate wins,
   URL-lexicographic tie-break), **muxed audio+video as acceptable last
@@ -193,8 +208,10 @@ Explicit rules:
 - **Ephemeral `AudioSource`.** Memory-only (`url`, `mimeType`,
   `durationMs`, `expiresAt`, `bitrate`). Expiry is checked before load;
   expired sources are never handed out — re-resolution is the recovery path,
-  never reuse. Simultaneous resolutions of one video share a single
-  in-flight request; results are never cached.
+  never reuse. The server keeps resolved sources in a short-TTL process-local
+  cache (3 minutes, keyed by exact video id, URLs never served past a 30s
+  expiry skew, hard failures cooled down 10s); simultaneous resolutions of
+  one video share a single in-flight request.
 - **Bounded recovery:** one recovery cycle per generation, same stable
   identity (no matcher, no new sources), up to `MAX_RECOVERY_ATTEMPTS = 2`
   with bounded backoff (200ms, 800ms), reload at saved position (latest user
@@ -286,6 +303,14 @@ Authenticated users own:
   and percent-encodes the query; re-submitting the query already shown
   does not re-navigate. Searching never interrupts playback, replaces the
   queue, or drops an active radio session.
+- **Search locks while it runs.** From submit until the results page renders,
+  the field is non-editable (read-only, announced unavailable, query kept
+  visible), clear is disabled, and a second submit is refused at the single
+  submit path — so no duplicate or racing request can start. The magnifier
+  becomes a spinner in its own slot, and the route skeleton (`loading.tsx`,
+  same geometry as the results) replaces the page. The lock is released by the
+  results page rendering, on every outcome; a request that never returns is
+  released by a bounded safety timer instead, so the field cannot strand.
 - **The same field accepts a provider link.** It classifies what is in it
   — ordinary text, a link Aurora can read, or a link it cannot — before
   anything is requested, and says so with a one-line hint under the field
@@ -304,6 +329,28 @@ Authenticated users own:
   Resolution renders inline in the same page: no full-page spinner, no
   stack trace, no provider message. Refused links are not recorded in
   search history. See `ARCHITECTURE.md` §9a.
+- **Results are ranked by how well they match, not by which provider answered
+  first.** Exact matches come first, then prefixes, then token coverage, then
+  phrase containment, then typo-level fuzzy matches; an irrelevant result is
+  kept but ranks last. The tiers are structurally separated, so an exact match
+  can never be pushed below a weak fuzzy one no matter how the tiers are
+  weighted. Search is not personalized, so "popular" contributes nothing to
+  the order — a quiet exact match outranks a loud approximate one. Ranking
+  only reorders: it never hides a result the providers returned and never
+  costs an extra request.
+- **Vietnamese and typographic noise are handled in the comparison, never in
+  the display.** `cảm ơn`, `cam on`, and `CAM ON` find each other, as do
+  `ngày mai người ta lấy chồng` and `ngay mai nguoi ta lay chong`; the results
+  still show the accented original. Common typos are recovered — `mcck` finds
+  MCK, `tayor swift` finds Taylor Swift, `camm on` finds Cảm Ơn — without
+  turning a vague query into unrelated results. A query of one or two
+  characters is treated as a prefix probe only.
+- **A repeated or duplicated search does not repeat the work.** The same query
+  submitted twice in a row is answered from a short-lived server cache, and
+  the same query arriving twice at once runs once and both callers receive the
+  same answer. A failed search is never remembered as a result. The cache is
+  best-effort and process-local: on a cold server the search simply runs again.
+  See `ARCHITECTURE.md` §9a.
 - **Playlists** — see §8.
 - **Persistent playback session** — one row per user (`userId @unique`)
   holding `provider` + `providerTrackId` + `position` + `revision`, plus a
@@ -870,7 +917,8 @@ NON-GOALS
 - Deezer full audio (preview-as-playback)
 - Arbitrary URL playback / generic URL fetch / audio proxy
 - Persisted stream URLs (DB columns, storage APIs, SW caching)
-- Offline music / downloads
+- Downloading / caching provider audio (see §5 for local-file playback, which
+  reads files the user already has and never touches the provider)
 - Lyrics display (only the `explicit_lyrics` boolean is mapped)
 - Social features (comments, feeds, activity)
 - Collaborative playlists / multi-owner playlists / shared editing
@@ -975,6 +1023,11 @@ place, and the Settings route was already reachable from the shell.
   back to the plain Aurora theme, which is fully usable.
 - **Reduced motion is honoured,** and no ambient motion runs when it is asked
   for.
+- **Interaction never leaves the glass.** Hover, active, selected, disabled
+  and loading states are translucent lifts of the same surfaces, not opaque
+  replacements: a hovered row, a pressed button and a loading block all keep
+  the wallpaper visible through them. Loading blocks sweep a subtle
+  highlight rather than pulsing grey.
 - **Persisted per account when signed in, per browser otherwise,** following the
   same precedence and the same two sinks as the locale preference (§16). The
   account and the browser copy cannot disagree.

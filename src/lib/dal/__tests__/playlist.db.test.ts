@@ -240,6 +240,77 @@ describe("reorderPlaylist", () => {
     ).rejects.toBeInstanceOf(ConflictError);
   });
 
+  it("reorders a long playlist in one pass without colliding on position", async () => {
+    // The batched rewrite (`updateMany` shift + one `unnest` UPDATE) replaces a
+    // loop of per-row updates, which is only safe because every target slot is
+    // provably free when it is written. That argument is much weaker to make
+    // by inspection at n=3 than to exercise: `@@unique([playlistId, position])`
+    // is checked per row as the statement runs, so any transient collision
+    // surfaces here as a Prisma error rather than as silent corruption.
+    const id = await seedPlaylist();
+    const many = Array.from({ length: 25 }, (_, i) =>
+      dbTest.makeTrack(namespace, 500 + i),
+    );
+    for (const track of many) {
+      await addTrackToPlaylist(ownerId, id, track, prisma);
+    }
+    expect(many).toHaveLength(25);
+
+    // Full reversal: every element moves, and no prefix of the permutation
+    // agrees with the current order, so nothing can be a no-op by luck.
+    const reversed = [...many].reverse();
+    const reordered = await reorderPlaylist(
+      ownerId,
+      id,
+      reversed.map((track) => trackRef(track)),
+      prisma,
+    );
+    expect(reordered.items.map((item) => item.trackId)).toEqual(
+      reversed.map((track) => track.id),
+    );
+
+    // Positions must be a dense 0..n-1 permutation - no gaps left behind by
+    // the shift, and no duplicates surviving the unique index.
+    const positions = await prisma.playlistTrack.findMany({
+      where: { playlistId: id },
+      orderBy: { position: "asc" },
+      select: { position: true },
+    });
+    expect(positions.map((row) => row.position)).toEqual(
+      Array.from({ length: many.length }, (_, i) => i),
+    );
+
+    // Reordering again after a removal re-compacts: the tail rows sit at
+    // 1..n, so the batched compaction's targets are positions other rows have
+    // not vacated yet. This is the case a naive single-statement rewrite of
+    // 0..n-1 would collide on.
+    await removeTrackFromPlaylist(ownerId, id, trackRef(reversed[0]), prisma);
+    const afterRemoval = await reorderPlaylist(
+      ownerId,
+      id,
+      reversed.slice(1).map((track) => trackRef(track)),
+      prisma,
+    );
+    expect(afterRemoval.items.map((item) => item.trackId)).toEqual(
+      reversed.slice(1).map((track) => track.id),
+    );
+    const compacted = await prisma.playlistTrack.findMany({
+      where: { playlistId: id },
+      orderBy: { position: "asc" },
+      select: { position: true },
+    });
+    expect(compacted.map((row) => row.position)).toEqual(
+      Array.from({ length: many.length - 1 }, (_, i) => i),
+    );
+    // ROUND-TRIP-BOUND; local timeout, same reasoning as the cap-at-50 tests in
+    // `dedupe.db.test.ts`, which is commented in full there. The 25 appends go
+    // through `addTrackToPlaylist` on purpose - it is the real write path, and
+    // `playlist-positions.db.test.ts` shows what bulk seeding would and would
+    // not prove - but at ~9 round trips each against the remote database that is
+    // the whole cost of this test. Measured at 143.6 s. Nothing is hung; the
+    // work is only reducible by not exercising the write path.
+  }, 200_000);
+
   it("moves first track to later position", async () => {
     const id = await seedPlaylist();
     await addTrackToPlaylist(ownerId, id, trackOne, prisma);

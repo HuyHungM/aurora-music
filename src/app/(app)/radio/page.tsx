@@ -28,18 +28,21 @@ export default async function RadioPage() {
   const popularProvider = providers.find((provider) =>
     provider.capabilities.has("tracks.popular"),
   );
-  let popular: Track[] = [];
-  if (popularProvider) {
-    try {
-      const result = await popularProvider.getPopularTracks({ limit: 8 });
-      popular = result.items;
-    } catch {
-      popular = [];
-    }
-  }
-
-  const userId = await getSessionUserId().catch(() => null);
-  const follows = userId ? await listFollowedArtists(userId, { limit: 6 }).catch(() => []) : [];
+  // Three independent reads. `getPopularTracks` is the long pole (a provider
+  // round trip) and the two DB reads were strictly additive latency after it,
+  // because none of the three depends on another. The session read only gates
+  // the follows read, so it is started alongside rather than awaited first.
+  const sessionPromise = getSessionUserId().catch(() => null);
+  const popularPromise: Promise<Track[]> = popularProvider
+    ? popularProvider
+        .getPopularTracks({ limit: 8 })
+        .then((result) => result.items)
+        .catch(() => [] as Track[])
+    : Promise.resolve([] as Track[]);
+  const [popular, userId] = await Promise.all([popularPromise, sessionPromise]);
+  const follows = userId
+    ? await listFollowedArtists(userId, { limit: 6 }).catch(() => [])
+    : [];
 
   return (
     <div className="flex flex-col gap-6 sm:gap-10">

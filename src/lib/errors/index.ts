@@ -80,13 +80,6 @@ export class UnsupportedProviderCapabilityError extends ProviderError {
   }
 }
 
-export class MissingResultsError extends AuroraError {
-  constructor(message = "Response did not contain a results field") {
-    super(message);
-    this.name = "MissingResultsError";
-  }
-}
-
 export class AuthenticationError extends AuroraError {
   constructor(message = "You must be signed in to perform this action") {
     super(message);

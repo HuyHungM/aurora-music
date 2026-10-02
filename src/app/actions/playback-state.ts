@@ -15,6 +15,10 @@ import {
   providerIdSchema,
 } from "@/lib/validation/schemas";
 import { validateQueueSnapshot } from "@/lib/player/queue-snapshot";
+import { guardServerAction } from "@/lib/api/action-guard";
+
+/** Same wording as the resolver's own kill switch: one player-wide condition. */
+const RESOLVE_OFF_MESSAGE = "Playback is temporarily unavailable right now.";
 
 export interface PlaybackStatePayload {
   provider: string;
@@ -123,6 +127,24 @@ export async function resolvePlaybackTrackAction(
   providerId: unknown,
   providerTrackId: unknown,
 ): Promise<{ ok: true; track: Track | null }> {
+  // The ONLY provider-calling action with no rate bucket and no kill switch,
+  // and it is anonymously reachable. `fetchTrackDetail` reaches the wire
+  // (`provider.getTrack`), so an unbounded client can spend provider quota
+  // from an unauthenticated context.
+  //
+  // The bucket is the generous `playbackResolve` one (120/min) rather than
+  // `search` (30/min) on purpose: one client restore invokes this once PER
+  // QUEUE ENTRY, and the queue persists up to 200 entries, so a legitimate
+  // cold start would otherwise spend the whole search budget before the user
+  // had done anything. The abuse this bounds is a scripted loop, not a page
+  // load.
+  const denied = await guardServerAction({
+    featureOffMessage: RESOLVE_OFF_MESSAGE,
+    bucket: "playbackResolve",
+  });
+  if (denied) {
+    return { ok: true, track: null };
+  }
   const providerParsed = providerIdSchema.safeParse(providerId);
   const trackParsed = idSchema.safeParse(providerTrackId);
   if (!providerParsed.success || !trackParsed.success) {

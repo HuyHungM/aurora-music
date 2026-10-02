@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { Playlist, Track } from "@/lib/domain";
 import { removeTrackFromPlaylistAction } from "@/app/actions/playlist";
@@ -37,17 +37,46 @@ export function PlaylistDetailClient({
   const [removedTrackIds, setRemovedTrackIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const currentTracks = tracks.filter((track) => !removedTrackIds.has(track.id));
-  const currentPlaylist = {
-    ...playlist,
-    items: playlist.items.filter(
-      (item) =>
-        !removedTrackIds.has(
-          tracks.find((track) => track.providerTrackId === item.trackId)?.id ??
-            item.trackId,
-        ),
-    ),
-  };
+  // One index for the item→track resolution, instead of a linear `find` per
+  // playlist item. `items.filter(item => tracks.find(...) !== undefined)` is
+  // O(items × tracks) on every render, and a playlist has no row cap - this
+  // is the only quadratic chain in the component tree. Map lookup is O(1) and
+  // the fallback (no matching track) is unchanged.
+  const trackIdByProviderTrackId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const track of tracks) {
+      // `providerTrackId` is optional on the type. A track without one could
+      // never have matched the `===` comparison this replaces (an undefined
+      // key is never equal to a playlist item's `trackId`), so skipping it
+      // keeps the same resolution and the same `?? item.trackId` fallback.
+      if (track.providerTrackId !== undefined) {
+        map.set(track.providerTrackId, track.id);
+      }
+    }
+    return map;
+  }, [tracks]);
+
+  // Both derivations are memoized, not just indexed: they feed
+  // `TrackRow`, `PlaylistPlayButton`, `PlaylistArtworkEditor` and
+  // `PlaylistTrackActions`, so a fresh array each render re-renders every
+  // row of the playlist on any parent state change - including the artwork
+  // editor's own `useMemo`, whose `[tracks]` dep could therefore never hit.
+  const currentTracks = useMemo(
+    () => tracks.filter((track) => !removedTrackIds.has(track.id)),
+    [tracks, removedTrackIds],
+  );
+  const currentPlaylist = useMemo(
+    () => ({
+      ...playlist,
+      items: playlist.items.filter(
+        (item) =>
+          !removedTrackIds.has(
+            trackIdByProviderTrackId.get(item.trackId) ?? item.trackId,
+          ),
+      ),
+    }),
+    [playlist, trackIdByProviderTrackId, removedTrackIds],
+  );
 
   const handleRemoveTrack = useCallback(
     async (track: Track) => {

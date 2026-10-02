@@ -87,6 +87,13 @@ interface PlayerState {
   playCollection: (tracks: Track[], startIndex?: number) => void;
   playNext: (track: Track) => void;
   addToQueue: (track: Track) => void;
+  /**
+   * Warms the resolution for a track without loading it: no queue change, no
+   * engine call, no error surfacing. Used for the likely-next track and for
+   * hover intent. Total fire-and-forget — failures vanish inside the
+   * controller's prefetch slot logic.
+   */
+  prefetchTrack: (track: Track) => void;
   playAtPosition: (position: number) => void;
   togglePlay: () => Promise<void>;
   play: () => Promise<void>;
@@ -197,6 +204,55 @@ function shuffledPlayOrder(
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+/** True when the user asked the browser to save data: no speculative traffic. */
+function isDataSaverActive(): boolean {
+  try {
+    const connection =
+      typeof navigator !== "undefined"
+        ? (navigator as Navigator & {
+            connection?: { saveData?: boolean };
+          }).connection
+        : undefined;
+    return connection?.saveData === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Warms the resolution for whatever plays next, if anything does. Called when
+ * the current track starts producing audio — the earliest moment the next
+ * track is knowable — so a natural or manual advance finds a hot prefetch
+ * slot instead of starting a cold resolution. Repeat-one replays the current
+ * track (already loaded); repeat-all wraps through nextQueueIndex.
+ */
+function prefetchNextTrack(state: {
+  queue: Track[];
+  playOrder: number[];
+  position: number;
+  repeat: RepeatMode;
+}): void {
+  if (isDataSaverActive()) {
+    return;
+  }
+  if (!playbackController) {
+    return;
+  }
+  const nextIndex = nextQueueIndex(state);
+  if (nextIndex === null) {
+    return;
+  }
+  const next = state.queue[nextIndex];
+  if (!next) {
+    return;
+  }
+  try {
+    playbackController.prefetchTrack(next);
+  } catch {
+    // Speculation must never break playback.
+  }
 }
 
 /** Next queue-index under the current repeat mode, or null when playback ends. */
@@ -431,7 +487,13 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
     on("waiting", () => set({ isLoading: true }));
     on("canplay", () => set({ isLoading: false }));
     on("play", () => set({ isPlaying: true, isLoading: false, error: null }));
-    on("playing", () => set({ isPlaying: true, isLoading: false, error: null }));
+    on("playing", () => {
+      set({ isPlaying: true, isLoading: false, error: null });
+      // The current track is producing audio: the earliest knowable moment
+      // for the next one. Warming its resolution now makes a natural or
+      // manual advance land on a hot prefetch slot.
+      prefetchNextTrack(get());
+    });
     on("pause", () => set({ isPlaying: false, isLoading: false }));
     on("ended", () => {
       const state = get();
@@ -761,6 +823,20 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
       if (!engine) {
         return;
       }
+      // A restored-but-not-yet-loaded session has no media on the element, so
+      // `engine.seek` writes `currentTime` onto an empty `src` and reads back
+      // zero. Clearing the restore markers unconditionally therefore DESTROYED
+      // the user's resume position: they scrubbed to 40s before pressing play,
+      // and playback then started from 0. The intent is recorded instead, and
+      // the existing restore path consumes it when the track loads.
+      if (get().restoredTrackKey !== null) {
+        // Clamped to non-negative only. The upper bound is deliberately NOT
+        // applied here: `duration` is not yet known on a restored session, and
+        // the resume path already clamps against the real duration when the
+        // track loads (`clampResumePosition` in the controller).
+        set({ pendingRestorePosition: Math.max(seconds, 0) });
+        return;
+      }
       engine.seek(seconds);
       const snapshot = engine.snapshot();
       set({
@@ -859,6 +935,22 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
       });
     },
 
+    prefetchTrack: (track) => {
+      // No queue mutation, no user-action counting, no error surfacing: a
+      // prefetch is speculation, and speculation must be invisible.
+      // Data-saver users opted out of speculative traffic; honor it here and
+      // at every other prefetch entry point.
+      if (isDataSaverActive()) {
+        return;
+      }
+      try {
+        playbackController?.prefetchTrack(track);
+      } catch {
+        // The controller's own contract is total, but the store must not
+        // depend on that: a prefetch can never break playback.
+      }
+    },
+
     bindEngine: (target) => {
       engine = target;
       if (!target) {
@@ -912,18 +1004,17 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
         newPosition = state.position - 1;
       }
 
-      // Check if this queue index is still referenced
-      const isStillReferenced = newPlayOrder.some((qi) => qi === queueIndex);
-      let newQueue = state.queue;
-      let adjustedPlayOrder = newPlayOrder;
-
-      if (!isStillReferenced) {
-        // Remove the track from queue and rebuild playOrder references
-        newQueue = state.queue.filter((_, i) => i !== queueIndex);
-        adjustedPlayOrder = newPlayOrder
-          .map((qi) => (qi > queueIndex ? qi - 1 : qi))
-          .filter((qi) => qi >= 0 && qi < newQueue.length);
-      }
+      // `playOrder` is a PERMUTATION of the queue slots - every index appears
+      // exactly once (see the invariant tests) - so the slot just removed was
+      // the only reference to `queueIndex` and that entry is now unreferenced.
+      // There is no longer any case where it survives, so the branch that
+      // re-checked it with an O(n) scan, and the second filter that cleaned up
+      // after the case that could not happen, are both gone: two passes now
+      // (drop the entry, re-point the indices above it) instead of four.
+      const newQueue = state.queue.filter((_, i) => i !== queueIndex);
+      const adjustedPlayOrder = newPlayOrder
+        .map((qi) => (qi > queueIndex ? qi - 1 : qi))
+        .filter((qi) => qi >= 0 && qi < newQueue.length);
 
       set({
         queue: newQueue,

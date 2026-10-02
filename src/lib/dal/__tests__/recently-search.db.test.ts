@@ -43,7 +43,14 @@ describe("recordPlayed / listRecent", () => {
     }
     const count = await prisma.recentlyPlayed.count({ where: { userId } });
     expect(count).toBeLessThanOrEqual(50);
-  });
+    // ROUND-TRIP-BOUND; local timeout, same reasoning as the equivalent test in
+    // `dedupe.db.test.ts`, which is commented in full there. Proving a cap of
+    // 50 means writing 55 rows sequentially, because each `recordPlayed` trims
+    // what the previous one wrote, and each call is ~6-8 round trips. At the
+    // measured ~296 ms per round trip against the remote database this project
+    // is configured against, 55 of them is over two minutes. Nothing is hung
+    // and no query is wrong; the work is simply irreducible for this assertion.
+  }, 200_000);
 });
 
 describe("addSearch / listSearchHistory / clearSearchHistory", () => {
@@ -67,7 +74,12 @@ describe("addSearch / listSearchHistory / clearSearchHistory", () => {
     }
     const count = await prisma.searchHistory.count({ where: { userId } });
     expect(count).toBeLessThanOrEqual(50);
-  });
+    // ROUND-TRIP-BOUND; local timeout. Same reasoning as the `recordPlayed`
+    // cap above. Each `addSearch` is a small transaction - two statements plus
+    // BEGIN and COMMIT - but there are 55 of them and they cannot be batched
+    // without changing the behaviour under test, since each one trims the rows
+    // the previous wrote.
+  }, 200_000);
 
   it("clears the history", async () => {
     await clearSearchHistory(userId, prisma);

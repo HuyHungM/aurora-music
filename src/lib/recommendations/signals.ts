@@ -1,4 +1,4 @@
-import { getLibraryOverview } from "@/lib/dal/library";
+import { getLibraryArtistNames } from "@/lib/dal/library";
 import { listFollowedArtists } from "@/lib/dal/follow";
 import { listRecent } from "@/lib/dal/recently-played";
 import type { RecommendationSignals } from "./service";
@@ -55,13 +55,17 @@ export async function collectRecommendationSignals(
     return NO_SIGNALS;
   }
   try {
-    const [overview, follows] = await Promise.all([
-      getLibraryOverview(userId, { likedLimit: 20, recentLimit: 10 }),
+    // Artist names only, so this is the narrow projection rather than the
+    // library rendering read: it never needed a playlist, an album row, or a
+    // hydrated `Track`, and loading them for one string per row was the whole
+    // cost of personalizing a page.
+    const [names, follows] = await Promise.all([
+      getLibraryArtistNames(userId, { likedLimit: 20, recentLimit: 10 }),
       listFollowedArtists(userId, { limit: 5 }),
     ]);
     return {
-      recentArtists: overview.recent.map((entry) => entry.track.artistName),
-      likedArtists: overview.liked.map((entry) => entry.track.artistName),
+      recentArtists: names.recentArtists,
+      likedArtists: names.likedArtists,
       followedArtists: follows.map((follow) => ({
         provider: follow.artist.provider,
         providerArtistId: follow.artist.providerArtistId ?? follow.artist.id,

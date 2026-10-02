@@ -1,6 +1,7 @@
 "use client";
 
 import type { Track } from "@/lib/domain";
+import Link from "next/link";
 import { isIdentityOfTrack } from "@/lib/music/identity-track";
 import { useMusicEngine, useMusicEngineState } from "@/lib/music/use-music-engine";
 import { Artwork } from "@/components/ui/artwork";
@@ -47,7 +48,17 @@ export function TrackRow({
   /** 1-based position shown in album/playlist/queue contexts. */
   position?: number;
 }) {
-  const duration = formatTrackDuration(track.duration);
+  // A duration of 0 or less is never a real track length — it is the model's
+  // way of saying "unknown" — so it stays hidden exactly as before. The
+  // formatter itself maps 0 to "00:00" (pure-function correctness), but the
+  // row must not newly display a label where it previously showed none.
+  const duration =
+    track.duration !== undefined && track.duration > 0
+      ? formatTrackDuration(track.duration)
+      : "";
+  // Same destination construction as the search top-result card: the track
+  // page resolves by provider id, falling back to the domain id.
+  const href = `/track/${encodeURIComponent(track.providerTrackId ?? track.id)}`;
   const { t } = useLocale();
   const engine = useMusicEngine();
   const currentTrack = useMusicEngineState((s) => s.currentTrack);
@@ -82,9 +93,29 @@ export function TrackRow({
     }
   };
 
+  /**
+   * Hover/focus intent warming. Pointer crossing a row (or keyboard focus
+   * landing on it) usually precedes a tap by hundreds of milliseconds — long
+   * enough for a resolution round trip to finish before the click. The facade
+   * owns admission (provider scope, sweep throttle, re-hover memory), so this
+   * stays a single unconditional call: intent in, maybe-warm out.
+   */
+  const handleIntent = () => {
+    if (!engine) {
+      return;
+    }
+    try {
+      engine.prefetchTrack(track);
+    } catch {
+      // Speculation must never break rendering.
+    }
+  };
+
   return (
     <div
       data-current={isCurrent ? "true" : undefined}
+      onMouseEnter={handleIntent}
+      onFocus={handleIntent}
       // A track row is a ROW, not a panel (Phase 53, §33). Transparent at
       // rest, a surface tint on hover, an accent tint when it is the current
       // track - three states, no border, and no `backdrop-filter` at any of
@@ -121,7 +152,16 @@ export function TrackRow({
           </span>
         ) : null}
       </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-px">
+      <Link
+        href={href}
+        // The row's navigable region: title + artist metadata. The same
+        // link-outside-controls shape as the search top-result card — the
+        // Play, remove and menu buttons stay siblings, never descendants, so
+        // there is no nested-interactive HTML and no click reaches both. The
+        // accessible name is the visible "Title Artist · Album" text, and the
+        // global `:focus-visible` ring covers keyboard focus.
+        className="flex min-w-0 flex-1 flex-col gap-px rounded"
+      >
         <span
           className={`t-track-title truncate ${isCurrent ? "text-accent-hover" : "text-text-primary"}`}
         >
@@ -131,7 +171,7 @@ export function TrackRow({
           {track.artistName}
           {variant !== "queue" && track.albumName ? ` · ${track.albumName}` : ""}
         </span>
-      </span>
+      </Link>
       {duration ? (
         // Selectable in principle, not in practice: a duration is a number, and
         // a pointer drag that crosses a column of them should not paint

@@ -356,6 +356,8 @@ export function FullPlayer() {
             step={0.01}
             value={displayVolume}
             aria-label={t("player.volume")}
+            // "0.5" is not a volume to a screen reader.
+            aria-valuetext={`${Math.round(displayVolume * 100)}%`}
             onChange={(event) => engine?.setVolume(Number(event.currentTarget.value))}
             className="aurora-touch min-w-0 flex-1 accent-accent focus-visible:outline-2 focus-visible:outline-accent"
           />

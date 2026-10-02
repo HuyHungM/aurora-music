@@ -206,21 +206,4 @@ async function resolveCallerId(provided: string | null | undefined): Promise<str
   }
 }
 
-/**
- * Charge a bucket without throwing.
- *
- * For operations that must stay available under load and where the right
- * degradation is "serve a reduced result" rather than "refuse". Nothing uses
- * this yet; it exists so a future caller has a non-throwing option that is
- * already tested, instead of reimplementing the guard.
- */
-export async function tryGuardRateLimit(
-  name: RateLimitBucketName,
-  options: GuardOptions = {},
-): Promise<RateLimitDecision | null> {
-  try {
-    return await guardRateLimit(name, options);
-  } catch {
-    return null;
-  }
-}
+

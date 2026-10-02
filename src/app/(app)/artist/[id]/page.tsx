@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { fetchArtistDetail, fetchArtistTracks } from "@/lib/providers/server";
+import {
+  fetchArtistDetail,
+  fetchArtistTracks,
+  type CapabilityResult,
+} from "@/lib/providers/server";
 import { isFollowing } from "@/lib/dal/follow";
+import type { Track } from "@/lib/domain";
 import { getSessionUserId } from "@/lib/dal/session";
 import { TrackList } from "@/components/tracks/track-list";
 import { RecommendationSection } from "@/components/recommendations/recommendation-section";
@@ -28,19 +33,39 @@ export default async function ArtistDetailPage({
   const t = getT(locale);
   const decodedId = decodeURIComponent(id);
 
-  const artistResult = await fetchArtistDetail(decodedId);
+  // Three independent reads, previously awaited one after another: the artist
+  // detail, the artist's tracks, and the session. Only the session gates the
+  // follow check, so running them together cuts the critical path from three
+  // round trips to two. `allSettled` rather than `all` because `notFound()` is
+  // called from inside the promise below, and a rejection in one branch must
+  // not be able to mask the `notFound()` the page already decided on.
+  const [artistOutcome, tracksOutcome, sessionUserId] = await Promise.allSettled([
+    fetchArtistDetail(decodedId),
+    fetchArtistTracks(decodedId),
+    getSessionUserId(),
+  ]);
 
-  if (artistResult.kind === "unsupported" || artistResult.kind === "failed") {
+  const artistResult = artistOutcome.status === "fulfilled" ? artistOutcome.value : null;
+  if (
+    !artistResult ||
+    artistResult.kind === "unsupported" ||
+    artistResult.kind === "failed"
+  ) {
     notFound();
   }
 
   if (artistResult.kind === "success") {
     const { data: artist } = artistResult;
-    const tracksResult = await fetchArtistTracks(decodedId);
+    // A rejected branch reads as the same `failed` shape the server helpers
+    // already return, so every downstream `kind` check below is unchanged.
+    const tracksResult: CapabilityResult<Track[]> =
+      tracksOutcome.status === "fulfilled"
+        ? tracksOutcome.value
+        : { kind: "failed" };
     const artistName = artist.name;
 
     let following = false;
-    const userId = await getSessionUserId();
+    const userId = sessionUserId.status === "fulfilled" ? sessionUserId.value : null;
     if (artist.providerArtistId && userId) {
       following = await isFollowing(userId, {
         provider: artist.provider,

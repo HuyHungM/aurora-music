@@ -1160,6 +1160,47 @@ describe("queue invariants", () => {
   beforeEach(() => resetStore());
   afterEach(() => unmount());
 
+  it("keeps playOrder a permutation of the queue across every removal", () => {
+    // The invariant `removeFromQueue` now relies on to decide that a queue
+    // index becomes unreferenced: `playOrder` is a PERMUTATION of the queue
+    // slots, so removing one play-order slot can never leave the queue index
+    // it pointed at still referenced. This walks every position so the
+    // invariant is observed, not just assumed - if a future mutation could
+    // produce a repeated index, this is the test that notices.
+    for (let victim = 0; victim < 3; victim += 1) {
+      resetStore();
+      mountEngine();
+      usePlayerStore.getState().replaceQueue([
+        makePlayableTrack("a"),
+        makePlayableTrack("b"),
+        makePlayableTrack("c"),
+      ]);
+      usePlayerStore.getState().removeFromQueue(victim);
+      const state = usePlayerStore.getState();
+      expect(
+        [...state.playOrder].sort((x, y) => x - y),
+        `permutation broken after removing play-order slot ${victim}`,
+      ).toEqual(state.queue.map((_, index) => index));
+    }
+  });
+
+  it("drops the queue entry a removed play-order slot pointed at", () => {
+    resetStore();
+    mountEngine();
+    usePlayerStore.getState().replaceQueue([
+      makePlayableTrack("a"),
+      makePlayableTrack("b"),
+      makePlayableTrack("c"),
+    ]);
+    usePlayerStore.getState().removeFromQueue(1);
+    const state = usePlayerStore.getState();
+    expect(state.queue.map((t) => t.id)).toEqual(["a", "c"]);
+    expect(state.playOrder).toEqual([0, 1]);
+    // The cursor followed the TRACK, not the slot: removing an entry before
+    // the current one moves it back by one.
+    expect(state.position).toBe(0);
+  });
+
   it("queue.length === playOrder.length after replaceQueue", () => {
     mountEngine();
     usePlayerStore.getState().replaceQueue([
@@ -1516,6 +1557,49 @@ describe("persistence generation and restore", () => {
     usePlayerStore.getState().replaceQueue([makePlayableTrack("n")]);
     expect(usePlayerStore.getState().pendingRestorePosition).toBeNull();
     expect(usePlayerStore.getState().currentTrack?.id).toBe("n");
+  });
+
+  it("records a seek on a restored-but-unloaded session instead of losing it", () => {
+    // `restoreQueueSnapshot` installs the queue WITHOUT loading the engine, so
+    // the element has no media and `engine.seek` reads back zero. Clearing the
+    // restore markers unconditionally therefore destroyed the resume
+    // position: scrub to 40s before pressing play, and playback started at 0.
+    mountEngine();
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: [makePlayableTrack("r")],
+      playOrder: [0],
+      position: 0,
+      shuffle: false,
+      repeat: "off",
+      mediaPosition: 83,
+      volume: 1,
+      muted: false,
+    });
+    expect(usePlayerStore.getState().pendingRestorePosition).toBe(83);
+
+    usePlayerStore.getState().seek(40);
+
+    const state = usePlayerStore.getState();
+    // The user's latest intent wins, and it survives until the track loads.
+    expect(state.pendingRestorePosition).toBe(40);
+    expect(state.restoredTrackKey).not.toBeNull();
+  });
+
+  it("clamps a negative pre-load seek rather than storing it", () => {
+    mountEngine();
+    usePlayerStore.getState().restoreQueueSnapshot({
+      tracks: [makePlayableTrack("r")],
+      playOrder: [0],
+      position: 0,
+      shuffle: false,
+      repeat: "off",
+      mediaPosition: 10,
+      volume: 1,
+      muted: false,
+    });
+
+    usePlayerStore.getState().seek(-50);
+    expect(usePlayerStore.getState().pendingRestorePosition).toBe(0);
   });
 
   it("restoreQueueSnapshot installs exact queue state without autoplay or intent", () => {

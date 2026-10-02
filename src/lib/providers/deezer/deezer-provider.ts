@@ -345,6 +345,7 @@ export function createDeezerProvider(
       const offset = pagination?.offset ?? 0;
       const needed = offset + limit;
       const ordered: Track[] = [];
+      const seenTrackIds = new Set<string>();
       let total = asTotal(resource.nb_tracks);
       let index = 0;
       for (let page = 0; page < 10; page += 1) {
@@ -368,7 +369,13 @@ export function createDeezerProvider(
             continue;
           }
           const normalized = normalizeTrack(candidate);
-          if (normalized && !ordered.some((track) => track.id === normalized.trackId)) {
+          // Set membership instead of `ordered.some(...)`: the page walk
+          // rescans the whole accumulated list for every entry, which is
+          // quadratic in the playlist size (a 1000-track ask is up to 500k
+          // comparisons). Order is preserved - `ordered` stays the ordered
+          // array, the Set is only the lookup.
+          if (normalized && !seenTrackIds.has(normalized.trackId)) {
+            seenTrackIds.add(normalized.trackId);
             ordered.push(normalized.track);
           }
         }

@@ -65,6 +65,93 @@ export interface AudioSurface {
 }
 
 /**
+ * Read-only view of the media element, for observing real playback.
+ *
+ * Deliberately excludes `src`: see `PlayerEngine.mediaDiagnostics`. Every field
+ * is either a number or a boolean so the snapshot is JSON-safe.
+ */
+export interface MediaDiagnostics {
+  /** A source has been assigned. Says nothing about which one. */
+  hasSource: boolean;
+  /** Scheme of the assigned source ONLY: "blob" | "https" | "http" | "data". */
+  sourceScheme: string | null;
+  /** HAVE_* level. >= 2 means there is playable data at the current time. */
+  readyState: number | null;
+  networkState: number | null;
+  paused: boolean;
+  ended: boolean;
+  seeking: boolean;
+  muted: boolean;
+  currentTime: number;
+  /** 0 when unknown or not yet known, which is normal before metadata loads. */
+  duration: number;
+  /** `MediaError.code`, or null. 2 = network, 3 = decode, 4 = src not supported. */
+  errorCode: number | null;
+  /**
+   * `MediaError.message`, sanitized and bounded, or null.
+   *
+   * This is the field that makes a media failure diagnosable. `errorCode` alone
+   * cannot separate the causes that all arrive as code 4: a revoked blob URL
+   * reports "Media load rejected by URL safety check", an empty file reports
+   * "Format error", and an undecodable container reports a demuxer failure.
+   * Every one of them is code 4, so without this the log cannot say which
+   * happened.
+   *
+   * Sanitized because the browser does not fully author this string and other
+   * engines do include source detail in it: see `safeMediaErrorMessage`.
+   */
+  errorMessage: string | null;
+}
+
+/** Longest `MediaError.message` retained. Enough for Chromium's boilerplate. */
+const MAX_ERROR_MESSAGE = 160;
+
+/**
+ * Reduces `MediaError.message` to bounded, non-identifying text.
+ *
+ * WHAT THIS HAS TO SURVIVE. The message is the one genuinely useful part of a
+ * media failure and the one field the browser does not fully control: Chromium
+ * emits fixed boilerplate, but other engines have been observed to include the
+ * offending source in the text. So the value is kept only when it looks like the
+ * boilerplate it is meant to be, and anything URL-shaped, path-shaped, or long
+ * enough to be an opaque token is redacted rather than trusted.
+ *
+ * Redaction is deliberately conservative. A redacted message still separates
+ * "revoked" from "format error" from "demuxer", which is the whole point of
+ * capturing it.
+ */
+export function safeMediaErrorMessage(message: unknown): string | null {
+  if (typeof message !== "string") {
+    return null;
+  }
+  const trimmed = message.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  if (/[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return "[redacted: url-shaped]";
+  if (/\bblob:/i.test(trimmed)) return "[redacted: url-shaped]";
+  if (/\b[a-z]:[\\/]/i.test(trimmed)) return "[redacted: path-shaped]";
+  if (/(^|\s)\/(?:[\w.-]+\/){2,}/.test(trimmed)) return "[redacted: path-shaped]";
+  if (/[A-Za-z0-9_-]{32,}/.test(trimmed)) return "[redacted: opaque token]";
+  return trimmed.slice(0, MAX_ERROR_MESSAGE);
+}
+
+/**
+ * The scheme of a source URL, or null.
+ *
+ * Deliberately stops at the colon. A `blob:` or signed googlevideo URL must
+ * never be reachable from a value a log or a test can print, and "is this local
+ * or remote" is the only question the scheme answers.
+ */
+export function sourceSchemeOf(url: unknown): string | null {
+  if (typeof url !== "string" || url.length === 0) {
+    return null;
+  }
+  const match = /^([a-z][a-z0-9+.-]*):/i.exec(url);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+/**
  * How often `timeupdate` events are relayed to listeners to avoid excessive
  * React re-renders (spec phase 5, §11/§38).
  */
@@ -141,6 +228,23 @@ export class PlayerEngine {
           "This track has no playable stream right now.",
         ),
       });
+      return;
+    }
+
+    // Same track, same URL, element already playing it: re-assigning src and
+    // calling load() would audibly restart playback for no reason (the
+    // controller's same-source reuse path reaches here on re-click). The
+    // element is left untouched and only the autoplay intent applies. A paused
+    // or errored element takes the full path, so re-click-to-restart and
+    // retry-after-error semantics are unchanged.
+    if (
+      this.loadedKey === trackKey(track) &&
+      !this.surface.paused &&
+      this.surface.src === url
+    ) {
+      if (autoplay) {
+        void this.playAutoplay();
+      }
       return;
     }
 
@@ -295,7 +399,7 @@ export class PlayerEngine {
 
   private handleError(): void {
     const element = this.surface as AudioSurface & {
-      error?: Partial<{ code: number }> | null;
+      error?: Partial<{ code: number; message?: unknown }> | null;
       networkState?: unknown;
       readyState?: unknown;
     };
@@ -314,11 +418,18 @@ export class PlayerEngine {
       code === 2 || code === 3 || code === 4 ? code : undefined;
     const kind: PlayerErrorKind = code === 4 ? "unavailable" : "playback";
     // Safe failure diagnostics (Phase 25 allowlist): the numeric media
-    // code plus element state. Never the source URL, tokens, or headers —
-    // the logger redacts URL-shaped values as a second line of defense.
+    // code, the sanitized native message, the source SCHEME and element state.
+    // Never the source URL, tokens, or headers — the logger redacts URL-shaped
+    // values as a second line of defense.
+    //
+    // The message is what turns a category into a diagnosis: code 4 alone covers
+    // a revoked blob URL, an empty file and an undecodable container alike, and
+    // all three used to look identical here.
     logger.warn("Playback media element error", {
       event: "playback_media_error",
       mediaCode: mediaCode ?? null,
+      mediaErrorMessage: safeMediaErrorMessage(element.error?.message),
+      sourceScheme: sourceSchemeOf(this.surface.src),
       networkState: toSafeState(element.networkState),
       readyState: toSafeState(element.readyState),
     });
@@ -341,6 +452,49 @@ export class PlayerEngine {
     for (const listener of set) {
       listener(payload);
     }
+  }
+
+  /**
+   * Read-only snapshot of the real media element.
+   *
+   * The element is created with `new Audio()` and is deliberately never
+   * attached to the document, so no selector can observe it - which means
+   * anything asserting "is it playing?" through the DOM is asserting about the
+   * controls, not the media. This is the only honest way to ask.
+   *
+   * Read-only on purpose: it reports state and never the source. A googlevideo
+   * URL is signed and short-lived, so returning `src` here would put a
+   * credential-shaped string one careless log away from being printed.
+   */
+  mediaDiagnostics(): MediaDiagnostics {
+    const element = this.surface as AudioSurface & {
+      ended?: unknown;
+      networkState?: unknown;
+      readyState?: unknown;
+      seeking?: unknown;
+      error?: Partial<{ code: number; message?: unknown }> | null;
+    };
+    return {
+      // `src` presence only, never its value: proves a source was assigned
+      // without exposing the signed URL.
+      hasSource: typeof this.surface.src === "string" && this.surface.src.length > 0,
+      sourceScheme: sourceSchemeOf(this.surface.src),
+      readyState: toSafeState(element.readyState),
+      networkState: toSafeState(element.networkState),
+      paused: this.surface.paused,
+      ended: element.ended === true,
+      seeking: element.seeking === true,
+      muted: this.surface.muted,
+      currentTime: Number.isFinite(this.surface.currentTime)
+        ? this.surface.currentTime
+        : 0,
+      duration: safeDuration(this.surface.duration),
+      errorCode:
+        element.error && typeof element.error.code === "number"
+          ? element.error.code
+          : null,
+      errorMessage: safeMediaErrorMessage(element.error?.message),
+    };
   }
 }
 

@@ -28,15 +28,20 @@ export async function upsertArtist(
   return row.id;
 }
 
-export async function upsertAlbum(
+/**
+ * Upserts an album under an ALREADY-RESOLVED artist.
+ *
+ * Split from `upsertAlbum` because a caller that has just upserted the
+ * artist has nothing left to gain from doing it again: `upsertTrack` resolves
+ * `track.artistId`/`track.artistName` and then forwards those same two values
+ * verbatim as the album's, so the nested call issued a byte-identical
+ * `INSERT ... ON CONFLICT` round trip on every like, play and playlist-add.
+ */
+export async function upsertAlbumByArtistId(
   db: PrismaClient,
-  album: Pick<Album, "id" | "provider" | "title" | "artistId" | "artistName" | "artwork" | "releaseDate">,
+  album: Pick<Album, "id" | "provider" | "title" | "artwork" | "releaseDate">,
+  artistId: string,
 ): Promise<string> {
-  const artistId = await upsertArtist(db, {
-    id: album.artistId,
-    provider: album.provider,
-    name: album.artistName,
-  });
   const row = await db.album.upsert({
     where: {
       provider_providerAlbumId: {
@@ -59,6 +64,18 @@ export async function upsertAlbum(
     },
   });
   return row.id;
+}
+
+export async function upsertAlbum(
+  db: PrismaClient,
+  album: Pick<Album, "id" | "provider" | "title" | "artistId" | "artistName" | "artwork" | "releaseDate">,
+): Promise<string> {
+  const artistId = await upsertArtist(db, {
+    id: album.artistId,
+    provider: album.provider,
+    name: album.artistName,
+  });
+  return upsertAlbumByArtistId(db, album, artistId);
 }
 
 /**
@@ -108,13 +125,17 @@ export async function upsertTrack(
 
   let albumId: string | undefined;
   if (track.albumId) {
-    albumId = await upsertAlbum(db, {
-      id: track.albumId,
-      provider: track.provider,
-      title: track.albumName ?? "Unknown album",
-      artistId: track.artistId,
-      artistName: track.artistName,
-    });
+    // The artist row above is already resolved, and this album's artist is
+    // that same row — so it is passed through rather than upserted again.
+    albumId = await upsertAlbumByArtistId(
+      db,
+      {
+        id: track.albumId,
+        provider: track.provider,
+        title: track.albumName ?? "Unknown album",
+      },
+      artistId,
+    );
   }
 
   const row = await db.track.upsert({

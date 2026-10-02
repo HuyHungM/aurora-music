@@ -56,4 +56,28 @@ describe("security headers", () => {
     expect(CONTENT_SECURITY_POLICY).toMatch(/connect-src[^;]*'self'/);
     expect(CONTENT_SECURITY_POLICY).toMatch(/form-action[^;]*'self'/);
   });
+
+  it("allows blob: media, because every local file is played from one", () => {
+    // REGRESSION GUARD, and the narrowest assertion that would have caught the
+    // bug this pins. `media-src https:` alone looks correct - provider playback
+    // is all https: - while making the entire offline feature unplayable: local
+    // tracks are streamed to the audio element as object URLs minted from the
+    // user's own File, and Chromium refuses every blocked source with
+    // "Media load rejected by URL safety check", i.e. MediaError.code 4, which
+    // the controller reports as `category: "source"` after burning both
+    // recovery rounds.
+    //
+    // It failed SILENTLY for this long because nothing asserted the offline
+    // path could load at all: the local resolver, the object-URL ring and the
+    // engine were each individually correct.
+    expect(CONTENT_SECURITY_POLICY).toMatch(/media-src[^;]*blob:/);
+
+    // The relaxation stays bounded. `blob:` is same-origin and page-generated, so
+    // it grants no access to a remote or attacker-chosen resource; `http:` must
+    // stay absent so there is no plaintext-downgrade or mixed-content vector.
+    const mediaSrc = /media-src([^;]*)/.exec(CONTENT_SECURITY_POLICY)?.[1] ?? "";
+    expect(mediaSrc).not.toMatch(/(^|\s)\*/);
+    expect(mediaSrc).not.toMatch(/(^|\s)http:/);
+    expect(mediaSrc).not.toMatch(/data:/);
+  });
 });

@@ -83,6 +83,7 @@ export default async function E2EFixtureLibraryPage() {
           <FollowButton
             artist={fixtureArtist}
             initialFollowing={artistFollowing}
+            isAuthenticated={userId !== null}
           />
           <span className="text-sm text-text-muted">
             {fixtureArtist.name} — {artistFollowing ? "Following" : "Not following"}
@@ -105,6 +106,7 @@ export default async function E2EFixtureLibraryPage() {
                 <LikeButton
                   track={track}
                   initialLiked={liked.get(track.id) ?? false}
+                  isAuthenticated={userId !== null}
                 />
                 <span className="text-sm text-text-muted">
                   {liked.get(track.id) ? "Liked" : "Not liked"}

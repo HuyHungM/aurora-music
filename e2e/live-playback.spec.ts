@@ -1,6 +1,16 @@
 import { test, expect } from "@playwright/test";
 import type { Page, TestInfo } from "@playwright/test";
 import { FIXTURE_A, INVALID_ID, fixtureUrl, redactSecrets } from "./fixtures";
+import {
+  diagnosePlayback,
+  expectMediaLoaded,
+  expectPlaybackAdvancing,
+  expectPlaybackPaused,
+  formatDiagnosis,
+  mediaCurrentTime,
+  mediaDuration,
+  readMediaState,
+} from "./helpers/assertPlayback";
 
 const LIVE = process.env.AURORA_E2E_LIVE_PLAYBACK === "1";
 
@@ -35,15 +45,26 @@ test.describe("live playback (YouTube fixture)", () => {
         body: consoleLines.join("\n"),
         contentType: "text/plain",
       });
+      // Attach the media diagnosis too. On failure this is the difference
+      // between "playback broke somewhere" and a named stage plus the exact
+      // element state at the moment it broke.
+      const state = await readMediaState(page).catch(() => null);
+      await testInfo.attach("playback-diagnosis.txt", {
+        body: `${formatDiagnosis(diagnosePlayback(state, "Test failed"))}\ngooglevideo requests: ${mediaRequests}\n`,
+        contentType: "text/plain",
+      });
     }
   });
 
+  /**
+   * The seek control, for asserting that a CONTROL exists.
+   *
+   * Explicitly not a playback oracle. Every playback fact in this file comes
+   * from `assertPlayback.ts`, which reads the media element; this locator only
+   * ever answers "is there a seek control, and does it carry a range".
+   */
   function seekSlider(page: Page) {
     return page.locator('input[aria-label="Seek"]').first();
-  }
-
-  async function seekValue(page: Page): Promise<number> {
-    return Number(await seekSlider(page).inputValue());
   }
 
   async function playFixture(page: Page): Promise<void> {
@@ -52,28 +73,30 @@ test.describe("live playback (YouTube fixture)", () => {
       page.getByRole("heading", { name: FIXTURE_A.titleFragment }),
     ).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: /^Play / }).first().click();
-    // Real evidence, not just a clicked button: the Pause control appears
-    // (playing event reached the UI) and the position advances.
-    await expect(
-      page.getByRole("button", { name: /^Pause / }).first(),
-    ).toBeVisible({ timeout: 60_000 });
-    const t0 = await seekValue(page);
-    await expect(async () => {
-      expect(await seekValue(page)).toBeGreaterThan(t0);
-    }).toPass({ timeout: 30_000 });
+
+    // Real evidence, from the media element: the browser reached a loaded
+    // state and the position actually moved. A Pause button merely means the
+    // UI was told playback started.
+    await expectMediaLoaded(page);
+    await expectPlaybackAdvancing(page);
   }
 
   test("Scenario A: direct YouTube result plays real audio", async ({
     page,
   }) => {
     await playFixture(page);
-    const duration = Number(
-      await page
-        .locator('input[aria-label="Seek"]')
-        .first()
-        .getAttribute("max"),
-    );
+
+    // Duration comes from the element's metadata, not from a slider's `max`
+    // attribute: `max` is rendered from what the app believes, so it would be
+    // a valid duration even for a stream that never loaded a byte.
+    const duration = await mediaDuration(page);
     expect(duration).toBeGreaterThan(0);
+
+    // The element must genuinely have been fed, and the network must have
+    // carried the media. Either alone is insufficient - together they say the
+    // bytes arrived AND the element consumed them.
+    const state = await readMediaState(page);
+    expect(state?.readyState ?? 0).toBeGreaterThanOrEqual(2);
     expect(mediaRequests).toBeGreaterThan(0);
   });
 
@@ -85,10 +108,10 @@ test.describe("live playback (YouTube fixture)", () => {
     await expect(
       page.getByRole("button", { name: /^Play / }).first(),
     ).toBeVisible();
-    const t0 = await seekValue(page);
-    await page.waitForTimeout(2500);
-    const t1 = await seekValue(page);
-    expect(Math.abs(t1 - t0)).toBeLessThanOrEqual(1.5);
+
+    // Measured on the element. `expectPlaybackPaused` reports PLAYER_STATE_FAILURE
+    // with the drift distance if the position moved anyway.
+    await expectPlaybackPaused(page);
     await expect(page.getByRole("status")).toHaveCount(0);
   });
 
@@ -101,10 +124,10 @@ test.describe("live playback (YouTube fixture)", () => {
     await expect(
       page.getByRole("button", { name: /^Pause / }).first(),
     ).toBeVisible();
-    const t0 = await seekValue(page);
-    await expect(async () => {
-      expect(await seekValue(page)).toBeGreaterThan(t0);
-    }).toPass({ timeout: 30_000 });
+
+    // Re-arms from the CURRENT element position, so this fails if resume did
+    // not actually restart the clock rather than merely clearing a flag.
+    await expectPlaybackAdvancing(page);
     await expect(page.getByRole("status")).toHaveCount(0);
   });
 
@@ -112,7 +135,11 @@ test.describe("live playback (YouTube fixture)", () => {
     page,
   }) => {
     await playFixture(page);
-    const slider = await seekSlider(page);
+
+    // The slider is the correct instrument for a seek test - it is the control
+    // under test. The VERDICT is read from the element: the target is only
+    // accepted once the element's own currentTime arrives there.
+    const slider = seekSlider(page);
     const max = Number(await slider.getAttribute("max"));
     expect(max).toBeGreaterThan(60);
     const target = Math.min(30, Math.floor(max - 10));
@@ -125,8 +152,9 @@ test.describe("live playback (YouTube fixture)", () => {
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
     }, target);
+
     await expect(async () => {
-      expect(Math.abs((await seekValue(page)) - target)).toBeLessThanOrEqual(
+      expect(Math.abs((await mediaCurrentTime(page)) - target)).toBeLessThanOrEqual(
         8,
       );
     }).toPass({ timeout: 30_000 });
@@ -140,9 +168,8 @@ test.describe("live playback (YouTube fixture)", () => {
       page.getByRole("heading", { name: FIXTURE_A.titleFragment }),
     ).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: "E2E play collection" }).click();
-    await expect(
-      page.getByRole("button", { name: /^Pause / }).first(),
-    ).toBeVisible({ timeout: 60_000 });
+    await expectMediaLoaded(page);
+    await expectPlaybackAdvancing(page);
 
     await page.getByRole("button", { name: "Up next" }).first().click();
     await expect(page.getByRole("dialog", { name: "Queue" })).toBeVisible();
@@ -151,15 +178,21 @@ test.describe("live playback (YouTube fixture)", () => {
     ).toBeVisible();
 
     await page.keyboard.press("Escape");
+    const beforeNext = await mediaCurrentTime(page);
     await page.getByRole("button", { name: "Next track" }).first().click();
     await expect(page.getByText("E2E Fixture B").first()).toBeVisible({
       timeout: 30_000,
     });
-    // No snapback to A: the stale resolution stays dead.
-    await page.waitForTimeout(3000);
-    expect(
-      await page.getByTestId("e2e-status").textContent(),
-    ).toContain("E2E Fixture B");
+
+    // The real anti-snapback check: a new track means a NEW element timeline,
+    // so the position restarts near zero instead of continuing from A.
+    // Previously this was a 3s sleep plus a text assertion, which a stale
+    // in-place seek could have satisfied.
+    await expect(async () => {
+      const now = await mediaCurrentTime(page);
+      expect(now).toBeLessThan(beforeNext);
+    }).toPass({ timeout: 30_000 });
+    await expectPlaybackAdvancing(page);
     await expect(page.getByRole("status")).toHaveCount(0);
   });
 

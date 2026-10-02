@@ -1,5 +1,5 @@
 import type { TrackIdentity } from "@/lib/domain";
-import { toTrackIdentity } from "@/lib/domain";
+import { foldAsciiComparison, toTrackIdentity } from "@/lib/domain";
 import {
   generateRankedRadioBatch,
   identityKeys,
@@ -147,9 +147,7 @@ function keysArray(identity: TrackIdentity): string[] {
   return [...identityKeys(identity)];
 }
 
-function folded(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
+const folded = foldAsciiComparison;
 
 function foldedList(values: readonly string[] | undefined): Set<string> {
   const out = new Set<string>();

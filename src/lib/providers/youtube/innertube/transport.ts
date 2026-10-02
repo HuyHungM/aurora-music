@@ -299,8 +299,10 @@ function unwrapRichItems(nodes: unknown[], depth = 0): unknown[] {
  */
 const METADATA_CONCURRENCY = 6;
 
-function newCache(ttlMs: number): ProviderCache {  return new ProviderCache({
+function newCache(ttlMs: number, negativeTtlMs?: number): ProviderCache {
+  return new ProviderCache({
     ttlMs,
+    ...(negativeTtlMs === undefined ? {} : { negativeTtlMs }),
     onRecord: (record) => {
       const metric = cacheOutcomeToMetric(record.key, record.outcome);
       if (metric !== null) {
@@ -319,6 +321,8 @@ export interface InnerTubeTransportOptions {
   /** §49 TTL overrides. Exposed for tests that must not wait real minutes. */
   searchTtlMs?: number;
   videoTtlMs?: number;
+  /** Override for the video cache's negative TTL. Exposed for the same reason. */
+  videoNegativeTtlMs?: number;
   /**
    * Deadline for a whole discovery operation, session handshake included.
    *
@@ -349,7 +353,23 @@ export function createInnerTubeTransport(
   // and duration are effectively immutable (hours). Two caches, not one global
   // TTL, because those lifetimes differ by two orders of magnitude.
   const searchCache = options.cache ?? newCache(options.searchTtlMs ?? 5 * 60_000);
-  const videoCache = newCache(options.videoTtlMs ?? 6 * 60 * 60_000);
+  // The negative TTL is set EXPLICITLY and is deliberately not derived from
+  // the 6h positive TTL. `ProviderCache` otherwise defaults it to `ttl / 6`,
+  // which here meant one hour — and `getVideos` records a negative entry
+  // whenever a batch resolves empty. Every per-video failure in the batch is
+  // swallowed and counted rather than rethrown, so one dead session or network
+  // partition resolves a 50-id playlist batch to `[]`, and that transient
+  // failure then became a "known empty" answer served for an hour, with the
+  // Data API fallback never consulted (the tiered router only routes an empty
+  // SEARCH to the official API, not an empty video batch).
+  //
+  // An empty batch is often genuinely empty (deleted videos), so it must still
+  // be cached — just for as long as a transient upstream fault can plausibly
+  // last, not for as long as video metadata is stable.
+  const videoCache = newCache(
+    options.videoTtlMs ?? 6 * 60 * 60_000,
+    options.videoNegativeTtlMs ?? 15_000,
+  );
 
   /**
    * Memoise the injected factory, so "one session per transport" holds
@@ -666,8 +686,21 @@ export function createInnerTubeTransport(
         // metadata-only here, so this never trips — it exists so a future
         // change that widens this method cannot quietly start persisting
         // googlevideo URLs.
+        //
+        // The check is on the URL-shaped fields, not on `id`: a
+        // `videoInfoItem`'s `id` IS the eleven-character video id, so a
+        // predicate on `id` could never fire and the guard was inert while
+        // reading as enforced. `streamingData` is where a googlevideo URL
+        // actually appears on a player response.
         forbids: (value) =>
-          value.some((entry) => isTemporaryMediaUrl(asRecord(entry)?.id)),
+          value.some((entry) => {
+            const record = asRecord(entry);
+            return (
+              isTemporaryMediaUrl(record?.url) ||
+              isTemporaryMediaUrl(asRecord(record?.streamingData)?.hlsManifestUrl) ||
+              value.some((nested) => isTemporaryMediaUrl(asRecord(nested)?.url))
+            );
+          }),
         negativeWhen: (value) => value.length === 0,
       },
     );

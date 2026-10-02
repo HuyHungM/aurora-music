@@ -8,6 +8,7 @@ import { idSchema, providerIdSchema } from "@/lib/validation/schemas";
 import { isYouTubeVideoId } from "@/lib/providers/youtube/normalize";
 import { createInnertubePlaybackClient } from "@/lib/providers/youtube/playback/innertube-client";
 import { createYouTubeResolver } from "@/lib/providers/youtube/playback/youtube-resolver";
+import { sharedResolutionCache } from "@/lib/providers/youtube/playback/resolution-cache";
 import { guardServerAction, type GuardFailureMeta } from "@/lib/api/action-guard";
 
 export type ResolveAudioSourceResult =
@@ -120,4 +121,49 @@ export async function resolveAudioSourceAction(
     });
     return { ok: false, error: serialized };
   }
+}
+
+/**
+ * Drops one video from the resolution cache. Called by the player when a
+ * recovery cycle exhausts on a dead URL: the cached entry almost certainly
+ * holds that same signed URL, and without invalidation the next attempt
+ * would replay the cached poison instead of re-resolving.
+ *
+ * Best-effort by construction — the cache is process-local, so on a cold
+ * function instance there is nothing to drop — and always reported `ok`:
+ * a caller that cannot reach the entry holding the poison is in exactly the
+ * same position as one that just cleared it. Charged against the resolve
+ * budget like any other playback RPC so it cannot become a free loop target,
+ * and validated exactly like a resolve so malformed ids never reach the
+ * cache keys.
+ */
+export async function invalidatePlaybackResolutionAction(
+  provider: unknown,
+  providerTrackId: unknown,
+): Promise<{ ok: true }> {
+  const denied = await guardServerAction({
+    featureOffMessage: RESOLVE_OFF_MESSAGE,
+    bucket: "playbackResolve",
+  });
+  if (denied) {
+    return { ok: true };
+  }
+  const providerParsed = providerIdSchema.safeParse(provider);
+  const trackParsed = idSchema.safeParse(providerTrackId);
+  if (
+    !providerParsed.success ||
+    !trackParsed.success ||
+    providerParsed.data !== "youtube" ||
+    !isYouTubeVideoId(trackParsed.data)
+  ) {
+    return { ok: true };
+  }
+  const dropped = sharedResolutionCache().invalidate(trackParsed.data);
+  logger.debug("Playback resolution cache invalidated", {
+    event: "playback_resolution_invalidated",
+    provider: "youtube",
+    videoId: trackParsed.data,
+    hadEntry: dropped,
+  });
+  return { ok: true };
 }

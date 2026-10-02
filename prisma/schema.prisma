@@ -152,7 +152,12 @@ model Like {
   createdAt DateTime @default(now())
 
   @@unique([userId, trackId])
-  @@index([userId])
+  // Leads with the sort column so the newest-first reads (`listUserLikes`,
+  // `ORDER BY createdAt DESC`) are index-ordered instead of sorted over the
+  // user's whole like history before `LIMIT` applies. Also serves every plain
+  // `WHERE userId = ?`, so it replaces a `@@index([userId])` here rather than
+  // sitting beside it. Mirrors `RecentlyPlayed`'s `(userId, playedAt)`.
+  @@index([userId, createdAt])
 }
 
 model Follow {
@@ -164,7 +169,8 @@ model Follow {
   createdAt DateTime @default(now())
 
   @@unique([userId, artistId])
-  @@index([userId])
+  // As on `Like`: recency-ordered reads need the sort column in the index.
+  @@index([userId, createdAt])
 }
 
 /// ONE ROW PER (user, track): the current "when did this listener last play

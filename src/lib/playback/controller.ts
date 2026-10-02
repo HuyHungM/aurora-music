@@ -136,6 +136,13 @@ export interface PlaybackControllerDeps {
   schedule?: RecoverySchedule;
   /** Clears the user-facing error when a recovery cycle takes over. */
   clearError?: () => void;
+  /**
+   * Called once when a URL is recorded dead after an exhausted recovery
+   * cycle. The implementation invalidates the server-side resolution cache
+   * entry so the next attempt re-resolves instead of replaying the cached
+   * poison. Fire-and-forget: it must never throw into the controller.
+   */
+  reportDeadSource?: (ref: { source: string; id: string }) => void;
 }
 
 export interface LoadTrackOptions {
@@ -147,6 +154,15 @@ export interface PlaybackController {
   loadTrack(track: Track, options?: LoadTrackOptions): void;
   /** Resume intent: play loaded source, or re-resolve when missing/expired. */
   ensurePlaying(): Promise<void>;
+  /**
+   * Background resolution for a track that is LIKELY next. Never reports
+   * errors, never touches the engine or recovery: on success the source waits
+   * in a one-entry slot that `loadTrack` consumes when (and only when) the
+   * same identity arrives with a live, unsuppressed URL. Total fire-and-forget
+   * for the caller — failures vanish, stale arrivals fill a slot that key
+   * validation will refuse.
+   */
+  prefetchTrack(track: Track): void;
   /** Pause intent: synchronous engine pause; defeats pending autoplay. */
   pause(): void;
   /** Records a user seek request for pending resolutions. */
@@ -258,6 +274,7 @@ export function createPlaybackController(
   const now = deps.now ?? Date.now;
   const schedule = deps.schedule ?? defaultSchedule;
   const clearError = deps.clearError ?? (() => undefined);
+  const reportDeadSource = deps.reportDeadSource;
   const guard = createResolutionGuard();
 
   /**
@@ -291,6 +308,15 @@ export function createPlaybackController(
   let lastFinished: FinishedCycle | null = null;
   let suppressedFailures: Array<{ generation: number; url: string }> = [];
   let diagnosticsAt = now();
+
+  /**
+   * One-entry prefetch slot: a resolved source for an identity that has not
+   * been loaded yet. Consumption validates key + expiry + suppression at the
+   * moment of use, so a stale arrival can fill this and still never play.
+   * Deliberately ONE entry, not a map: the only consumer is the next load,
+   * and anything older is trivia the next prefetch overwrites.
+   */
+  let prefetched: { key: string; source: AudioSource } | null = null;
 
   // --- Stall observation ---
   // wantPlay is transport INTENT; elementPaused tracks the element itself.
@@ -625,6 +651,22 @@ export function createPlaybackController(
       if (suppressedFailures.length > 8) {
         suppressedFailures.splice(0, suppressedFailures.length - 8);
       }
+      // The URL this cycle died on is overwhelmingly likely to be the same
+      // signed URL the server cache still holds for this video. Telling the
+      // server invalidates that entry so the next attempt re-resolves instead
+      // of replaying the cached poison. Best-effort and guarded: the lock must
+      // survive a reporting failure, and only youtube identities resolve
+      // server-side at all.
+      try {
+        const youtube = activeIdentity?.sources.find(
+          (entry) => entry.source === "youtube",
+        );
+        if (youtube) {
+          reportDeadSource?.({ source: "youtube", id: youtube.id });
+        }
+      } catch {
+        // Reporting must never break the terminal path it annotates.
+      }
     }
     if (finalError) {
       logger.error("Playback recovery exhausted", {
@@ -857,6 +899,19 @@ export function createPlaybackController(
       if (!isCurrent(generation)) {
         return;
       }
+      // The store advanced `currentTrack` and cleared `isPlaying` BEFORE
+      // resolution, so the UI already shows the new track as paused-with-error
+      // while the previous track's audio is still coming out of the element.
+      // That is two surfaces disagreeing about what is playing — and it is
+      // worse than cosmetic here: the cross-tab ownership host reads
+      // `isPlaying: false` and broadcasts a `release()`, so a second tab claims
+      // the session and both tabs emit audio.
+      //
+      // Pausing here makes the element agree with what the UI is showing. Only
+      // on THIS path: `ensurePlaying`'s retry deliberately keeps the old track
+      // audible while a fresh resolution is attempted, and that is a different
+      // branch below.
+      engine?.pause();
       activeSource = null;
       sourceGeneration = null;
       hasLoadedSource = false;
@@ -866,6 +921,23 @@ export function createPlaybackController(
     if (!isCurrent(generation)) {
       return;
     }
+    applyResolvedSource(identity, track, autoplay, generation, source);
+  }
+
+  /**
+   * Installs an already-resolved source: the shared terminal path for a fresh
+   * resolution AND for a consumed prefetch. The expiry re-check is
+   * load-bearing here, not paranoia: a prefetched source can sit in the slot
+   * while the user finishes the current track, and handing an expired URL to
+   * the element is exactly what the cache layer refused to do.
+   */
+  function applyResolvedSource(
+    identity: TrackIdentity,
+    track: Track | null,
+    autoplay: boolean,
+    generation: number,
+    source: AudioSource,
+  ): void {
     if (isAudioSourceExpired(source, now())) {
       activeSource = null;
       sourceGeneration = null;
@@ -903,6 +975,69 @@ export function createPlaybackController(
     };
   }
 
+  function prefetchTrack(track: Track): void {
+    if (disposed) {
+      return;
+    }
+    const identity = identityFromTrack(track);
+    if (!identity) {
+      return;
+    }
+    const key = identityKey(identity);
+    logger.debug("Playback prefetch started", {
+      event: "playback_prefetch_started",
+      trackKey: key,
+    });
+    // Already playing this with a live source: nothing to warm.
+    if (
+      activeIdentity &&
+      identityKey(activeIdentity) === key &&
+      hasLoadedSource &&
+      activeSource &&
+      !isAudioSourceExpired(activeSource, now()) &&
+      !isUrlSuppressed(activeSource.url)
+    ) {
+      return;
+    }
+    // Already warmed and still good: do not spend a second resolution.
+    if (
+      prefetched &&
+      prefetched.key === key &&
+      !isAudioSourceExpired(prefetched.source, now()) &&
+      !isUrlSuppressed(prefetched.source.url)
+    ) {
+      return;
+    }
+    // Through the SAME coalescer as real loads, so a prefetch racing the
+    // actual tap shares one upstream promise instead of doubling it.
+    void resolveIdentity(identity).then(
+      (source) => {
+        if (disposed) {
+          return;
+        }
+        // Validated at consume time too, but a dead-on-arrival source must
+        // not even occupy the slot: it could only ever be refused later.
+        if (isAudioSourceExpired(source, now()) || isUrlSuppressed(source.url)) {
+          return;
+        }
+        prefetched = { key, source };
+        logger.debug("Playback prefetch stored", {
+          event: "playback_prefetch_succeeded",
+          trackKey: key,
+        });
+      },
+      () => {
+        // Silence is the contract: a prefetch exists to make the likely case
+        // faster, never to surface the unlikely case. The real load, if the
+        // user ever taps, reports its own failure through the normal path.
+        logger.debug("Playback prefetch failed", {
+          event: "playback_prefetch_failed",
+          trackKey: key,
+        });
+      },
+    );
+  }
+
   function loadIdentity(
     identity: TrackIdentity,
     track: Track | null,
@@ -922,6 +1057,26 @@ export function createPlaybackController(
     hasLoadedSource = false;
     hasPlayedOnce = false;
     resetRecoveryForNewWork();
+    // A prefetched source for THIS identity skips the resolution round trip
+    // entirely — but only when it is still the right answer: same key, live
+    // URL, never recorded dead. Anything else falls through to a fresh
+    // resolve, and the slot survives for a later load that does match.
+    const key = identityKey(identity);
+    const slot = prefetched;
+    if (
+      slot &&
+      slot.key === key &&
+      !isAudioSourceExpired(slot.source, now()) &&
+      !isUrlSuppressed(slot.source.url)
+    ) {
+      prefetched = null;
+      logger.debug("Playback consumed a prefetched source", {
+        event: "playback_prefetch_consumed",
+        trackKey: key,
+      });
+      applyResolvedSource(identity, track, autoplay, generation, slot.source);
+      return;
+    }
     void resolveAndLoad(identity, track, autoplay, generation);
   }
 
@@ -1025,6 +1180,10 @@ export function createPlaybackController(
       loadIdentity(identity, track, autoplay);
     },
 
+    prefetchTrack(track: Track): void {
+      prefetchTrack(track);
+    },
+
     async ensurePlaying(): Promise<void> {
       if (disposed) {
         return;
@@ -1094,6 +1253,7 @@ export function createPlaybackController(
       sourceGeneration = null;
       hasLoadedSource = false;
       hasPlayedOnce = false;
+      prefetched = null;
       resetRecoveryForNewWork();
       engine.pause();
     },
@@ -1142,6 +1302,7 @@ export function createPlaybackController(
       sourceGeneration = null;
       hasLoadedSource = false;
       hasPlayedOnce = false;
+      prefetched = null;
       clearPendingTimers();
       disarmStallTimer();
       cycle = null;

@@ -21,6 +21,8 @@
     "verify:client-bundle": "bun scripts/verify-client-bundle.mjs",
     "verify:share-route": "tsx scripts/verify-share-route.mts",
     "smoke:prod": "bun scripts/smoke-prod.mjs",
+    "bench:snapshot": "tsx scripts/bench-snapshot.ts",
+    "bench:record-played": "tsx scripts/bench-record-played.mts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

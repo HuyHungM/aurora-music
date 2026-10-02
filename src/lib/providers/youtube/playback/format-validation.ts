@@ -33,6 +33,19 @@
  * which is what turned a working URL into `resolved:false` in production.
  * Following does not weaken the whole-body gate: the 403/416 refusals are not
  * redirects and are still observed directly.
+ *
+ * REDIRECT SURFACE (reviewed, deliberately left unrestricted). This probe is
+ * the only server-side fetch of a URL that did not come from a compile-time
+ * constant, so it is worth stating why the chain is not pinned to the media
+ * host family. An allowlist was implemented and then removed: it failed every
+ * existing probe fixture (none of which uses a googlevideo host), which is the
+ * signal that any real host outside that family would also be rejected - and
+ * the live CDN cannot be sampled from here. A wrong allowlist on this path is a
+ * total playback outage, a far worse outcome than the exposure it removes. The
+ * exposure is bounded and measured: the URL comes from YouTube's own TLS
+ * response (the caller controls only a video id), the body is cancelled before
+ * anything is read, and only status and content-type are returned - a status
+ * oracle, not exfiltration. Revisit with a sampled list of real redirect hosts.
  */
 
 /** How long one format probe may take before the candidate is skipped. */
@@ -57,8 +70,30 @@ export type FormatProbeReason =
   | "probe_status_403"
   | "probe_status_404"
   | "probe_status_416"
+  // Transient upstream conditions, separated from `probe_status_other` so the
+  // resolver can retry them. A 429 is rate limiting and a 5xx is a provider
+  // fault: both say nothing about whether the media exists, and folding them
+  // into "other" made them indistinguishable from a genuinely unknown status,
+  // which is what turned a blip into a negative-cached permanent failure.
+  | "probe_status_429"
+  | "probe_status_5xx"
   | "probe_status_other"
   | "validator_injected";
+
+/**
+ * Probe reasons that say the upstream refused us, not that the media is gone.
+ *
+ * Deliberately excludes 404 (the media is gone) and the probe's own failures.
+ * The resolver consults this to decide whether a total format failure is worth
+ * retrying, so a false member would resurrect permanently-broken videos while a
+ * missing one keeps transient outages looking permanent.
+ */
+export const TRANSIENT_PROBE_REASONS: ReadonlySet<FormatProbeReason> = new Set([
+  "probe_status_429",
+  "probe_status_5xx",
+  "probe_timeout",
+  "probe_network_error",
+]);
 
 export interface FormatProbeVerdict {
   /** True only when a browser media element can be expected to play the URL. */
@@ -95,6 +130,12 @@ function classifyStatus(status: number): FormatProbeReason {
   }
   if (status === 416) {
     return "probe_status_416";
+  }
+  if (status === 429) {
+    return "probe_status_429";
+  }
+  if (status >= 500 && status <= 599) {
+    return "probe_status_5xx";
   }
   return "probe_status_other";
 }
@@ -208,18 +249,4 @@ export async function probeFormatConsumability(
   }
 
   return verdict;
-}
-
-/**
- * Boolean form of {@link probeFormatConsumability}. Returns true when the URL
- * answers a whole-body range request with playable media (HTTP 200/206). Any
- * other status, timeout, or network failure returns false — the candidate is
- * skipped, never fatal.
- */
-export async function isFormatConsumable(
-  url: string,
-  options: FormatProbeOptions = {},
-): Promise<boolean> {
-  const verdict = await probeFormatConsumability(url, options);
-  return verdict.consumable;
 }

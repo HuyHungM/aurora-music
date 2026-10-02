@@ -144,4 +144,51 @@ describe("CreatePlaylistDialog", () => {
       });
     });
   });
+
+  it("ignores a second submit while the first is still in flight", async () => {
+    // Same-tick double-Enter/double-click: `isSubmitting` state does not
+    // flush between activations, so without the synchronous ref guard this
+    // fires two `createPlaylistAction` calls and mints two playlists.
+    let release!: (value: { ok: true; playlistId: string }) => void;
+    const gate = new Promise<{ ok: true; playlistId: string }>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(createPlaylistAction).mockReturnValue(gate);
+    const onClose = vi.fn();
+
+    render(<CreatePlaylistDialog open={true} onClose={onClose} />);
+
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "My Playlist" } });
+    const form = screen.getByRole("button", { name: "Tạo" }).closest("form")!;
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(createPlaylistAction).toHaveBeenCalledTimes(1);
+
+    release({ ok: true, playlistId: "pl1" });
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+    // A failed attempt releases the guard: the user can retry.
+    expect(createPlaylistAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the guard after a failed attempt so retry works", async () => {
+    vi.mocked(createPlaylistAction)
+      .mockResolvedValueOnce({ ok: false, error: "Failed to create" })
+      .mockResolvedValueOnce({ ok: true, playlistId: "pl2" });
+
+    render(<CreatePlaylistDialog open={true} onClose={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Tên"), { target: { value: "My Playlist" } });
+    fireEvent.click(screen.getByRole("button", { name: "Tạo" }));
+    await waitFor(() => {
+      expect(screen.getByText("Không tạo được playlist")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Tạo" }));
+    await waitFor(() => {
+      expect(createPlaylistAction).toHaveBeenCalledTimes(2);
+    });
+  });
 });

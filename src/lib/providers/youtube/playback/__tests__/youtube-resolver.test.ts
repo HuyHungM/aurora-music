@@ -7,6 +7,7 @@ import type {
 } from "@/lib/providers/youtube/playback/types";
 import { createYouTubeResolver as createYouTubeResolverImpl } from "@/lib/providers/youtube/playback/youtube-resolver";
 import type { YouTubeResolver } from "@/lib/providers/youtube/playback/youtube-resolver";
+import { PlaybackResolutionCache } from "@/lib/providers/youtube/playback/resolution-cache";
 import type { FormatProbeVerdict } from "@/lib/providers/youtube/playback/format-validation";
 import { setLogLevel, setLogSink } from "@/lib/diagnostics/logger";
 import type { LogRecord } from "@/lib/diagnostics/logger";
@@ -19,8 +20,11 @@ import type { Track } from "@/lib/domain/track";
  * fallback has its own cases below using the real factory.
  */
 function createYouTubeResolver(client: YouTubePlaybackClient): YouTubeResolver {
+  // Fresh cache per test: the production default is a shared process cache,
+  // which would let one policy case serve another's resolution.
   return createYouTubeResolverImpl(client, {
     validateFormat: async () => true,
+    cache: new PlaybackResolutionCache(),
   });
 }
 
@@ -61,7 +65,10 @@ function resolverWith(
     url: string,
   ) => Promise<boolean | FormatProbeVerdict> = async () => true,
 ) {
-  return createYouTubeResolverImpl(clientWith(info), { validateFormat });
+  return createYouTubeResolverImpl(clientWith(info), {
+    validateFormat,
+    cache: new PlaybackResolutionCache(),
+  });
 }
 
 function youtubeTrack(): Track {
@@ -562,21 +569,64 @@ describe("YouTubeResolver alive-but-refused classification", () => {
     expect(error).toMatchObject({ stage: "stream", retryable: false });
   });
 
-  it("keeps a timeout permanent", async () => {
+  it("retries a timeout, which says nothing about whether the media exists", async () => {
+    // Previously permanent. A probe that timed out learned NOTHING about the
+    // source - it never got an answer - so calling that "this video is
+    // unplayable" turned one slow edge into a negative-cached permanent failure
+    // the user has to press play again to escape.
     const error = await resolverWith(ladder(), async () => ({
       consumable: false,
       reason: "probe_timeout",
     }))
       .resolveSource({ source: "youtube", id: VIDEO_ID })
       .catch((cause) => cause);
-    expect(error).toMatchObject({ stage: "stream", retryable: false });
+    expect(error).toMatchObject({ stage: "stream", retryable: true });
   });
 
-  it("keeps a zero-candidate resolution permanent", async () => {
-    const error = await resolverWith(media({ formats: [] }), async () => true)
+  it.each([
+    [
+      "rate limited",
+      { consumable: false, reason: "probe_status_429", status: 429 },
+    ],
+    [
+      "provider fault",
+      { consumable: false, reason: "probe_status_5xx", status: 503 },
+    ],
+  ] as Array<[string, FormatProbeVerdict]>)(
+    "retries a %s",
+    async (_label, verdict) => {
+      // Both are upstream refusals, not statements about the media.
+      const error = await resolverWith(ladder(), async () => verdict)
+        .resolveSource({ source: "youtube", id: VIDEO_ID })
+        .catch((cause) => cause);
+      expect(error).toMatchObject({ stage: "stream", retryable: true });
+    },
+  );
+
+  it("keeps every candidate rejected for a MIXED reason permanent", async () => {
+    // The conjunction is `every`, not `some`: one terminal reason among
+    // otherwise-transient ones must keep the verdict permanent, or a 404 would
+    // be retried forever.
+    const error = await resolverWith(ladder(), async (url) =>
+      url === MUXED
+        ? { consumable: false, reason: "probe_status_404", status: 404 }
+        : { consumable: false, reason: "probe_status_5xx", status: 503 },
+    )
       .resolveSource({ source: "youtube", id: VIDEO_ID })
       .catch((cause) => cause);
     expect(error).toMatchObject({ stage: "stream", retryable: false });
+  });
+
+  it("retries a zero-candidate resolution", async () => {
+    // Zero formats is NOT "this video has no media". It is what a challenged
+    // datacenter egress produces: a SUCCESSFUL player response with no
+    // streaming data. Nothing was even examined, so the old verdict made the
+    // exact condition the egress proxy exists to mitigate read as permanently
+    // unplayable - and negative-cached it for the retry window.
+    const error = await resolverWith(media({ formats: [] }), async () => true)
+      .resolveSource({ source: "youtube", id: VIDEO_ID })
+      .catch((cause) => cause);
+    expect(error).toMatchObject({ stage: "stream", retryable: true });
   });
 
   it("logs the verdict so the retry decision is diagnosable", async () => {

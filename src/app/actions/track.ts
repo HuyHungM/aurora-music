@@ -4,11 +4,18 @@ import { requireUser, getSessionUserId } from "@/lib/dal/session";
 import { likeTrack, unlikeTrack, isTrackLiked } from "@/lib/dal/like";
 import { idSchema, likeTrackSchema, providerIdSchema } from "@/lib/validation/schemas";
 import type { Track } from "@/lib/domain";
+import { isOfflineTrack } from "@/lib/offline/isolation";
 
 export async function likeTrackAction(
   track: Track,
 ): Promise<{ ok: boolean; liked: boolean }> {
   try {
+    // An offline track is not catalog data and cannot be resolved by any other
+    // session, so a like would be a row that outlives the only context that
+    // could play it. See `@/lib/offline/isolation`.
+    if (isOfflineTrack(track)) {
+      return { ok: false, liked: false };
+    }
     const user = await requireUser();
     // A client supplies every display field here and `upsertTrack` writes them
     // into a catalog row every user reads, so the payload is parsed through the

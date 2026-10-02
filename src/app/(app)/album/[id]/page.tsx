@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { fetchAlbumDetail, fetchAlbumTracks } from "@/lib/providers/server";
+import {
+  fetchAlbumDetail,
+  fetchAlbumTracks,
+  type CapabilityResult,
+} from "@/lib/providers/server";
+import type { Track } from "@/lib/domain";
 import { TrackList } from "@/components/tracks/track-list";
 import { RecommendationSection } from "@/components/recommendations/recommendation-section";
 import { getRequestLocale } from "@/lib/i18n/server";
@@ -24,15 +29,27 @@ export default async function AlbumDetailPage({
   const t = getT(locale);
   const decodedId = decodeURIComponent(id);
 
-  const albumResult = await fetchAlbumDetail(decodedId);
+  // Independent reads, previously awaited one after another: both only need
+  // `decodedId`. `allSettled` so a rejection cannot mask the `notFound()`
+  // below, and so a failed tracklist degrades to the existing `failed`
+  // rendering instead of throwing the whole page away.
+  const [albumOutcome, tracksOutcome] = await Promise.allSettled([
+    fetchAlbumDetail(decodedId),
+    fetchAlbumTracks(decodedId),
+  ]);
 
-  if (albumResult.kind === "unsupported" || albumResult.kind === "failed") {
+  const albumResult = albumOutcome.status === "fulfilled" ? albumOutcome.value : null;
+
+  if (!albumResult || albumResult.kind === "unsupported" || albumResult.kind === "failed") {
     notFound();
   }
 
   if (albumResult.kind === "success") {
     const { data: album } = albumResult;
-    const tracksResult = await fetchAlbumTracks(decodedId);
+    const tracksResult: CapabilityResult<Track[]> =
+      tracksOutcome.status === "fulfilled"
+        ? tracksOutcome.value
+        : { kind: "failed" };
 
     return (
       <div className="flex flex-col gap-8">

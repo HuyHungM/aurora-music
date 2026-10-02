@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveAudioSourceAction } from "@/app/actions/playback-resolve";
+import {
+  invalidatePlaybackResolutionAction,
+  resolveAudioSourceAction,
+} from "@/app/actions/playback-resolve";
 
 describe("resolveAudioSourceAction", () => {
   it("rejects non-youtube providers without network access", async () => {
@@ -28,5 +31,30 @@ describe("resolveAudioSourceAction", () => {
       expect(payload).not.toContain("cookie");
       expect(result.error).toMatchObject({ retryable: false });
     }
+  });
+});
+
+describe("invalidatePlaybackResolutionAction", () => {
+  it("always reports ok, with or without a cached entry", async () => {
+    // Best-effort by contract: on a cold instance there is nothing to drop,
+    // which is the same position as having just cleared it.
+    await expect(
+      invalidatePlaybackResolutionAction("youtube", "dQw4w9WgXcQ"),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      invalidatePlaybackResolutionAction("youtube", "dQw4w9WgXcQ"),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("refuses malformed references without touching the cache", async () => {
+    await expect(
+      invalidatePlaybackResolutionAction("spotify", "spotify-1"),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      invalidatePlaybackResolutionAction("youtube", "nope"),
+    ).resolves.toEqual({ ok: true });
+    await expect(invalidatePlaybackResolutionAction("", "")).resolves.toEqual({
+      ok: true,
+    });
   });
 });

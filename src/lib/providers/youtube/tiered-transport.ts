@@ -300,7 +300,26 @@ export function createTieredTransport(options: TieredTransportOptions): YouTubeA
           if (!fallbackClosed()) {
             throw degraded("getVideos", "video metadata unavailable", error);
           }
-          recordYouTubeMetric("search.fallback");
+          recordYouTubeMetric("video.fallback");
+          fetched = await fallback.getVideos(missing);
+          recordYouTubeMetric("video.data_api");
+        }
+        const fetchedItems = itemsOf(fetched);
+        // A SUCCESSFUL but empty batch means the InnerTube parser returned
+        // nothing - a dead session, a shape change, a partition. `getVideos`
+        // swallows its per-video failures and counts them, so that arrives as
+        // `[]` rather than as a throw, and the catch above never runs. Every
+        // search path already treats an empty primary as a reason to consult
+        // the official API (`decideSearchSource`); video metadata had no such
+        // gate, so a transient upstream fault emptied the whole playlist or
+        // track page with no error shown.
+        //
+        // The fallback is only spent when the primary resolved NOTHING, not
+        // when it resolved some: a partly-successful batch is a real answer
+        // and re-asking the quota-limited source for the remainder is exactly
+        // the double-spend the tiering exists to avoid.
+        if (fetchedItems.length === 0 && fallbackClosed()) {
+          recordYouTubeMetric("video.fallback");
           fetched = await fallback.getVideos(missing);
           recordYouTubeMetric("video.data_api");
         }

@@ -65,6 +65,19 @@ describe("likeTrackAction write-path validation", () => {
     expect(likeTrack).toHaveBeenCalledTimes(1);
   });
 
+  it("fails closed for an unauthenticated caller without touching the DAL", async () => {
+    // UI hiding is not the authorization boundary: a logged-out user who
+    // invokes the action directly must still be refused, because
+    // `requireUser` throws before any write.
+    vi.mocked(requireUser).mockRejectedValue(new Error("Not authenticated"));
+
+    await expect(likeTrackAction(validTrack)).resolves.toEqual({
+      ok: false,
+      liked: false,
+    });
+    expect(likeTrack).not.toHaveBeenCalled();
+  });
+
   it("rejects an unbounded title instead of writing it to the shared catalog", async () => {
     const result = await likeTrackAction(
       withField("title", "x".repeat(5001)),
@@ -152,6 +165,16 @@ describe("unlikeTrackAction ref validation", () => {
       provider: "youtube",
       providerTrackId: "abc123",
     });
+  });
+
+  it("fails closed for an unauthenticated caller without touching the DAL", async () => {
+    vi.mocked(requireUser).mockRejectedValue(new Error("Not authenticated"));
+
+    await expect(unlikeTrackAction(validTrack)).resolves.toEqual({
+      ok: false,
+      liked: false,
+    });
+    expect(unlikeTrack).not.toHaveBeenCalled();
   });
 
   it("falls back to id when providerTrackId is absent", async () => {

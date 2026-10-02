@@ -30,6 +30,10 @@ export function SearchForm({
       // an unknown placeholder untouched, and the field substitutes the brand
       // name itself so word order stays correct per locale.
       linkDetectedTemplate={t("searchForm.linkDetected")}
+      // Spoken and described while the search runs. Resolved here for the same
+      // reason as the rest of the copy: the field holds no dictionary, so the
+      // sentence cannot drift from the locale the page was rendered in.
+      searchingLabel={t("searchForm.searching")}
       defaultValue={defaultValue}
     />
   );

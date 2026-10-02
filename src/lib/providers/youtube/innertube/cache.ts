@@ -74,6 +74,9 @@ export class ProviderCache {
   private readonly maxEntries: number;
   private readonly l1 = new Map<string, Promise<unknown>>();
   private readonly l2 = new Map<string, Entry<unknown>>();
+  /** Writes since the last expired-entry sweep. See `evictIfNeeded`. */
+  private writesSinceSweep = 0;
+  private readonly sweepInterval: number;
 
   constructor(options: CacheOptions, maxEntries = DEFAULT_MAX_ENTRIES) {
     this.ttlMs = options.ttlMs;
@@ -82,6 +85,7 @@ export class ProviderCache {
     this.negativeTtlMs = options.negativeTtlMs ?? Math.max(1_000, Math.floor(options.ttlMs / 6));
     this.onRecord = options.onRecord;
     this.maxEntries = maxEntries;
+    this.sweepInterval = Math.max(16, maxEntries >> 6);
   }
 
   /**
@@ -225,15 +229,29 @@ export class ProviderCache {
    * a per-read write on every hot key, and for a provider cache whose hit rate
    * is dominated by a small working set, insertion order is close enough and
    * much cheaper to reason about.
+   *
+   * The expired-entry sweep is AMORTIZED, not per write. Once the cache is
+   * full, `size >= maxEntries` is true on every single insert for the rest of
+   * the process's life, so sweeping all 5000 entries to reap expired ones ran
+   * 5000 `Date.now()` comparisons per write - on the video and search caches,
+   * which are written on every provider request. Reaping expired entries is an
+   * optimization: the unconditional oldest-key delete below is what actually
+   * bounds memory, and it still runs on every write. The sweep now runs once
+   * per `maxEntries / 64` writes (at least every 16), which keeps it frequent
+   * enough that expired entries are not meaningfully retained while making its
+   * cost amortized O(1) instead of O(maxEntries) per insert.
    */
   private evictIfNeeded(): void {
     if (this.l2.size < this.maxEntries) {
       return;
     }
-    const now = Date.now();
-    for (const [key, entry] of this.l2) {
-      if (entry.expiresAt <= now) {
-        this.l2.delete(key);
+    if (this.writesSinceSweep++ >= this.sweepInterval) {
+      this.writesSinceSweep = 0;
+      const now = Date.now();
+      for (const [key, entry] of this.l2) {
+        if (entry.expiresAt <= now) {
+          this.l2.delete(key);
+        }
       }
     }
     while (this.l2.size >= this.maxEntries) {
@@ -317,21 +335,6 @@ export function playlistCacheKey(playlistId: string): string {
 export function playlistItemsCacheKey(playlistId: string, pageToken?: string): string {
   return `yt:playlist-items:${playlistId}:${pageToken ?? "first"}`;
 }
-
-/**
- * Prefix invalidation targets. Each prefix names exactly one kind of entry, so
- * invalidating searches cannot disturb video metadata and vice versa. A shared
- * prefix between two kinds is a latent bug: nothing fails loudly, the caches
- * just quietly lose the wrong things.
- */
-export const CACHE_PREFIX = {
-  search: "yt:search:",
-  videos: "yt:videos:",
-  video: "yt:video:",
-  channels: "yt:channels:",
-  playlist: "yt:playlist:",
-  playlistItems: "yt:playlist-items:",
-} as const;
 
 /** True for a signed/temporary media URL. Never cacheable. */
 export function isTemporaryMediaUrl(value: unknown): boolean {

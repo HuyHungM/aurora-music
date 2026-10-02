@@ -63,16 +63,19 @@ by automated gates. It is a statement of what holds, not a wishlist.
 
 - `DATABASE_URL` required; `AUTH_SECRET` required only when
   `NODE_ENV=production`. Everything else is optional/server-only.
-- **Database TLS keeps verification on.** The provider CA is supplied
-  explicitly through `AURORA_DATABASE_CA_CERT_PATH` (a public `.pem` path),
-  which is added as a trust anchor while certificate and hostname verification
-  stay enabled. `sslmode=disable`, `sslmode=no-verify`, `ssl=false` and
-  `uselibpqcompat=true` on `require`/`verify-ca` are refused in production, so
-  a certificate problem cannot be "fixed" by silently disabling validation.
-  A managed provider that signs with a per-project CA (Aiven's
-  `<project-id> Project CA`) is the canonical case: supply that CA as the trust
-  anchor. It is a public certificate but is a host secret like any other — it
-  is never committed to Git and never served. See `docs/deployment.md`.
+- **Database TLS keeps verification on.** In deployed environments `DATABASE_URL`
+  points at Neon, whose certificate is publicly trusted, so verification against
+  the runtime's trust store succeeds with no extra configuration. When a provider
+  signs with its own CA, that CA is supplied explicitly as a trust anchor via
+  `AURORA_DATABASE_CA_CERT_PATH` (a public `.pem` path) or
+  `AURORA_DATABASE_CA_CERT` (inline PEM), while certificate and hostname
+  verification stay enabled. `sslmode=disable`, `sslmode=no-verify`, `ssl=false`
+  and `uselibpqcompat=true` on `require`/`verify-ca` are refused in production,
+  so a certificate problem cannot be "fixed" by silently disabling validation.
+  The canonical per-project-CA case is the **local development** database
+  (Aiven's `<project-id> Project CA`); it is a public certificate but is a host
+  secret like any other — never committed to Git, never served, and never set in
+  a deployed environment. See `docs/deployment.md`.
 - `AURORA_YOUTUBE_EGRESS_PROXY` is optional and server-only: an operator's
   forward proxy for the YouTube InnerTube egress. It may embed proxy
   credentials, is never logged, and never reaches the client bundle.
@@ -88,7 +91,15 @@ by automated gates. It is a statement of what holds, not a wishlist.
   `'unsafe-inline'` because Next.js App Router hydrates through inline
   scripts and components use style attributes — removing either breaks the
   app. Everything else is locked (`frame-ancestors 'none'`,
-  `object-src 'none'`, `media-src https:`, `form-action 'self'`).
+  `object-src 'none'`, `media-src https: blob:`, `form-action 'self'`).
+- `blob:` in `media-src` is required, not a relaxation. Provider playback is
+  `https:` googlevideo, but every local file is played from an object URL minted
+  from the user's own `File`. Without it the whole offline feature fails at the
+  browser's security layer — reported as a media error indistinguishable from a
+  corrupt file (`MediaError.code === 4`, "Media load rejected by URL safety
+  check"), never reaching the player's own error path. `blob:` is same-origin
+  and page-generated, so it grants no access to remote or attacker-chosen
+  resources; `http:` remains absent, so there is no plaintext-downgrade vector.
 - Deliberately absent: HSTS (TLS termination is a deployment concern; must
   not break http development origins), COOP/COEP/CORP (cross-origin media
   and artwork ship no CORP headers — enabling them breaks playback).
@@ -241,6 +252,45 @@ introduces no new trust boundary:
   (`AURORA_YOUTUBE_EGRESS_PROXY`, `innertube/egress.ts`): it carries no
   cookies, tokens, or signed-in session, applies only to InnerTube
   discovery/playback, and is dormant unless the variable is set.
+
+- **Local-file audio never leaves the device.** `/offline` reads files through
+  the File System Access API, so there is no upload path, no server route, no
+  proxy, and nothing to exfiltrate: the browser reads a file the user already
+  had. Object URLs are minted per play and revoked under a two-URL budget, and
+  the session reset revokes the rest, because each live URL pins that file's
+  bytes for the life of the document.
+- **The one browser-storage surface, and what it holds.** The only value
+  persisted for the offline source is a `FileSystemDirectoryHandle`, in
+  IndexedDB, so a returning user can be offered their folder again. It is not
+  audio, not a filename list, not a track, and not a credential. The
+  browser-storage quality gate has an allowlist for exactly the two files that
+  touch it, plus a second gate asserting that allowlist has not grown — the
+  point being that this exception cannot quietly become a precedent.
+- **The grant is the trust boundary, not the app.** A directory handle is only
+  as good as the permission behind it, and that permission is re-checked on
+  every visit: revoked, denied, and moved-folder states each get their own
+  message and their own recovery action rather than one generic failure.
+- **Local tracks are refused at every write.** `recordPlayedAction`,
+  `likeTrackAction` and `addTrackToPlaylistAction` reject a `local` provider,
+  and the persisted queue snapshot drops local entries. A `local` row in shared
+  data would be a track no other session could ever resolve.
+- **The offline module is isolated; the surfaces AROUND it are taught
+  separately.** That distinction was the actual defect: the queue SNAPSHOT
+  refused local tracks while the legacy `provider`/`providerTrackId` columns of
+  the same `PlaybackState` row did not, so playing a local file wrote its
+  folder-relative path into the durable server-side session on every checkpoint.
+  Both writers now guard on `isOfflineTrack`, and
+  `player/__tests__/persistence.test.ts` asserts the path never reaches the
+  server. The rule for any NEW shared surface is the same: import
+  `isOfflineSource` at the boundary rather than relying on the offline module
+  to keep itself contained.
+- **Client payloads into the shared catalog are bounded by schema.** The
+  catalog has no owner column, so validation is the only thing standing between
+  an authenticated account and an unbounded write on a row every other user
+  renders. All three catalog writers parse through `trackInputSchema` /
+  `artistInputSchema` before the DAL is reached; `AUDIT_REPORT.md` records the
+  original gap (AUR-010) as fixed, which was true of the like and
+  playlist-add writers only until the other two were brought in line.
 
 ## Release smoke checks
 

@@ -120,6 +120,19 @@ describe("load semantics", () => {
     expect(engine.loaded[0]?.track.streamUrl).toBe("https://cdn.example/resolved.m4a");
     expect(engine.loaded[0]?.track.previewUrl).toBe("https://preview.example/decoy.mp3");
   });
+
+  it("pauses the element when resolution fails, so it matches what the UI shows", async () => {
+    // The store advances `currentTrack` and clears `isPlaying` BEFORE
+    // resolution, so without this the previous track kept playing while the UI
+    // showed the new track paused with an error. The cross-tab consequence is
+    // worse than cosmetic: ownership reads `isPlaying: false`, broadcasts a
+    // `release()`, and a second tab claims the session — two tabs, two audio
+    // streams.
+    const { engine, controller } = setup();
+    controller.loadTrack(spotifyTrack());
+    await flush();
+    expect(engine.pauseCalls).toBeGreaterThan(0);
+  });
 });
 
 describe("generation races", () => {

@@ -7,17 +7,30 @@ import {
   likeTrackAction,
   unlikeTrackAction,
 } from "@/app/actions/track";
-import { useLikedTrack } from "./liked-tracks";
+import { useLikedTrack, requestAuthPrompt } from "./liked-tracks";
 import { useLocale } from "@/components/i18n/locale-provider";
 
 export function LikeButton({
   track,
   initialLiked,
+  isAuthenticated,
   size = 18,
   className,
 }: {
   track: Track;
   initialLiked: boolean;
+  /**
+   * Whether a signed-in session exists. Governs ONLY the standalone path
+   * (rendered without a `LikedTracksProvider`): when false, a failed mutation
+   * raises the shared sign-in prompt instead of failing silently.
+   *
+   * Ignored when a provider is present — the shared `toggle` already carries
+   * the provider's own `isAuthenticated` in its closure, so the prop cannot
+   * contradict it. Omitted standalone keeps the previous silent-rollback
+   * behavior, which is what the standalone unit-test path relies on; every
+   * production call site passes it explicitly.
+   */
+  isAuthenticated?: boolean;
   size?: number;
   className?: string;
 }) {
@@ -44,11 +57,20 @@ export function LikeButton({
         const result = await likeTrackAction(track);
         if (!result.ok) {
           setLocalLiked(false);
+          // The shared path prompts through the provider's own auth flag; the
+          // standalone path has only this prop. Without it an anonymous tap
+          // fails and rolls back with no explanation.
+          if (isAuthenticated === false) {
+            requestAuthPrompt();
+          }
         }
       } else {
         const result = await unlikeTrackAction(track);
         if (!result.ok) {
           setLocalLiked(true);
+          if (isAuthenticated === false) {
+            requestAuthPrompt();
+          }
         }
       }
     });

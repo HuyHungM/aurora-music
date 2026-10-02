@@ -1,4 +1,5 @@
 import type { Track } from "@/lib/domain";
+import { isOfflineTrack } from "@/lib/offline/isolation";
 import { trackKey } from "./identity";
 import {
   PLAYBACK_CHECKPOINT_INTERVAL_MS,
@@ -146,15 +147,58 @@ export class PlaybackPersistenceController {
   private lastPersistedTrackKey: string | null = null;
   private lastQueueKey: string | null = null;
   private queueSaveTimer: ReturnType<typeof setTimeout> | null = null;
-  private queueSaveInFlight = false;
+  /**
+   * The single persistence write lane.
+   *
+   * Every writer — the debounced queue write, the page-lifecycle flush, and
+   * the track/pause checkpoint — persists the FULL queue snapshot plus the
+   * cursor position under the same `revision` compare-and-swap. Two
+   * concurrent writes therefore race, and the loser is told `stale` and has
+   * its payload dropped by the server. That is not a harmless lost update:
+   * the winner is whichever request reached the database first, so an
+   * OLDER snapshot can win and durably revert a newer queue. This flag is
+   * what makes the lane single: a writer that finds it set hands its request
+   * to the pending slots below instead of issuing a competing write.
+   */
+  private writeInFlight = false;
   /**
    * A write request (debounced queue change or page-lifecycle flush) that
    * arrived while another write was in flight. Dropping it would lose the
    * user's change, so it re-arms once the in-flight write settles. The
    * debounce has already disarmed its timer by then, which is why the
    * re-arm flag — not the timer — is the only thing that can rescue it.
+   *
+   * Rebuilt from current state on retry, so this slot only needs to say
+   * "something changed", not what it changed to.
    */
   private writeQueued = false;
+  /**
+   * A track/pause checkpoint that arrived while the lane was busy.
+   *
+   * Unlike `writeQueued` this one carries an OPERATION snapshot - the track
+   * the user just left, and the position they left it at - which cannot be
+   * rebuilt from current state, so it is kept verbatim. Only the newest is
+   * retained: a superseded checkpoint describes a track the user has already
+   * moved past, and the queue snapshot it would rebuild is the current one
+   * anyway.
+   */
+  private pendingCheckpoint: {
+    track: Track;
+    position: number;
+    /**
+     * Whether this record has already been re-driven after losing a revision
+     * CAS. The retry is worth exactly one attempt: a foreign writer that
+     * keeps winning means this tab is not the live session, and spinning on
+     * it would turn a lost cursor update into an unbounded request loop.
+     *
+     * The flag rides on the record rather than on the controller because the
+     * two reasons a checkpoint parks are different — "the lane was busy"
+     * (a fresh request, full budget) and "a CAS rejected it" (a re-drive,
+     * budget already spent). A shared flag would be reset by the first and
+     * never stop the second.
+     */
+    retried: boolean;
+  } | null = null;
 
   constructor(deps: PersistenceControllerDeps) {
     this.deps = deps;
@@ -402,7 +446,7 @@ export class PlaybackPersistenceController {
       clearTimeout(this.queueSaveTimer);
       this.queueSaveTimer = null;
     }
-    if (this.queueSaveInFlight) {
+    if (this.writeInFlight) {
       // Re-arm after the in-flight write instead of dropping the flush.
       this.writeQueued = true;
       return;
@@ -421,8 +465,9 @@ export class PlaybackPersistenceController {
     this.lastPersistedPosition = null;
     this.lastPersistedTrackKey = null;
     this.lastQueueKey = null;
-    this.queueSaveInFlight = false;
+    this.writeInFlight = false;
     this.writeQueued = false;
+    this.pendingCheckpoint = null;
     this.disposed = true;
   }
 
@@ -502,15 +547,15 @@ export class PlaybackPersistenceController {
     // lifecycle flush can fire after this tab has already yielded, and the
     // re-armed write from a settled request lands here too.
     if (!this.mayPersist()) return;
-    if (this.queueSaveInFlight) {
-      // A write is already in flight. This call came from the debounced
-      // queue-change path, which has *already* disarmed its timer, so
-      // returning here silently discards the user's newest queue: the
-      // debounce will not fire again, and no page-lifecycle flush is
-      // guaranteed to follow. Re-arm instead — the in-flight write's
-      // `finally` re-runs this method, and it rebuilds the snapshot from
-      // current state, so the retry carries the newest queue rather than
-      // a stale one. Reachable whenever a server round trip outlasts
+    if (this.writeInFlight) {
+      // The lane is busy. This call came from the debounced queue-change
+      // path, which has *already* disarmed its timer, so returning here
+      // silently discards the user's newest queue: the debounce will not
+      // fire again, and no page-lifecycle flush is guaranteed to follow.
+      // Re-arm instead — the in-flight write's `finally` drains this slot
+      // back into this method, and it rebuilds the snapshot from current
+      // state, so the retry carries the newest queue rather than a stale
+      // one. Reachable whenever a server round trip outlasts
       // QUEUE_SNAPSHOT_DEBOUNCE_MS while the user keeps mutating the
       // queue, which is ordinary on a slow connection.
       this.writeQueued = true;
@@ -530,7 +575,7 @@ export class PlaybackPersistenceController {
       this.lastQueueKey = queueSnapshotContentKey(queueSnapshot);
       return;
     }
-    this.queueSaveInFlight = true;
+    this.writeInFlight = true;
     try {
       const contentKey = queueSnapshotContentKey(queueSnapshot);
       if (this.lastQueueKey === contentKey) return;
@@ -541,10 +586,12 @@ export class PlaybackPersistenceController {
         queueSnapshot.entries[
           queueSnapshot.playOrder[queueSnapshot.position] as number
         ];
-      const legacyRef = store.currentTrack
+      const currentIsPersistable =
+        store.currentTrack !== null && !isOfflineTrack(store.currentTrack);
+      const legacyRef = currentIsPersistable
         ? {
-            provider: store.currentTrack.provider,
-            providerTrackId: providerTrackIdOf(store.currentTrack),
+            provider: (store.currentTrack as Track).provider,
+            providerTrackId: providerTrackIdOf(store.currentTrack as Track),
           }
         : cursorEntry
           ? {
@@ -575,35 +622,90 @@ export class PlaybackPersistenceController {
     } catch {
       // Persistence failures never break playback.
     } finally {
-      this.queueSaveInFlight = false;
-      if (this.writeQueued) {
-        this.writeQueued = false;
-        // The write above was built before the newer request arrived, so
-        // the state that triggered it is not in it yet.
-        void this.saveQueueSnapshotNow();
-      }
+      this.writeInFlight = false;
+      this.drainPendingWrite();
+    }
+  }
+
+  /**
+   * Re-arms the single write lane with whatever arrived while it was busy.
+   *
+   * Called from every writer's `finally`, so the lane is always handed
+   * straight to the next request instead of waiting for a timer that may
+   * never be armed again. The checkpoint is drained first because it is the
+   * only pending slot carrying an operation snapshot; the rebuild-from-state
+   * queue write behind it still runs, and its own content-key check is what
+   * makes that a cheap no-op when the checkpoint already wrote the same
+   * queue.
+   */
+  private drainPendingWrite(): void {
+    const checkpoint = this.pendingCheckpoint;
+    if (checkpoint) {
+      this.pendingCheckpoint = null;
+      void this.saveCheckpoint(checkpoint.track, checkpoint.position, checkpoint.retried);
+      return;
+    }
+    if (this.writeQueued) {
+      this.writeQueued = false;
+      // The write that just finished was built before this request arrived,
+      // so the state that triggered it is not in it yet.
+      void this.saveQueueSnapshotNow();
     }
   }
 
   private async saveCheckpoint(
     track: Track,
     position: number,
+    alreadyRetried = false,
   ): Promise<void> {
     const userId = this.userId;
     if (!userId || this.disposed) return;
     if (!this.mayPersist()) return;
+    // Same single lane as the queue write, and for the same reason: both
+    // persist the whole snapshot under one revision CAS, so a concurrent
+    // checkpoint would race a concurrent queue write and let the older of
+    // the two win durably. The retry rebuilds the queue snapshot from
+    // current state, so only this operation's own arguments are carried.
+    if (this.writeInFlight) {
+      this.pendingCheckpoint = { track, position, retried: false };
+      return;
+    }
     // Immutable operation snapshot: never read mutable store state after
     // this point, so async work cannot misattribute the position.
     // Every checkpoint carries the current queue snapshot, so one
     // revision bump covers track + queue atomically.
     const queueSnapshot = this.buildQueueSnapshot();
+    // An offline track must never reach these legacy columns. Its
+    // `providerTrackId` is the track's folder-relative path, and this row is
+    // the durable server-side session - so writing it would put the user's
+    // local folder structure in the production database, which the queue
+    // snapshot right beside it already refuses to do. Falls back to the
+    // cursor entry, which is provider-backed by construction because
+    // `serializeQueueSnapshot` drops local tracks.
+    const cursorEntry =
+      queueSnapshot.entries[
+        queueSnapshot.playOrder[queueSnapshot.position] as number
+      ];
+    const ref = isOfflineTrack(track)
+      ? cursorEntry
+        ? {
+            provider: cursorEntry.provider,
+            providerTrackId: cursorEntry.providerTrackId,
+          }
+        : null
+      : {
+          provider: track.provider,
+          providerTrackId: providerTrackIdOf(track),
+        };
+    if (!ref) return;
     const snapshot: SaveCheckpointInput = {
-      provider: track.provider,
-      providerTrackId: providerTrackIdOf(track),
+      provider: ref.provider,
+      providerTrackId: ref.providerTrackId,
       position: normalizePosition(position),
       revision: this.localRevision,
       queueSnapshot,
     };
+    this.writeInFlight = true;
     try {
       const result = await this.deps.savePlaybackStateAction(snapshot);
       if (this.disposed || this.userId !== userId) return;
@@ -613,10 +715,20 @@ export class PlaybackPersistenceController {
         this.lastPersistedTrackKey = trackIdentity(track);
         this.lastQueueKey = queueSnapshotContentKey(queueSnapshot);
       } else if (result.ok && result.stale) {
+        // A foreign writer advanced the row first. Re-read the revision and
+        // re-drive this exact checkpoint rather than dropping it: the cursor
+        // position it records is not reconstructible from current state, so
+        // discarding it would silently lose where the user left off.
+        if (alreadyRetried) return;
         await this.syncRevision(userId);
+        if (this.disposed || this.userId !== userId) return;
+        this.pendingCheckpoint = { track, position, retried: true };
       }
     } catch {
       // Persistence failures never break playback.
+    } finally {
+      this.writeInFlight = false;
+      this.drainPendingWrite();
     }
   }
 

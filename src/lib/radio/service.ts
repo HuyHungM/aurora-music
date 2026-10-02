@@ -8,6 +8,7 @@ import type {
 } from "@/lib/domain";
 import {
   createTrackMatcher,
+  foldAsciiComparison,
   identityKeys,
   mergeSourceReference,
   sourceReferenceKey,
@@ -87,9 +88,7 @@ export interface RankedGroup {
 
 const MERGEABLE: readonly MatchClassification[] = ["exact", "strong"];
 
-function foldName(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
+const foldName = foldAsciiComparison;
 
 function significantTokens(title: string): string[] {
   const stop = new Set([

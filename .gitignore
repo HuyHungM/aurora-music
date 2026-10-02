@@ -56,6 +56,12 @@ e2e/.auth/
 # vercel
 .vercel
 
+# Neon CLI project link (written by `neon link` / `neon checkout`). It pins the
+# org, project and branch for this checkout only, so it is machine-local state,
+# not shared configuration: committing it would silently point every other
+# developer and every CI job at one person's branch. Never commit.
+.neon
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

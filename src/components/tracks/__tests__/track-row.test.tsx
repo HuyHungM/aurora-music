@@ -236,3 +236,100 @@ describe("TrackRow", () => {
     unmount();
   });
 });
+
+describe("TrackRow duration and navigation", () => {
+  beforeEach(() => {
+    resetStore();
+    const surface = new FakeAudioSurface();
+    const engine = new PlayerEngine(surface);
+    usePlayerStore.getState().bindEngine(engine);
+    unmountFacade = mountTestFacade();
+  });
+
+  afterEach(() => {
+    cleanup();
+    unmountFacade?.();
+    unmountFacade = undefined;
+    usePlayerStore.getState().bindEngine(null);
+  });
+
+  it("renders a sub-hour duration as MM:SS", () => {
+    const track = makePlayableTrack("t1", { duration: 222 });
+    render(<TrackRow track={track} />);
+    expect(screen.getByText("03:42")).toBeTruthy();
+  });
+
+  it("renders an hour-plus duration as HH:MM:SS", () => {
+    const track = makePlayableTrack("t1", { duration: 3754 });
+    render(<TrackRow track={track} />);
+    expect(screen.getByText("01:02:34")).toBeTruthy();
+  });
+
+  it("hides the duration when it is missing or not a real length", () => {
+    for (const duration of [undefined, 0, -5, Number.NaN] as const) {
+      const { unmount } = render(
+        <TrackRow track={makePlayableTrack("t1", { duration })} />,
+      );
+      // No duration text anywhere: not a number, not a placeholder, and never
+      // a three-component hour label for a song that has no hours.
+      expect(screen.queryByText(/^\d+:\d{2}(:\d{2})?$/)).toBeNull();
+      expect(screen.queryByText(/NaN|undefined|null/)).toBeNull();
+      unmount();
+    }
+  });
+
+  it("links the title block to the track page", () => {
+    const track = makePlayableTrack("abc123", {
+      provider: "youtube",
+      providerTrackId: "abc123",
+    });
+    render(<TrackRow track={track} />);
+    const link = screen.getByRole("link", { name: /Track abc123/ });
+    expect(link.getAttribute("href")).toBe("/track/abc123");
+  });
+
+  it("prefers the provider id in the track link", () => {
+    const track = makePlayableTrack("domain-id", {
+      provider: "youtube",
+      providerTrackId: "provider-vid-9",
+    });
+    render(<TrackRow track={track} />);
+    expect(screen.getByRole("link").getAttribute("href")).toBe(
+      "/track/provider-vid-9",
+    );
+  });
+
+  it("keeps Play, remove and menu controls outside the link", () => {
+    const onRemoveFromPlaylist = vi.fn();
+    const track = makePlayableTrack("t1", { duration: 222 });
+    render(
+      <TrackRow
+        track={track}
+        showMenu={true}
+        onRemoveFromPlaylist={onRemoveFromPlaylist}
+      />,
+    );
+    const link = screen.getByRole("link");
+    // No nested interactivity: zero buttons inside the anchor, so activating
+    // Play, remove or the menu can never also navigate.
+    expect(link.querySelector("button")).toBeNull();
+    expect(screen.getByRole("button", { name: "Phát Track t1" })).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Xóa Track t1 khỏi playlist" }),
+    );
+    expect(onRemoveFromPlaylist).toHaveBeenCalledTimes(1);
+  });
+
+  it("still starts playback from the Play button, not from the link", async () => {
+    const track = makePlayableTrack("t1", { duration: 222 });
+    render(<TrackRow track={track} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Phát Track t1" }));
+    await waitFor(() => {
+      expect(usePlayerStore.getState().currentTrack?.id).toBe("t1");
+    });
+    // The link exists alongside playback — navigating and playing are
+    // separate affordances on the same row.
+    expect(screen.getByRole("link").getAttribute("href")).toBe("/track/t1");
+  });
+});

@@ -29,25 +29,45 @@ export async function AppShell({
   availability: AuthAvailability;
   children: ReactNode;
 }) {
-  const locale = await getRequestLocale();
+  // Locale, the install cookie and the appearance are three independent reads
+  // that were awaited one after another, so every navigation paid their sum
+  // before any content could render. Started together; `getT(locale)` below
+  // still consumes the locale, so nothing else changes.
+  //
+  // `appearance` deliberately stays in this group rather than being left to
+  // render later: the comment below explains that resolving it on the server is
+  // what removes the theme flash, so it must be awaited before first paint —
+  // and `Promise.all` still awaits it before first paint.
+  const localePromise = getRequestLocale();
+  // Anonymous install opt-out, read once here and handed to the single
+  // install authority so the affordance stays hidden across navigations
+  // instead of returning on every route (Phase 51). Read defensively: a
+  // failed cookie read must not take the shell down.
+  const installDismissedPromise = cookies()
+    .then((jar) => jar.has(INSTALL_DISMISS_COOKIE))
+    .catch(() => false);
+  const appearancePromise = getRequestAppearance();
+  const [locale, installDismissed, appearance] = await Promise.all([
+    localePromise,
+    installDismissedPromise,
+    appearancePromise,
+  ]);
   const t = getT(locale);
   // Seed for the single client mirror of DAL likes (Phase 38): the
   // provider's optimistic toggles roll back against this same table,
   // so rows, menus, player, and track page can never diverge.
+  //
+  // Kept OUT of the group above because it needs `user`, and it is the one
+  // read that is genuinely sequential with it. It is also the widest: up to
+  // 1000 provider-scoped keys per navigation. See ARCHITECTURE.md §13.1 for
+  // why it selects only the two columns it needs.
   const initialLiked = user
     ? (await listUserLikes(user.id, { limit: 1000 })).map(
         (like) => `${like.provider}:${like.trackId}`,
       )
     : [];
-  // Anonymous install opt-out, read once here and handed to the single
-  // install authority so the affordance stays hidden across navigations
-  // instead of returning on every route (Phase 51). Read defensively: a
-  // failed cookie read must not take the shell down.
-  const installDismissed = await cookies()
-    .then((jar) => jar.has(INSTALL_DISMISS_COOKIE))
-    .catch(() => false);
-  // Resolved here, once, and handed to `AppearanceRoot` as a prop. Two
-  // independent reasons the shell root is the right place for it:
+  // Appearance is resolved here, once, and handed to `AppearanceRoot` as a
+  // prop. Two independent reasons the shell root is the right place for it:
   //
   //   - `AppearanceRoot` renders the element the eight custom properties and
   //     the four `data-aurora-*` attributes have to sit on, because it is an
@@ -61,7 +81,6 @@ export async function AppShell({
   //
   // `getRequestAppearance` never throws - every step of it is defensive -
   // so a failed read costs the default theme and nothing more.
-  const appearance = await getRequestAppearance();
 
   return (
     // `AppearanceRoot` replaces this div. It keeps the same layout classes and

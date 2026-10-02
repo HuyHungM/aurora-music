@@ -56,7 +56,16 @@ interface Window {
 
 export interface FixedWindowLimiter {
   consume(key: string, bucket: RateLimitBucket, nowMs?: number): RateLimitDecision;
-  /** Drops one key. Used when an identity changes (sign-out). */
+  /**
+   * Drops one key.
+   *
+   * No production caller. It was documented as being used when an identity
+   * changes (sign-out), but sign-out does not call it, so a signed-out window
+   * simply expires on its own — which is the correct outcome anyway, since a
+   * new session gets a new key. Retained as the per-key counterpart to
+   * `reset()` because the limiter's eviction contract is worth being able to
+   * test directly.
+   */
   forget(key: string): void;
   /** Drops every window. Exposed for tests and for a future admin purge. */
   reset(): void;

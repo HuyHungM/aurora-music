@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import type { EngineRepeatMode } from "@/lib/music/music-engine";
 import { useMusicEngineState } from "@/lib/music/use-music-engine";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { Button } from "@/components/ui/button";
 import { PauseIcon, PlayIcon } from "@/components/ui/icons";
+import { formatPlaybackTime } from "@/lib/player/format";
 
 /** Shared repeat vocabulary so bar/mini/full can never drift apart. */
 export function repeatDisplay(repeat: EngineRepeatMode): "off" | "all" | "one" {
@@ -206,7 +208,15 @@ export function SeekSlider({
   const { t } = useLocale();
   const resolvedLabel = label ?? t("player.seek");
   const max = duration > 0 ? duration : 1;
-  const value = Math.min(Math.max(position, 0), max);
+  // Transient drag state. While the thumb is held, the element is driven by
+  // the drag value, NOT by the ticking `position` prop: without this the 4Hz
+  // progress ticks overwrite the controlled value mid-drag and the thumb
+  // fights the hand holding it. Live seeking is preserved - every move still
+  // commits through `onSeek`, exactly as before - only the DISPLAYED value
+  // is decoupled until release snaps it back to the prop.
+  const [dragValue, setDragValue] = useState<number | null>(null);
+  const shown = dragValue ?? Math.min(Math.max(position, 0), max);
+  const value = Math.min(Math.max(shown, 0), max);
   return (
     <input
       type="range"
@@ -215,7 +225,16 @@ export function SeekSlider({
       step={1}
       value={value}
       aria-label={resolvedLabel}
-      onChange={(event) => onSeek(Number(event.currentTarget.value))}
+      // A screen reader announces the raw second count ("37") without this.
+      aria-valuetext={formatPlaybackTime(value)}
+      onChange={(event) => {
+        const next = Number(event.currentTarget.value);
+        setDragValue(next);
+        onSeek(next);
+      }}
+      onPointerUp={() => setDragValue(null)}
+      onPointerCancel={() => setDragValue(null)}
+      onBlur={() => setDragValue(null)}
       onKeyDown={(e) => {
         const step = 5;
         if (e.key === "ArrowRight") {

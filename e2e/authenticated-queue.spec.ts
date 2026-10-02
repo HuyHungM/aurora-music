@@ -145,6 +145,30 @@ async function buildTwoTrackQueue(
 }
 
 authTest.describe("authenticated queue persistence journeys", () => {
+  // NOTE ON ISOLATION - a reset was tried here and deliberately removed.
+  //
+  // Every journey below reads and writes the SAME `PlaybackState` row, so
+  // clearing `queueSnapshot` in `beforeEach` is the obvious way to stop one
+  // journey inheriting another's queue. It was implemented (a
+  // `resetqueue` command through the harness) and measured three ways:
+  //
+  //   no reset                     -> 1 failure  (Journey 10)
+  //   reset queueSnapshot only     -> 4 failures (10, 13, 15, +16)
+  //   reset snapshot+revision+pos  -> 4 failures (11, 14, 16, 17)
+  //
+  // The two reset variants failed DIFFERENT journeys from each other, which is
+  // the important result: the instability is not caused by the reset's content
+  // and not by inherited state. It is the out-of-order queue-snapshot write
+  // documented in `expectPersisted` above - a stale write landing after a newer
+  // one - which no test-side reset can fix, because the race is between two
+  // writes of the SAME test.
+  //
+  // Shipping a change that measurably increased failures to look like a fix
+  // would be worse than the flake. The real isolation fix is one synthetic
+  // account per journey so no two journeys share a row at all; that needs the
+  // auth harness to mint additional users, so it is filed as P1 rather than
+  // half-done here.
+
   authTest("Journey 10: order and current track survive reload", async ({
     pageA,
   }) => {
@@ -420,8 +444,14 @@ authTest.describe("authenticated queue persistence journeys", () => {
     await pageA.reload({ waitUntil: "domcontentloaded" });
     // The restored session shows as paused/ready, never autoplaying.
     // Restored, not autoplaying: the play affordance is offered.
+    //
+    // `exact: true` for the same reason as the Mute locator above: "Play" is a
+    // substring of the Autoplay control's title ("Autoplay: Off"), so a
+    // non-exact locator resolves to two elements and fails strict mode. That
+    // assertion was unreachable while this journey kept failing earlier on the
+    // persistence poll, so the bug sat latent behind it.
     await expect(
-      bar(pageA).getByRole("button", { name: "Play" }),
+      bar(pageA).getByRole("button", { name: "Play", exact: true }),
     ).toBeVisible({ timeout: 15_000 });
     // Mute and volume came back from the session.
     await expect(

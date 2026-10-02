@@ -92,6 +92,24 @@ const KNOWN_MIGRATIONS = [
   // Rollback: drop the index. The duplicates do not come back, but nothing
   // else depends on the constraint - it prevents new ones.
   "20260926130000_recently_played_one_row_per_track",
+  // Recency-ordering indexes (reviewed): two indexes, no data. `Like` and
+  // `Follow` are both read `ORDER BY createdAt DESC` (the app shell's like
+  // mirror on every authenticated render, and `listFollowedArtists` for the
+  // library, radio signals and radio page), and neither's existing
+  // `@@unique([userId, <child>])` nor `@@index([userId])` can serve that sort
+  // - so Postgres sorted the user's entire history before applying `LIMIT`.
+  // `@@index([userId, createdAt])` is the same shape `RecentlyPlayed` already
+  // uses, and it supersedes `@@index([userId])` on both models rather than
+  // duplicating it.
+  //
+  // Stores nothing, adds no column, rewrites no table, and changes no query:
+  // the old artifact runs unchanged on the new schema (the planner just stops
+  // sorting) and the new artifact runs unchanged on the old schema (it falls
+  // back to today's sort). Backward compatible in both directions.
+  //
+  // Rollback: re-create `@@index([userId])` on both models and drop the two
+  // `(userId, createdAt)` indexes - restoring the previous sort, not any state.
+  "20261002120000_like_follow_recency_indexes",
 ];
 
 function modelBlock(schema: string, model: string): string {
@@ -143,5 +161,27 @@ describe("playback persistence schema", () => {
     const block = modelBlock(schema, "PlaylistTrack");
     expect(block).toContain("@@unique([playlistId, trackId])");
     expect(block).toContain("@@unique([playlistId, position])");
+  });
+
+  it("indexes every newest-first user collection on its sort column", () => {
+    // `listUserLikes` and `listFollowedArtists` are both
+    // `ORDER BY createdAt DESC` under a `take`, and both run on page render.
+    // A `@@index([userId])` cannot serve that sort: Postgres reads every row
+    // the user owns and sorts before `LIMIT` applies. These three models are
+    // the whole user-owned recency surface, and all three must lead their
+    // index with the sort column - `RecentlyPlayed` was already correct, and
+    // `Like`/`Follow` were quietly paying an in-memory sort per render.
+    const schema = readFileSync(join(prismaDir, "schema.prisma"), "utf8");
+    for (const [model, column] of [
+      ["RecentlyPlayed", "playedAt"],
+      ["Like", "createdAt"],
+      ["Follow", "createdAt"],
+    ] as const) {
+      const block = modelBlock(schema, model);
+      expect(block.length, `model ${model} not found`).toBeGreaterThan(0);
+      expect(block, `${model} lacks a recency index`).toContain(
+        `@@index([userId, ${column}])`,
+      );
+    }
   });
 });

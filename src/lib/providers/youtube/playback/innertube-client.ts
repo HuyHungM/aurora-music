@@ -328,19 +328,3 @@ export function createInnertubePlaybackClient(
     },
   };
 }
-
-/**
- * Re-exported for compatibility.
- *
- * These three helpers now LIVE in `innertube/session.ts` (Phase 55), because
- * the session and its evaluator are properties of the shared session rather
- * than of the playback half. They are re-exported here so the playback
- * module's public surface is unchanged: the existing tests, and any caller
- * that imported them, keep working without knowing the session moved.
- */
-export {
-  ensureJsEvaluator,
-  evaluatePlayerScript,
-  sessionPlayer,
-  sharedInnertubeSession as innertubeSession,
-} from "../innertube/session";

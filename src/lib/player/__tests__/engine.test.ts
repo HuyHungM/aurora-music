@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PlayerEngine, PlayerError } from "@/lib/player/engine";
+import {
+  PlayerEngine,
+  PlayerError,
+  safeMediaErrorMessage,
+  sourceSchemeOf,
+} from "@/lib/player/engine";
 import type { EngineEvent } from "@/lib/player/engine";
 import { setLogLevel, setLogSink } from "@/lib/diagnostics/logger";
 import type { LogRecord } from "@/lib/diagnostics/logger";
@@ -350,5 +355,197 @@ describe("PlayerEngine", () => {
     expect(
       records.filter((record) => record.event === "playback_media_error"),
     ).toEqual([]);
+  });
+});
+describe("PlayerEngine same-source skip", () => {
+  it("leaves a playing element untouched when the same source reloads", async () => {
+    const { surface, engine } = createEngine();
+    engine.load(makePlayableTrack("t1"), false);
+    expect(surface.loadCalls).toBe(1);
+    surface.paused = false;
+
+    engine.load(makePlayableTrack("t1"), true);
+
+    // No src reassignment, no load(): the audible restart is skipped, while
+    // the autoplay intent still reaches the element.
+    expect(surface.loadCalls).toBe(1);
+    expect(surface.src).toBe("https://audio.example/t1.mp3");
+    expect(surface.play).toHaveBeenCalledTimes(1);
+    await surface.play.mock.results[0].value;
+  });
+
+  it("reloads the same source when paused, preserving restart semantics", () => {
+    const { surface, engine } = createEngine();
+    engine.load(makePlayableTrack("t1"), false);
+    surface.paused = false;
+    surface.pause();
+
+    engine.load(makePlayableTrack("t1"), true);
+
+    expect(surface.loadCalls).toBe(2);
+  });
+
+  it("reloads when the URL differs even for the same track key", () => {
+    const { surface, engine } = createEngine();
+    engine.load(makePlayableTrack("t1"), false);
+    surface.paused = false;
+
+    engine.load(
+      makePlayableTrack("t1", { streamUrl: "https://audio.example/t1b.mp3" }),
+      false,
+    );
+
+    expect(surface.loadCalls).toBe(2);
+    expect(surface.src).toBe("https://audio.example/t1b.mp3");
+  });
+});
+
+describe("mediaDiagnostics", () => {
+  it("reports element state without ever exposing the source URL", () => {
+    const { surface, engine } = createEngine();
+    engine.load(makePlayableTrack("t1"), false);
+    (surface as unknown as Record<string, unknown>).readyState = 3;
+    (surface as unknown as Record<string, unknown>).networkState = 2;
+
+    const state = engine.mediaDiagnostics();
+    expect(state).toMatchObject({
+      hasSource: true,
+      readyState: 3,
+      networkState: 2,
+      paused: true,
+      ended: false,
+      errorCode: null,
+    });
+
+    // A googlevideo URL is signed and short-lived. This snapshot is exposed to
+    // the E2E probe, so serializing it anywhere must not carry the URL.
+    expect(JSON.stringify(state)).not.toContain("audio.example");
+    expect(JSON.stringify(state)).not.toContain("https://");
+    expect(Object.keys(state)).not.toContain("src");
+  });
+
+  it("reports no source before anything is loaded", () => {
+    const { engine } = createEngine();
+    const state = engine.mediaDiagnostics();
+    expect(state.hasSource).toBe(false);
+    expect(state.currentTime).toBe(0);
+    expect(state.duration).toBe(0);
+    expect(state.errorCode).toBeNull();
+  });
+
+  it("surfaces the media error code and coerces junk state to null", () => {
+    const { surface, engine } = createEngine();
+    engine.load(makePlayableTrack("t1"), false);
+    (surface as unknown as Record<string, unknown>).error = { code: 3 };
+    (surface as unknown as Record<string, unknown>).readyState = Number.NaN;
+    expect(engine.mediaDiagnostics().errorCode).toBe(3);
+    expect(engine.mediaDiagnostics().readyState).toBeNull();
+  });
+
+  it("keeps a non-finite duration at 0 rather than NaN", () => {
+    const { surface, engine } = createEngine();
+    engine.load(makePlayableTrack("t1"), false);
+    (surface as unknown as Record<string, unknown>).duration = Number.NaN;
+    expect(engine.mediaDiagnostics().duration).toBe(0);
+  });
+
+  it("reports the source scheme without reporting the source", () => {
+    const { engine } = createEngine();
+    engine.load(makePlayableTrack("t1"), false);
+    expect(engine.mediaDiagnostics().sourceScheme).toBe("https");
+
+    // The whole point of the field: "is this local or remote" is answerable,
+    // while the URL - which for a local file is an object URL and for a provider
+    // is a signed googlevideo link - is not reachable from the snapshot.
+    const state = engine.mediaDiagnostics();
+    expect(JSON.stringify(state)).not.toContain("audio.example");
+    expect(Object.keys(state)).not.toContain("src");
+  });
+
+  it("surfaces the native error message that separates the code-4 causes", () => {
+    // Every one of these is MediaError.code 4, so the code alone cannot say
+    // which happened. Measured in Chromium against blob: sources:
+    //   "Media load rejected by URL safety check" -> the source was blocked
+    //   "Format error"                           -> empty or truncated file
+    //   "DEMUXER_ERROR_COULD_NOT_OPEN"           -> undecodable container
+    const cases = [
+      "MEDIA_ELEMENT_ERROR: Format error",
+      "MEDIA_ELEMENT_ERROR: Media load rejected by URL safety check",
+      "PipelineStatus::DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer: open context failed",
+    ];
+    for (const message of cases) {
+      const { surface, engine } = createEngine();
+      engine.load(makePlayableTrack("t1"), false);
+      (surface as unknown as Record<string, unknown>).error = { code: 4, message };
+      expect(engine.mediaDiagnostics().errorCode).toBe(4);
+      expect(engine.mediaDiagnostics().errorMessage).toBe(message);
+    }
+  });
+
+  it("redacts a media error message that carries source detail", () => {
+    // The browser does not fully author this string, and other engines have been
+    // observed to include the offending source in it. A signed URL must not reach
+    // a log or a test through this field.
+    const hostile = [
+      "failed to load blob:null/9f2a-https://r1.googlevideo.com/videoplayback?id=abc",
+      "cannot open C:\\Users\\someone\\Music\\track.opus",
+      "denied for /home/someone/Music/secret/track.opus",
+      "token " + "a".repeat(48),
+    ];
+    for (const message of hostile) {
+      const { surface, engine } = createEngine();
+      engine.load(makePlayableTrack("t1"), false);
+      (surface as unknown as Record<string, unknown>).error = { code: 4, message };
+      const reported = engine.mediaDiagnostics().errorMessage;
+      expect(reported).toMatch(/^\[redacted: /);
+      expect(reported).not.toContain("googlevideo");
+      expect(reported).not.toContain("someone");
+    }
+  });
+
+  it("reports no error message when the element has none", () => {
+    const { surface, engine } = createEngine();
+    engine.load(makePlayableTrack("t1"), false);
+    (surface as unknown as Record<string, unknown>).error = null;
+    expect(engine.mediaDiagnostics().errorMessage).toBeNull();
+    (surface as unknown as Record<string, unknown>).error = { code: 4, message: "   " };
+    expect(engine.mediaDiagnostics().errorMessage).toBeNull();
+  });
+});
+
+describe("safeMediaErrorMessage", () => {
+  it("keeps browser boilerplate verbatim", () => {
+    expect(safeMediaErrorMessage("MEDIA_ELEMENT_ERROR: Format error")).toBe(
+      "MEDIA_ELEMENT_ERROR: Format error",
+    );
+  });
+
+  it("bounds an over-long message rather than trusting it", () => {
+    const long = `${"a ".repeat(200)}end`;
+    // Long runs of words are fine, but the total is capped.
+    expect((safeMediaErrorMessage(long) ?? "").length).toBeLessThanOrEqual(160);
+  });
+
+  it("rejects non-strings and blanks", () => {
+    expect(safeMediaErrorMessage(undefined)).toBeNull();
+    expect(safeMediaErrorMessage(null)).toBeNull();
+    expect(safeMediaErrorMessage(42)).toBeNull();
+    expect(safeMediaErrorMessage("")).toBeNull();
+    expect(safeMediaErrorMessage("   ")).toBeNull();
+  });
+});
+
+describe("sourceSchemeOf", () => {
+  it("returns only the scheme", () => {
+    expect(sourceSchemeOf("https://example.test/a.m4a")).toBe("https");
+    expect(sourceSchemeOf("blob:null/9f2a")).toBe("blob");
+    expect(sourceSchemeOf("BLOB:null/9f2a")).toBe("blob");
+    expect(sourceSchemeOf("data:audio/ogg;base64,AAA")).toBe("data");
+  });
+
+  it("returns null when there is no scheme", () => {
+    expect(sourceSchemeOf("")).toBeNull();
+    expect(sourceSchemeOf(undefined)).toBeNull();
+    expect(sourceSchemeOf("relative/path.m4a")).toBeNull();
   });
 });

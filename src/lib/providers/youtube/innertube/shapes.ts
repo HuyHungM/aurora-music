@@ -403,38 +403,5 @@ export function videoInfoItem(info: unknown, videoId: string): {
   };
 }
 
-/** A playlist-row video, in Data API `playlistItems.list` shape. */
-export function playlistItemNode(node: unknown, playlistId: string): {
-  snippet: {
-    title: string;
-    playlistId: string;
-    position: number;
-    thumbnails?: YouTubeThumbnails | null;
-    resourceId: { kind: string; videoId: string };
-  };
-  contentDetails: { videoId: string };
-  status: { privacyStatus: string };
-} | null {
-  const search = videoSearchItem(node);
-  if (!search) {
-    return null;
-  }
-  const record = asRecord(node);
-  const indexText = asText(record?.index);
-  const position = indexText && /^\d+$/.test(indexText) ? Number(indexText) : 0;
-  const isPlayable = record?.is_playable !== false;
-  return {
-    snippet: {
-      title: search.snippet.title,
-      playlistId,
-      position,
-      ...(search.snippet.thumbnails ? { thumbnails: search.snippet.thumbnails } : {}),
-      resourceId: { kind: "youtube#video", videoId: search.id.videoId },
-    },
-    contentDetails: { videoId: search.id.videoId },
-    status: { privacyStatus: isPlayable ? "public" : "private" },
-  };
-}
-
 /** Exported for the playlist transport, which reads a `Duration` column. */
 export { parseDurationToMs };

@@ -120,14 +120,14 @@ describe("Spotify search", () => {
     expect(search.mock.calls[0]?.[2]).toMatchObject({ limit: 5, offset: 0 });
   });
 
-  it("paginates boundedly when Aurora asks for more than 10", async () => {
+  it("paginates boundedly when Aurora asks for more than one API page", async () => {
     const search = vi.fn(
       async (
         _q: string,
         _t: string[],
         paging?: { limit?: number; offset?: number },
       ) => {
-        const pageSize = paging?.limit ?? 10;
+        const pageSize = paging?.limit ?? 50;
         const start = paging?.offset ?? 0;
         return {
           tracks: {
@@ -141,14 +141,49 @@ describe("Spotify search", () => {
       },
     );
     const provider = createSpotifyProvider(makeTransport({ search }));
-    const result = await provider.searchTracks({ query: "x", limit: 25 });
-    expect(result.items).toHaveLength(25);
+    // More than the 50 the search API returns in one call, so the bounded
+    // page walk is still exercised.
+    const result = await provider.searchTracks({ query: "x", limit: 75 });
+    expect(result.items).toHaveLength(75);
     expect(result.items[0]?.providerTrackId).toBe("t0");
-    expect(result.items[24]?.providerTrackId).toBe("t24");
-    expect(search).toHaveBeenCalledTimes(3);
+    expect(result.items[74]?.providerTrackId).toBe("t74");
+    expect(search).toHaveBeenCalledTimes(2);
     for (const call of search.mock.calls) {
-      expect((call[2] as { limit: number }).limit).toBeLessThanOrEqual(10);
+      expect((call[2] as { limit: number }).limit).toBeLessThanOrEqual(50);
     }
+  });
+
+  it("answers the product's own largest search ask in one request", async () => {
+    // `SEARCH_PAGE_SIZE` is the API's 50 cap rather than a conservative 10,
+    // so the 20-result search the search page actually performs costs one
+    // round trip instead of two. This is a quota/request-count contract, not
+    // a performance nicety: the search page runs three type-scoped searches
+    // per render, so the old page size cost six requests instead of three.
+    const search = vi.fn(
+      async (
+        _q: string,
+        _t: string[],
+        paging?: { limit?: number; offset?: number },
+      ) => {
+        const pageSize = paging?.limit ?? 50;
+        const start = paging?.offset ?? 0;
+        return {
+          tracks: {
+            items: Array.from(
+              { length: pageSize },
+              (_, index) => trackObject(`t${start + index}`),
+            ),
+            total: 100,
+          },
+        };
+      },
+    );
+    const provider = createSpotifyProvider(makeTransport({ search }));
+    const result = await provider.searchTracks({ query: "x", limit: 20 });
+    expect(result.items).toHaveLength(20);
+    expect(result.items[19]?.providerTrackId).toBe("t19");
+    expect(search).toHaveBeenCalledTimes(1);
+    expect((search.mock.calls[0]?.[2] as { limit: number }).limit).toBe(20);
   });
 
   it("returns empty results for valid queries with no hits", async () => {

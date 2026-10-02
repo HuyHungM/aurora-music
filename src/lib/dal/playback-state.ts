@@ -62,7 +62,14 @@ export async function savePlaybackState(
   const position = normalizePosition(input.position);
   if (input.revision < 0) return false;
 
-  const existing = await db.playbackState.findUnique({ where: { userId } });
+  // `revision` only. This is the highest-frequency write in the product (a
+  // checkpoint on every track change, pause, seek and 12s heartbeat), and a
+  // full-row read would ship the entire `queueSnapshot` JSON - up to 200
+  // entries - back to the process just to read one integer off it.
+  const existing = await db.playbackState.findUnique({
+    where: { userId },
+    select: { revision: true },
+  });
 
   // Snapshot payload: validated shape, or null (legacy single-track
   // write). Stored as JSON; the revision CAS below still guards every

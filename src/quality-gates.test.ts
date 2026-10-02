@@ -139,12 +139,42 @@ describe("test isolation gates", () => {
       ) {
         continue;
       }
+      // Narrow, explicit exemption rather than a relaxed gate. The offline
+      // (local-files) source persists exactly one value — a
+      // `FileSystemDirectoryHandle` — and it does so in these two files. Any
+      // other module reaching for IndexedDB is still a failure, and this
+      // feature must not become the precedent that lets one through.
+      const offlineStorageExempt = /[\\/]src[\\/]lib[\\/]offline[\\/](capability|storage)\.ts$/;
+      if (offlineStorageExempt.test(file)) {
+        continue;
+      }
       const content = readFileSync(file, "utf8");
       if (/localStorage|sessionStorage|indexedDB/.test(content)) {
         offenders.push(file);
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("keeps the offline storage exemption to handle persistence only", () => {
+    // The exemption above is a hole in a security-relevant gate, so its size
+    // is asserted rather than trusted: exactly two files, both under
+    // `lib/offline`, and neither may name a session/credential API. If a
+    // third file needs IndexedDB, this fails and the exclusion is re-reviewed.
+    const exempt = sourceFiles(/\.ts$/).filter(
+      (file) =>
+        !file.includes("__tests__") &&
+        /[\\/]src[\\/]lib[\\/]offline[\\/](capability|storage)\.ts$/.test(file),
+    );
+    expect(exempt.map((file) => file.split(/[\\/]/).pop()).sort()).toEqual([
+      "capability.ts",
+      "storage.ts",
+    ]);
+    for (const file of exempt) {
+      const content = readFileSync(file, "utf8");
+      expect(content).not.toMatch(/localStorage|sessionStorage/);
+      expect(content).not.toMatch(/Authorization|cookie|token/i);
+    }
   });
 });
 

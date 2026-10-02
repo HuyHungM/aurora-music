@@ -332,8 +332,19 @@ describe("restored session resumes with a fresh source (Phase 43)", () => {
     await usePlayerStore.getState().togglePlay();
     await flush();
 
-    // Fresh resolution happened exactly once, for the restored identity.
-    expect(backend.resolveSource).toHaveBeenCalledTimes(1);
+    // Fresh resolution happened for the restored identity — plus one prefetch
+    // for the next queue entry once playback started (repeat-all wraps to
+    // `aaaaaaaaaaa`). The prefetch finds no stubbed resolution and vanishes
+    // silently; it must never disturb the load it warms.
+    expect(backend.resolveSource).toHaveBeenCalledTimes(2);
+    expect(backend.resolveSource).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ id: "bbbbbbbbbbb" }),
+    );
+    expect(backend.resolveSource).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ id: "aaaaaaaaaaa" }),
+    );
     expect(surface.src).toBe("https://cdn.example/fresh.m4a");
     expect(surface.playedCalls).toBe(1);
     expect(usePlayerStore.getState().isPlaying).toBe(true);

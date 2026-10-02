@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { NormalizationError } from "@/lib/domain";
 import { createMusicEngine } from "@/lib/music/music-engine";
 import type { MusicEngineDeps, TrackLookupPort } from "@/lib/music/music-engine";
 import { createQueueManager } from "@/lib/music/queue-manager";
+import { resetIntentPrefetchForTests } from "@/lib/playback/prefetch-intent";
 import {
   fakeEnv,
   fakeSignals,
@@ -251,5 +252,73 @@ describe("state snapshot", () => {
     // instead of stacking a second one alongside the new.
     expect(emissions).toBe(2);
     off();
+  });
+});
+
+describe("prefetch", () => {
+  beforeEach(() => {
+    resetIntentPrefetchForTests();
+  });
+
+  it("forwards a youtube track prefetch to the prefetch dep", () => {
+    const prefetchTrack = vi.fn();
+    const { engine } = setup({ prefetchTrack });
+    engine.prefetchTrack(track("youtube", "yt-1"));
+    expect(prefetchTrack).toHaveBeenCalledTimes(1);
+    expect(prefetchTrack).toHaveBeenCalledWith(track("youtube", "yt-1"));
+  });
+
+  it("refuses non-youtube providers (no speculative local/offline work)", () => {
+    const prefetchTrack = vi.fn();
+    const { engine } = setup({ prefetchTrack });
+    engine.prefetchTrack(track("spotify", "sp-1"));
+    engine.prefetchTrack(track("local", "local-1"));
+    expect(prefetchTrack).not.toHaveBeenCalled();
+  });
+
+  it("throttles repeated intent for the same track", () => {
+    const prefetchTrack = vi.fn();
+    const { engine } = setup({ prefetchTrack });
+    engine.prefetchTrack(track("youtube", "yt-same"));
+    engine.prefetchTrack(track("youtube", "yt-same"));
+    expect(prefetchTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a no-op without a prefetch dep", () => {
+    const { engine } = setup();
+    expect(() => engine.prefetchTrack(track("youtube", "yt-2"))).not.toThrow();
+  });
+
+  it("never throws when the prefetch dep throws", () => {
+    const { engine } = setup({
+      prefetchTrack: () => {
+        throw new Error("boom");
+      },
+    });
+    expect(() => engine.prefetchTrack(track("youtube", "yt-3"))).not.toThrow();
+  });
+});
+
+describe("snapshot position", () => {
+  it("publishes whole seconds so sub-second ticks share one snapshot value", () => {
+    const { state, engine } = setup();
+    // Progress UI renders seconds (labels, 1s slider steps): 12.3 and 12.7
+    // must produce the SAME published position, so the per-hook Object.is
+    // bail-out absorbs the 4Hz engine ticks instead of re-rendering.
+    state.currentTime = 12.3;
+    expect(engine.getState().position).toBe(12);
+    state.currentTime = 12.7;
+    expect(engine.getState().position).toBe(12);
+    state.currentTime = 13.0;
+    expect(engine.getState().position).toBe(13);
+    // The store keeps the raw float: seek math, persistence deltas and
+    // Media Session read it there, never from the snapshot.
+    expect(state.currentTime).toBe(13.0);
+  });
+
+  it("never publishes a negative position", () => {
+    const { state, engine } = setup();
+    state.currentTime = -0.4;
+    expect(engine.getState().position).toBe(0);
   });
 });

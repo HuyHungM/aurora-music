@@ -26,6 +26,7 @@ const vi = {
     home: "Trang chủ",
     search: "Tìm kiếm",
     library: "Thư viện",
+    offline: "Tệp cục bộ",
     radio: "Radio",
     settings: "Cài đặt",
     browse: "Khám phá",
@@ -640,9 +641,6 @@ const vi = {
     follow: "Theo dõi",
     following: "Đang theo dõi",
   },
-  offline: {
-    message: "Bạn đang ngoại tuyến. Nghe nhạc cần có kết nối internet.",
-  },
   install: {
     title: "Cài đặt Aurora",
     description:
@@ -659,6 +657,7 @@ const vi = {
     placeholder: "Tìm bài hát, nghệ sĩ hoặc album…",
     clear: "Xóa tìm kiếm",
     linkDetected: "Đã nhận diện liên kết {provider}",
+    searching: "Đang tìm kiếm…",
   },
   multiTab: {
     playingElsewhere: "Đang phát ở tab khác.",
@@ -668,6 +667,46 @@ const vi = {
     fixtureLibrary: "Thư viện mẫu E2E",
     fixtureDescription: "Danh mục mẫu cho kiểm thử xác thực.",
     noFixtures: "Chưa có track mẫu. Hãy chạy thiết lập kiểm thử trước.",
+  },
+  offline: {
+    // Hai nghĩa không liên quan dùng chung một khoá: thông báo mất mạng và
+    // tính năng tệp cục bộ. Gộp lại thay vì đổi tên, vì cả hai đều là "thứ
+    // Aurora gọi là offline"; tách khoá chỉ để tránh một va chạm sẽ làm không
+    // gian khoá tệ hơn.
+    message: "Bạn đang ngoại tuyến. Nghe nhạc cần có kết nối internet.",
+    navLabel: "Tệp cục bộ",
+    title: "Tệp cục bộ",
+    subtitle:
+      "Phát nhạc bạn đã có sẵn trên thiết bị này. Tệp vẫn nằm nguyên tại chỗ — không có gì được tải lên Aurora.",
+    chooseFolder: "Chọn thư mục",
+    changeFolder: "Chọn thư mục khác",
+    forgetFolder: "Ngắt kết nối thư mục",
+    grantAccess: "Cấp quyền truy cập",
+    reScan: "Quét lại",
+    scanning: "Đang quét thư mục…",
+    emptyFolder: "Không tìm thấy tệp âm thanh phát được trong thư mục này.",
+    unsupportedTitle: "Trình duyệt này không mở được thư mục cục bộ",
+    unsupportedBody:
+      "Aurora dùng File System Access API để đọc thư mục bạn chọn, và chỉ các trình duyệt dựa trên Chromium mới hỗ trợ. Hãy thử Chrome, Edge hoặc một trình duyệt Chromium khác.",
+    needsPermissionTitle: "Cần cấp quyền",
+    needsPermissionBody:
+      "Aurora cần quyền đọc lại thư mục này trước khi liệt kê nội dung.",
+    deniedTitle: "Đã từ chối truy cập",
+    deniedBody:
+      "Quyền đọc thư mục này đã bị từ chối. Bạn có thể cấp lại, hoặc chọn thư mục khác.",
+    unavailableTitle: "Không dùng được thư mục",
+    unavailableBody:
+      "Không còn mở được thư mục này — có thể nó đã bị di chuyển, xóa, hoặc quyền truy cập đã bị thu hồi. Hãy chọn lại thư mục.",
+    folderLabel: "Thư mục: {name}",
+    trackCount: "{count} bài hát",
+    trackCountOne: "1 bài hát",
+    truncatedWarning: "Đang hiển thị những bài hát đầu tiên trong thư mục này.",
+    noDuration: "--:--",
+    playTrack: "Phát {title}",
+    queueTrack: "Thêm {title} vào danh sách phát",
+    fileNameLabel: "Tệp: {name}",
+    privacyNote:
+      "Chỉ tham chiếu thư mục được ghi nhớ. Tệp âm thanh của bạn không bao giờ được tải lên, lưu vào bộ nhớ đệm hay chia sẻ.",
   },
 };
 

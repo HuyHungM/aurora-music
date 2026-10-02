@@ -183,6 +183,57 @@ export const likeTrackSchema = z.object({
   track: trackInputSchema,
 });
 
+/**
+ * The recently-played path's payload.
+ *
+ * Exists as its own name so the third catalog-writing action is bound to the
+ * SAME contract as the other two by construction rather than by remembering to
+ * call `trackInputSchema` — which is exactly how it came to be the one writer
+ * with no bound at all while `likeTrackSchema` had one. `recordPlayed` receives
+ * a client `Track` and writes `title`, `artistName`, `albumName`,
+ * `artworkUrl`, `providerUrl`, `genres` and `duration` into the shared,
+ * unowned catalog that every user and every anonymous shared-playlist visitor
+ * renders.
+ */
+export const recordPlayedSchema = z.object({
+  track: trackInputSchema,
+});
+
+/**
+ * The follow-artist path's payload.
+ *
+ * The artist counterpart of `trackInputSchema`, added with it: `upsertArtist`
+ * writes the same unbounded client-controlled columns onto a shared, unowned
+ * `Artist` row (`name`, `image`, `bio`, `genres`) and there was no schema for
+ * the artist side at all.
+ *
+ * `bio` is free text from a provider and can legitimately be long, so its
+ * bound is the one generous number here; it is still bounded, because an
+ * unbounded text column on a shared row is a storage-amplification lever for any
+ * authenticated account.
+ */
+export const ARTIST_TEXT_MAX_LENGTH = 500;
+export const ARTIST_URL_MAX_LENGTH = 2048;
+export const ARTIST_BIO_MAX_LENGTH = 5_000;
+
+export const artistInputSchema = z.object({
+  /** The provider's own id, and the catalog upsert key. */
+  id: idSchema,
+  provider: providerIdSchema,
+  providerArtistId: idSchema.optional(),
+  name: z.string().trim().min(1).max(ARTIST_TEXT_MAX_LENGTH),
+  image: z.string().trim().max(ARTIST_URL_MAX_LENGTH).optional(),
+  bio: z.string().trim().max(ARTIST_BIO_MAX_LENGTH).optional(),
+  genres: z
+    .array(z.string().trim().max(100))
+    .max(TRACK_GENRES_MAX_COUNT)
+    .optional(),
+});
+
+export const followArtistSchema = z.object({
+  artist: artistInputSchema,
+});
+
 export const removeTrackSchema = z.object({
   playlistId: idSchema,
   trackRef: z.object({

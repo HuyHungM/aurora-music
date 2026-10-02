@@ -4,6 +4,7 @@ import { getE2EPlaybackFixtureAction } from "@/app/actions/e2e-fixture";
 import { FIXTURE_B } from "@/lib/e2e/fixture-ids";
 import { TrackPlayer } from "../../track/[id]/track-player";
 import { E2EQueueControls } from "./e2e-queue-controls";
+import { E2EMediaProbe } from "./e2e-media-probe";
 
 /**
  * Deterministic live-playback fixture route.
@@ -59,6 +60,9 @@ export default async function E2EPlaybackFixturePage({
     <div className="flex flex-col gap-8">
       <TrackPlayer track={primary} initialLiked={false} />
       <E2EQueueControls tracks={[primary, secondary]} />
+      {/* Read-only media-state probe, so playback assertions read the real
+          audio element instead of the controls. See `e2e-media-probe.tsx`. */}
+      <E2EMediaProbe />
     </div>
   );
 }

@@ -13,7 +13,23 @@ import type {
   User,
 } from "@/lib/domain";
 
-export function mapUser(row: Prisma.UserModel): User {
+/**
+ * The narrowest `select` that can still produce a `User`.
+ *
+ * `User` carries no appearance or locale, so a full row read pulls the
+ * `appearance` JSON column (the whole theme) and the locale/account columns
+ * to discard them. `getCurrentUser` runs on every authenticated navigation.
+ */
+export const userColumns = {
+  id: true,
+  name: true,
+  email: true,
+  image: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.UserSelect;
+
+export function mapUser(row: Prisma.UserModel | Prisma.UserGetPayload<{ select: typeof userColumns }>): User {
   return {
     id: row.id,
     name: row.name ?? undefined,
@@ -92,7 +108,21 @@ export function collapsePlaylistMemberships<
   return kept;
 }
 
-export function mapLike(row: Prisma.LikeGetPayload<{ include: { track: true } }>): Like {
+/**
+ * The narrowest `include` that can still produce a `Like`.
+ *
+ * `Like` carries only the like's own identity plus the provider-scoped track
+ * key, so a full `track` row (`metadata`/`streamUrl`/`previewUrl`/`genres`
+ * JSON, and the artist's bio through it) is never read here. `listUserLikes`
+ * is called with `take: 1000` on every authenticated page render to seed the
+ * client like mirror, so the width of this select is a per-navigation cost,
+ * not a per-call detail.
+ */
+export const likeIdentityInclude = {
+  track: { select: { provider: true, providerTrackId: true } },
+} satisfies Prisma.LikeInclude;
+
+export function mapLike(row: Prisma.LikeGetPayload<{ include: typeof likeIdentityInclude }>): Like {
   return {
     id: row.id,
     userId: row.userId,

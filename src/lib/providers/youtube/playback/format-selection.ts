@@ -80,14 +80,3 @@ export function rankAudioFormats(
     return a.url < b.url ? -1 : a.url > b.url ? 1 : 0;
   });
 }
-
-/**
- * Returns the best playable audio format, or null when none is eligible.
- * Audio-only wins; muxed audio+video is a last resort; deterministic for
- * identical inputs regardless of input order.
- */
-export function selectAudioFormat(
-  candidates: PlaybackFormatCandidate[],
-): PlaybackFormatCandidate | null {
-  return rankAudioFormats(candidates)[0] ?? null;
-}

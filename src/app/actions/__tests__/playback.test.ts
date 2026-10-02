@@ -57,4 +57,42 @@ describe("recordPlayedAction", () => {
 
     expect(result).toEqual({ ok: false });
   });
+
+  it("refuses an oversized client payload before it reaches the catalog", async () => {
+    // The shared catalog row has no owner column, so this write is authorized
+    // by nothing but validation. `title` is a Postgres `text`, so an unbounded
+    // payload is a storage-amplification lever available to any authenticated
+    // account, and it is rendered by every other user.
+    vi.mocked(requireUser).mockResolvedValue({ id: "user-1" } as never);
+
+    const result = await recordPlayedAction({
+      ...mockTrack,
+      title: "x".repeat(5_000),
+    } as Track);
+
+    expect(result).toEqual({ ok: false });
+    expect(recordPlayed).not.toHaveBeenCalled();
+  });
+
+  it("strips the columns the catalog must never accept", async () => {
+    // `streamUrl`, `previewUrl` and `metadata` are the fields the catalog
+    // deliberately does not store. The schema drops unknown keys, so they
+    // cannot ride along on a client payload into a shared row.
+    vi.mocked(requireUser).mockResolvedValue({ id: "user-1" } as never);
+
+    await recordPlayedAction({
+      ...mockTrack,
+      streamUrl: "https://attacker.example/x.mp3",
+      previewUrl: "https://attacker.example/y.mp3",
+      metadata: { sources: [{ provider: "forged", id: "x" }] },
+    } as unknown as Track);
+
+    const written = vi.mocked(recordPlayed).mock.calls[0]?.[1] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(written).not.toHaveProperty("streamUrl");
+    expect(written).not.toHaveProperty("previewUrl");
+    expect(written).not.toHaveProperty("metadata");
+  });
 });

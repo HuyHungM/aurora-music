@@ -2,7 +2,7 @@ import type { PrismaClient } from "@/generated/prisma/client";
 import type { Track, TrackRef } from "@/lib/domain";
 import { prisma } from "@/lib/db";
 import { upsertTrack, findTrackInternalId } from "@/lib/dal/catalog";
-import { mapLike } from "@/lib/dal/mappers";
+import { likeIdentityInclude, mapLike } from "@/lib/dal/mappers";
 import type { Like } from "@/lib/domain";
 
 export type { TrackRef };
@@ -42,7 +42,7 @@ export async function listUserLikes(
 ): Promise<Like[]> {
   const rows = await db.like.findMany({
     where: { userId },
-    include: { track: true },
+    include: likeIdentityInclude,
     orderBy: { createdAt: "desc" },
     take: pagination.limit,
     skip: pagination.offset,
@@ -55,12 +55,19 @@ export async function isTrackLiked(
   ref: TrackRef,
   db: PrismaClient = prisma,
 ): Promise<boolean> {
-  const trackId = await findTrackInternalId(db, ref);
-  if (!trackId) {
-    return false;
-  }
-  const count = await db.like.count({ where: { userId, trackId } });
-  return count > 0;
+  // One query, not two, and no COUNT. A `@@unique([userId, trackId])` row
+  // can only be present or absent, so counting it computes a number nobody
+  // reads; `findFirst` on the same unique index answers the boolean directly
+  // and drops the intermediate Track lookup that resolved the ref to an
+  // internal id first.
+  const row = await db.like.findFirst({
+    where: {
+      userId,
+      track: { provider: ref.provider, providerTrackId: ref.providerTrackId },
+    },
+    select: { id: true },
+  });
+  return row !== null;
 }
 
 export function isUniqueViolation(error: unknown): boolean {

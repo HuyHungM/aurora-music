@@ -46,6 +46,7 @@
  */
 import { mobileAuthTest, expect } from "./auth/fixtures";
 import { FIXTURE_TRACKS } from "./auth/constants";
+import { settle } from "./helpers/settle";
 import type { Page } from "@playwright/test";
 
 const TRACK_ONE = FIXTURE_TRACKS[0].title;
@@ -121,26 +122,6 @@ async function openLibraryWithTrackPlaying(page: Page) {
  * animations, because the scale is on the dialog and the controls being
  * measured are its descendants.
  */
-async function settle(page: Page) {
-  await page.waitForFunction(
-    () =>
-      // `subtree: true` is specified by the CSS Animations Level 2 and
-      // implemented in Chromium; the DOM lib in this TypeScript version still
-      // types `getAnimations()` as argument-less, so the option is passed
-      // through a widened local rather than silenced with an `any`. The cast
-      // is one line and states exactly what is true: the runtime takes an
-      // options bag this type does not describe yet.
-      (
-        document.getAnimations as (options?: { subtree?: boolean }) => Animation[]
-      )({ subtree: true }).every((a) => {
-        if (a.playState !== "running") return true;
-        return a.effect?.getComputedTiming().iterations === Infinity;
-      }),
-    undefined,
-    { timeout: 10_000 },
-  );
-}
-
 /** Open the full player from the mini player. Structure, not a translated name. */
 async function openFullPlayer(page: Page) {
   await page.locator('[aria-label="Expand player"]:visible').first().click();
@@ -257,6 +238,14 @@ mobileAuthTest.describe("Phase 54 mobile layout guards", () => {
       await phoneA.setViewportSize({ width, height: 900 });
       for (const path of ["/", "/search", "/library", "/radio", "/settings", "/e2e-library"]) {
         await phoneA.goto(path);
+        // Settle before measuring. Without this the sweep reads whatever frame
+        // it happens to land on, which on a slow navigation is the LOADING
+        // state: skeletons are part of the interactive selector, and a
+        // not-yet-hydrated field has not yet been given its final box. The
+        // sweep is about the resting layout, so it has to measure the resting
+        // layout - the same guard this file's other geometry assertions use.
+        await phoneA.getByRole("main").first().waitFor({ state: "attached" });
+        await settle(phoneA);
         const small = await phoneA.evaluate((sel) => {
           const out: string[] = [];
           for (const el of document.querySelectorAll(sel)) {

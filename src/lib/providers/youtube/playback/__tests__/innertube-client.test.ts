@@ -304,45 +304,6 @@ describe("Innertube playback client", () => {
   });
 });
 
-describe("player script evaluator", () => {
-  it("evaluates extracted scripts in an isolated context", async () => {
-    const { evaluatePlayerScript } = await import(
-      "@/lib/providers/youtube/playback/innertube-client"
-    );
-    expect(
-      evaluatePlayerScript({ output: "return { sig: 'abc', n: '1' };" }, { s: "x" }),
-    ).toEqual({ sig: "abc", n: "1" });
-  });
-
-  it("fails closed on non-object or throwing scripts", async () => {
-    const { evaluatePlayerScript } = await import(
-      "@/lib/providers/youtube/playback/innertube-client"
-    );
-    expect(evaluatePlayerScript({ output: "(() => { throw new Error('x'); })()" }, {})).toBeUndefined();
-    expect(evaluatePlayerScript({ output: "42" }, {})).toBeUndefined();
-  });
-
-  it("reads the nested session player without touching internals blindly", async () => {
-    const { sessionPlayer } = await import(
-      "@/lib/providers/youtube/playback/innertube-client"
-    );
-    const player = { signature_timestamp: 1 };
-    expect(sessionPlayer({ session: { player } })).toBe(player);
-    expect(sessionPlayer({})).toBeUndefined();
-    expect(sessionPlayer(null)).toBeUndefined();
-  });
-
-  it("installs the evaluator idempotently", async () => {
-    const { ensureJsEvaluator } = await import(
-      "@/lib/providers/youtube/playback/innertube-client"
-    );
-    expect(() => {
-      ensureJsEvaluator();
-      ensureJsEvaluator();
-    }).not.toThrow();
-  });
-});
-
 describe("format gate and extraction diagnostics", () => {
   it("rejects a format whose decipher method exists but that carries no URL or cipher payload", async () => {
     // `decipher` is a prototype method on every Format, so its existence says

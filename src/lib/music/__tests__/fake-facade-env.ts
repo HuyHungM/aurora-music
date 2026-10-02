@@ -255,6 +255,8 @@ export function searchResult(tracks: TrackIdentity[] = []): UnifiedSearchResult 
       ties: 0,
       skippedMalformed: 0,
       matchCounts: { exact: 0, strong: 0, possible: 0, rejected: 0 },
+      rankingMs: 0,
+      topBand: null,
     },
   };
 }

@@ -1,8 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  isFormatConsumable,
   probeFormatConsumability,
+  TRANSIENT_PROBE_REASONS,
+  type FormatProbeOptions,
 } from "@/lib/providers/youtube/playback/format-validation";
+
+/**
+ * Boolean view of a probe verdict.
+ *
+ * Replaces the removed `isFormatConsumable` wrapper, which was exactly this.
+ * Defined here so every assertion below runs against
+ * `probeFormatConsumability` - the one canonical implementation whose `reason`
+ * the resolver actually reads.
+ */
+async function isConsumable(url: string, options: FormatProbeOptions = {}) {
+  const verdict = await probeFormatConsumability(url, options);
+  return verdict.consumable;
+}
 
 function response(status: number, contentType?: string): Response {
   return {
@@ -31,10 +45,10 @@ function rangeRecorder(responses: Array<() => Promise<Response>>) {
   return { fetchFn: asFetch(fetchFn), ranges };
 }
 
-describe("isFormatConsumable", () => {
+describe("probe shape: one request, status only", () => {
   it("accepts open-ended range success without downloading media", async () => {
     const fetchFn = vi.fn(async () => response(206));
-    const ok = await isFormatConsumable("https://cdn.example/a.m4a", {
+    const ok = await isConsumable("https://cdn.example/a.m4a", {
       fetchFn: fetchFn as unknown as typeof fetch,
     });
     expect(ok).toBe(true);
@@ -46,7 +60,7 @@ describe("isFormatConsumable", () => {
   it("accepts 200 as playable", async () => {
     const fetchFn = vi.fn(async () => response(200));
     await expect(
-      isFormatConsumable("https://cdn.example/a.m4a", {
+      isConsumable("https://cdn.example/a.m4a", {
         fetchFn: fetchFn as unknown as typeof fetch,
       }),
     ).resolves.toBe(true);
@@ -56,7 +70,7 @@ describe("isFormatConsumable", () => {
     for (const status of [403, 404, 416, 500]) {
       const fetchFn = vi.fn(async () => response(status));
       await expect(
-        isFormatConsumable("https://cdn.example/a.m4a", {
+        isConsumable("https://cdn.example/a.m4a", {
           fetchFn: fetchFn as unknown as typeof fetch,
         }),
       ).resolves.toBe(false);
@@ -68,7 +82,7 @@ describe("isFormatConsumable", () => {
       throw new TypeError("fetch failed");
     });
     await expect(
-      isFormatConsumable("https://cdn.example/a.m4a", {
+      isConsumable("https://cdn.example/a.m4a", {
         fetchFn: failing as unknown as typeof fetch,
       }),
     ).resolves.toBe(false);
@@ -82,7 +96,7 @@ describe("isFormatConsumable", () => {
         }),
     );
     await expect(
-      isFormatConsumable("https://cdn.example/a.m4a", {
+      isConsumable("https://cdn.example/a.m4a", {
         fetchFn: hanging as unknown as typeof fetch,
         timeoutMs: 20,
       }),
@@ -153,13 +167,38 @@ describe("probeFormatConsumability verdicts", () => {
     [403, "probe_status_403"],
     [404, "probe_status_404"],
     [416, "probe_status_416"],
-    [500, "probe_status_other"],
+    // 429 and 5xx carry their own reasons so the resolver can retry them:
+    // both say the UPSTREAM refused us, not that the media is gone. Folding
+    // them into `other` made a blip indistinguishable from a genuinely unknown
+    // status, which is what let a transient fault become a permanent,
+    // negative-cached failure.
+    [429, "probe_status_429"],
+    [500, "probe_status_5xx"],
+    [503, "probe_status_5xx"],
+    // A 3xx that survived redirect-following is still `other`: it is neither a
+    // transient upstream fault nor a known terminal state.
     [302, "probe_status_other"],
   ])("maps status %i to %s", async (status, reason) => {
     const verdict = await probeFormatConsumability("https://cdn.example/a.m4a", {
       fetchFn: asFetch(async () => response(status as number)),
     });
     expect(verdict).toMatchObject({ consumable: false, reason, status });
+  });
+
+  it("marks rate limiting and provider faults as transient, and nothing else", () => {
+    // The membership is the contract the resolver reads to decide whether a
+    // total format failure is worth retrying, so it is pinned directly rather
+    // than only through the resolver. 404 is deliberately absent: the media is
+    // genuinely gone and retrying it forever would be wrong.
+    expect([...TRANSIENT_PROBE_REASONS].sort()).toEqual([
+      "probe_network_error",
+      "probe_status_429",
+      "probe_status_5xx",
+      "probe_timeout",
+    ]);
+    expect(TRANSIENT_PROBE_REASONS.has("probe_status_404")).toBe(false);
+    expect(TRANSIENT_PROBE_REASONS.has("probe_status_403")).toBe(false);
+    expect(TRANSIENT_PROBE_REASONS.has("probe_status_other")).toBe(false);
   });
 
   it("distinguishes a timeout from a transport failure", async () => {

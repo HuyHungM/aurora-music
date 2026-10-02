@@ -9,6 +9,7 @@ import { Artwork } from "@/components/ui/artwork";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { PlayIcon, PauseIcon } from "@/components/ui/icons";
 import { trackCapabilities } from "@/lib/player/track-capabilities";
+import { formatTrackDuration } from "@/lib/player/format";
 
 /**
  * One big card for the single most relevant track.
@@ -37,6 +38,12 @@ export function TopResultCard({
   const isCurrentPlaying = isCurrent && isPlaying;
   const canPlay = isCurrent || trackCapabilities(track).canPlay;
   const href = `/track/${encodeURIComponent(track.providerTrackId ?? track.id)}`;
+  // Same convention as TrackRow: durations of 0 or less mean "unknown" and
+  // stay hidden rather than printing a fake "00:00".
+  const duration =
+    track.duration !== undefined && track.duration > 0
+      ? formatTrackDuration(track.duration)
+      : "";
 
   return (
     // No `overflow-hidden` here either, for the same reason as `EntityHeader`:
@@ -66,6 +73,7 @@ export function TopResultCard({
         <p className="t-metadata truncate">
           {track.artistName}
           {track.albumName ? ` · ${track.albumName}` : ""}
+          {duration ? ` · ${duration}` : ""}
         </p>
       </div>
       <div className="relative flex shrink-0 items-center gap-2">

@@ -51,7 +51,6 @@ export type {
   PlaybackMediaInfo,
   YouTubePlaybackClient,
 } from "./youtube/playback/types";
-export { selectAudioFormat } from "./youtube/playback/format-selection";
 export {
   ensureYouTubeProvider,
   resetYouTubeBootstrap,

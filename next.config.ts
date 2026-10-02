@@ -35,7 +35,22 @@ const CONTENT_SECURITY_POLICY = [
   `script-src ${SCRIPT_SRC}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' https: http: data: blob:",
-  "media-src https:",
+  // `blob:` IS REQUIRED here, not a loosening. Every local file is played by
+  // handing the audio element an object URL minted from the user's own File
+  // (`offline/session.ts` -> `createObjectUrlFor`), so `media-src https:` alone
+  // blocked the whole offline feature: Chromium refused every blob: source with
+  // "Media load rejected by URL safety check", which surfaces as
+  // `MediaError.code === 4` and a `playback_recovery_failed` log reading
+  // `category: "source"` after both recovery rounds. Recovery could not have
+  // succeeded, because each round mints a FRESH object URL and CSP rejects every
+  // one of them identically.
+  //
+  // What this does NOT permit: `blob:` is same-origin and page-generated, so it
+  // adds no way to reach a remote or attacker-chosen resource. `https:` is kept
+  // and `http:` is deliberately still absent, so there is no mixed-content or
+  // plaintext-downgrade vector. It also makes `media-src` consistent with
+  // `img-src`, which has always allowed `blob:` for artwork.
+  "media-src https: blob:",
   "connect-src 'self' ws: wss:",
   "font-src 'self' data:",
   "frame-src 'none'",

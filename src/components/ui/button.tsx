@@ -34,8 +34,12 @@ interface SharedProps {
 }
 
 /**
- * What the two primitives share, and nothing else: the box, the type, and the
- * colour transition.
+ * What the two primitives share, and nothing else: the box, the type, the
+ * colour transition, and the press feedback. `aurora-press` lives here
+ * rather than at each call site because a button without press feedback is
+ * the defect, not the exception - and it is motion-safe by construction
+ * (declared inside the stylesheet's `no-preference` block, so reduced-motion
+ * visitors never see the scale, only the instant colour change).
  *
  * The two things that used to live here alongside those - `select-none` and the
  * absence of any cursor - are exactly the things that differ between an action
@@ -46,7 +50,7 @@ interface SharedProps {
  * this?" question differently.
  */
 const baseClasses =
-  "aurora-touch inline-flex items-center justify-center gap-2 rounded-full font-medium transition-colors";
+  "aurora-touch inline-flex items-center justify-center gap-2 rounded-full font-medium transition-colors aurora-press";
 
 /**
  * `interaction` is the per-primitive half - cursor and selection - and is
@@ -81,9 +85,10 @@ export function Button({
       // outside that stylesheet - a test, a storybook, an embedded widget -
       // should not silently lose the one affordance that says "this is a
       // button". `disabled:` is the other half: a control that refuses the
-      // interaction must not keep claiming it.
+      // interaction must not keep claiming it, so the cursor goes flat and
+      // the whole control dims to 60% - still glass, just muted.
       className={classes(
-        "cursor-pointer select-none disabled:cursor-not-allowed",
+        "cursor-pointer select-none disabled:cursor-not-allowed disabled:opacity-60",
         variant,
         size,
         className,

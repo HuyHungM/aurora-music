@@ -83,6 +83,26 @@ export function normalizeArtistName(name: string): string {
   return normalizeBase(name);
 }
 
+/**
+ * ASCII-only comparison fold: lowercase, every run of non `[a-z0-9]`
+ * collapsed to one space, trimmed.
+ *
+ * DISTINCT FROM `normalizeBase`, and deliberately not a wrapper for it.
+ * `normalizeBase` preserves scripts and diacritics, so it folds "Cảm Ơn" to
+ * "cảm ơn"; this one drops every non-ASCII character, so the same input
+ * becomes "c m n". Swapping one for the other would silently change matching,
+ * which is why both exist and why this carries its own name.
+ *
+ * Use it only for bucketing by a coarse ASCII signature — the token-overlap
+ * heuristics in `radio/service.ts` and `recommendations/service.ts`, which
+ * group candidates before the real matcher scores them. Use `normalizeBase`
+ * (plus `foldDiacritics` where needed) for anything that must distinguish
+ * languages or scripts.
+ */
+export function foldAsciiComparison(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
 const BRACKET_PATTERN = /[\(\[]([^()\[\]]*)[\)\]]/g;
 const TRAILING_DASH_PATTERN = /^(.*?)[\s]+[-–—][\s]+([^-–—]+?)\s*$/;
 const FEATURE_PATTERN = /^(feat\.?|ft\.?|featuring|with)\b\s*(.*)$/i;
