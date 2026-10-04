@@ -7,11 +7,12 @@ import type {
   ResolveSearchLinkPayload,
 } from "@/app/actions/resolve-search-link";
 import { resolveSearchLinkAction } from "@/app/actions/resolve-search-link";
-import { getPreferredProvider, getShellProviders } from "@/lib/providers/server";
+import { getProviderForCapability, getShellProviders } from "@/lib/providers/server";
 import { searchUnifiedTracksAction } from "@/app/actions/unified-search";
 import { getSessionUserId } from "@/lib/dal/session";
 import { listSearchHistory } from "@/lib/dal/search-history";
 import { TrackList } from "@/components/tracks/track-list";
+import { TrackActionMenu } from "@/components/tracks/track-action-menu";
 import { ArtistCard } from "@/components/artist/artist-card";
 import { AlbumCard } from "@/components/album/album-card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -21,6 +22,7 @@ import { TopResultCard } from "./top-result-card";
 import { SearchHistorySection } from "./search-history";
 import { RecordSearch } from "./record-search";
 import { SearchPendingRelease } from "./search-pending-release";
+import { SearchPendingResults } from "./search-pending-results";
 import { LinkSearchResult } from "./link-result";
 import { identityToTrack } from "@/lib/music/identity-track";
 import { getRequestLocale } from "@/lib/i18n/server";
@@ -103,11 +105,17 @@ export default async function SearchPage({
     // contract as the playback-state resolver.
     getShellProviders();
 
-    const provider = getPreferredProvider();
+    // Capability-aware, NOT "does the preferred provider have it". Asking the
+    // preferred provider alone removed the Albums section entirely on any
+    // deployment with a YouTube key, because YouTube has no `search.albums`
+    // while Deezer does — so the section reported `unsupported` and rendered
+    // nothing even though a capable provider was registered.
+    const artistSearchProvider = getProviderForCapability("search.artists");
+    const albumSearchProvider = getProviderForCapability("search.albums");
     const queryObj = { query, limit: 20, offset: 0 };
 
-    const hasArtistSearch = provider.capabilities.has("search.artists");
-    const hasAlbumSearch = provider.capabilities.has("search.albums");
+    const hasArtistSearch = artistSearchProvider !== null;
+    const hasAlbumSearch = albumSearchProvider !== null;
 
     if (!hasArtistSearch) {
       artistsUnsupported = true;
@@ -125,10 +133,10 @@ export default async function SearchPage({
     const [unifiedSettled, artistsResult, albumsResult] = await Promise.allSettled([
       searchUnifiedTracksAction(query),
       hasArtistSearch
-        ? provider.searchArtists(queryObj)
+        ? artistSearchProvider!.searchArtists(queryObj)
         : Promise.reject(new Error("unsupported")),
       hasAlbumSearch
-        ? provider.searchAlbums(queryObj)
+        ? albumSearchProvider!.searchAlbums(queryObj)
         : Promise.reject(new Error("unsupported")),
     ]);
 
@@ -224,6 +232,16 @@ export default async function SearchPage({
         <RecordSearch query={linkResult.canonicalUrl} />
       ) : null}
 
+      {/* Everything below the field is the result AREA, and it is rendered by
+          one island that swaps in the skeleton while a search is in flight.
+          Swapping rather than layering is deliberate: the no-results and error
+          states below cannot be painted at all while the skeleton is up, so
+          "No results found" can no longer flash for the length of a request.
+          `renderedQuery` is what this render shows — `""` for the idle route
+          and for links — and the island stops the skeleton in the same commit
+          that carries the answer rather than one frame later. See
+          `search-pending-results.tsx`. */}
+      <SearchPendingResults renderedQuery={isValidQuery ? query : ""}>
       {isValidQuery && !allFailed ? (
         <SearchDegradationNotice partial={tracksPartial} />
       ) : null}
@@ -279,7 +297,15 @@ export default async function SearchPage({
           {topTrack ? (
             <section aria-label={t("search.topResult")}>
               <h2 className="t-section-title mb-3">{t("search.topResult")}</h2>
-              <TopResultCard track={topTrack} />
+              {/* The same menu the link path already passes, and the same one
+                  every other track surface carries. Without it the most
+                  prominent result on the page was the one card a listener
+                  could only play — no like, no add to queue, no add to
+                  playlist, no radio. */}
+              <TopResultCard
+                track={topTrack}
+                actions={<TrackActionMenu track={topTrack} showAddToPlaylist={true} />}
+              />
             </section>
           ) : null}
 
@@ -337,13 +363,14 @@ export default async function SearchPage({
           ) : null}
         </div>
       ) : null}
+      </SearchPendingResults>
     </div>
   );
 }
 
 function CategoryError({ message }: { message: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface-2/60 px-4 py-3 text-sm text-text-muted">
+    <div className="flex items-center gap-2 rounded-xl border border-border-subtle bg-surface-2/60 px-4 py-3 text-sm text-text-muted">
       <AlertCircleIcon size={16} className="shrink-0" />
       <span>{message}</span>
     </div>

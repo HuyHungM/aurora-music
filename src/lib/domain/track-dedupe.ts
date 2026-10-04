@@ -70,6 +70,7 @@ import { isSourceType, sourceReferenceKey } from "./source-reference";
 import type { TrackIdentity } from "./track-identity";
 import { identityKeys } from "./track-identity";
 import { mergeSourceReference, toTrackIdentity } from "./track-normalizer";
+import { parseTitleVersion, tokenize } from "./match-text";
 import type { MatchClassification, TrackMatcher } from "./track-matcher";
 import {
   AUTO_MERGE_CLASSIFICATIONS,
@@ -235,16 +236,28 @@ export interface CanonicalDuplicateOptions {
 export class CanonicalDuplicateIndex {
   /** `source:id` -> index of the FIRST survivor that claimed it. */
   readonly #keys: Map<string, number>;
+  /**
+   * Normalized TITLE TOKEN -> survivor indexes holding it, ascending.
+   *
+   * This is a PREFILTER for tier 2, not a second matcher and not a second
+   * dedupe policy: it can only ever narrow the candidates tier 2 would have
+   * considered. See `#titleTokensOf` for why that is sound.
+   */
+  readonly #titlePostings: Map<string, number[]>;
   readonly #identities: (TrackIdentity | null)[];
   readonly #matcher: TrackMatcher;
   /** Identity conversions memoized by object reference. */
   readonly #identityCache: Map<CanonicalTrackLike, TrackIdentity | null>;
+  /** Title-token extraction memoized by object reference. */
+  readonly #titleTokenCache: Map<CanonicalTrackLike, string[]>;
 
   constructor(items: readonly CanonicalTrackLike[] = [], options: CanonicalDuplicateOptions = {}) {
     this.#keys = new Map<string, number>();
+    this.#titlePostings = new Map();
     this.#identities = [];
     this.#matcher = options.matcher ?? createTrackMatcher();
     this.#identityCache = new Map();
+    this.#titleTokenCache = new Map();
     for (const item of items) {
       this.add(item);
     }
@@ -264,12 +277,82 @@ export class CanonicalDuplicateIndex {
     return identity;
   }
 
+  /**
+   * The normalized title tokens this entry is findable under.
+   *
+   * Memoized by object reference, like `#identityOf`, because `add` and `find`
+   * both need it and `add` is called once per survivor.
+   */
+  #titleTokensOf(track: CanonicalTrackLike): string[] {
+    const cached = this.#titleTokenCache.get(track);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const identity = this.#identityOf(track);
+    const tokens = identity
+      ? [...tokenize(parseTitleVersion(identity.title).base)]
+      : [];
+    this.#titleTokenCache.set(track, tokens);
+    return tokens;
+  }
+
+  /**
+   * Survivor indexes that could possibly match `track`, ascending.
+   *
+   * WHY THIS IS SOUND, and why it is not a second dedupe policy. `match()`
+   * hard-rejects a pair as `title-mismatch` when
+   * `tokenOverlap(tokenize(leftBase), tokenize(rightBase)) === 0`
+   * (`track-matcher.ts:288-291`), and a recorded rejection makes the match
+   * `matched: false` (`:395-396`). So a pair can only be auto-mergeable if the
+   * two titles share at least one token — which makes the union of the
+   * candidate's title-token postings a SUPERSET of every mergeable survivor.
+   * Scanning only that set can therefore skip pairs the matcher would have
+   * rejected anyway, and cannot skip one it would have accepted.
+   *
+   * The exact-source shortcut in `match()` needs no carve-out: tier 1 derives
+   * its keys from the same `identity.sources` the shortcut reads
+   * (`canonicalTrackKeys` -> `identityKeys` for an identity), so any pair that
+   * shortcut would accept has already been found by tier 1.
+   *
+   * An entry with NO title tokens is registered under none. That is exact, not
+   * an approximation: with an empty base, `tokenOverlap` against any other base
+   * is 0, so the matcher rejects the pair — including against another
+   * empty-base entry.
+   */
+  #candidatesFor(track: CanonicalTrackLike): number[] {
+    const tokens = this.#titleTokensOf(track);
+    if (tokens.length === 0) {
+      return [];
+    }
+    const seen = new Set<number>();
+    for (const token of tokens) {
+      const posting = this.#titlePostings.get(token);
+      if (!posting) {
+        continue;
+      }
+      for (const index of posting) {
+        seen.add(index);
+      }
+    }
+    // Ascending, because tier 2 must return the FIRST matching survivor and the
+    // postings alone would not preserve that order across tokens.
+    return [...seen].sort((a, b) => a - b);
+  }
+
   /** Registers an entry as a survivor. Never re-checks it against itself. */
   add(track: CanonicalTrackLike): void {
     const index = this.#identities.length;
     for (const key of canonicalTrackKeys(track)) {
       if (!this.#keys.has(key)) {
         this.#keys.set(key, index);
+      }
+    }
+    for (const token of this.#titleTokensOf(track)) {
+      const posting = this.#titlePostings.get(token);
+      if (posting) {
+        posting.push(index);
+      } else {
+        this.#titlePostings.set(token, [index]);
       }
     }
     this.#identities.push(this.#identityOf(track));
@@ -294,7 +377,10 @@ export class CanonicalDuplicateIndex {
       // Fail open: an uncanonicalizable track matches nothing.
       return null;
     }
-    for (let index = 0; index < this.#identities.length; index += 1) {
+    // Prefiltered: see `#candidatesFor`. This used to walk EVERY identity, so
+    // a collection with no duplicates at all still paid one full matcher scan
+    // per item — O(n²) matcher calls on the most common input there is.
+    for (const index of this.#candidatesFor(track)) {
       const existing = this.#identities[index];
       if (!existing) {
         continue;

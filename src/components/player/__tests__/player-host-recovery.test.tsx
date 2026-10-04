@@ -254,7 +254,10 @@ describe("PlayerHost recovery integration", () => {
     // Explicit user retry: new generation, fresh resolution budget, same
     // queue and track. The source still fails, so the error resurfaces —
     // bounded, without loops or queue damage.
-    fireEvent.click(screen.getByRole("button", { name: "Thử phát lại" }));
+    // Scoped to the player BAR. The mini player now carries its own Retry for the
+    // same failure, so an unscoped query matches two controls that legitimately
+    // share a name — they are the same action on two surfaces.
+    fireEvent.click(bar().getByRole("button", { name: "Thử phát lại" }));
     await waitFor(
       () => expect(mocks.resolveAudioSourceAction.mock.calls.length).toBeGreaterThan(3),
       { timeout: 8000 },

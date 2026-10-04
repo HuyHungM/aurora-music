@@ -83,7 +83,7 @@ export default async function LibraryPage() {
           <a
             key={item.href}
             href={item.href}
-            className="aurora-press aurora-touch rounded-full border border-border-subtle bg-surface-1 px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:border-accent/50 hover:text-text-primary"
+            className="aurora-press aurora-touch rounded-full border border-border-subtle bg-surface-1 px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-accent/50 hover:text-text-primary"
           >
             {item.label}
           </a>

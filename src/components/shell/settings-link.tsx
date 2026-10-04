@@ -3,18 +3,24 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLocale } from "@/components/i18n/locale-provider";
-import { CogIcon } from "@/components/ui/icons";
+import { SlidersHorizontalIcon } from "@/components/ui/icons";
 
 /**
  * The one control that routes to Settings (Phase 53).
  *
- * Rendered twice - in the sidebar footer on desktop, in the header on
- * small viewports - and it is ONE component so the two cannot drift. That
- * matters more here than for most shared controls: the sidebar is
- * `hidden lg:flex`, so without the header copy a phone would have no way to
- * reach Appearance at all, and a feature nobody can reach on a phone is not a
- * feature.
+ * Rendered in the sidebar footer on desktop and in the header below `lg` —
+ * and it is ONE component so the copies cannot drift. The sidebar is
+ * `hidden lg:flex`, so below `lg` a header copy is the only way to reach
+ * Appearance, and a feature nobody can reach is not a feature.
  *
+ * The header copy owns ONE slot across two bands, never both at once: below
+ * `md` — every phone — the slot carries the compact language switcher, and
+ * from `md` to `lg` — every tablet — it carries this compact link, because
+ * Settings is the route that already hosts the full language switcher, so
+ * no preference becomes unreachable when the header control yields. From
+ * `lg` up the sidebar exists, so a header copy would be redundant. The
+ * `hidden md:block lg:hidden` wrapper lives in `header.tsx` with the rest
+ * of the band logic; this component only knows its two sizes.
  * A `Link` and not a button. Settings is a real route, it is deep-linkable,
  * and a link can be opened in a new tab, copied, and reached with the back
  * button - all of which `router.push` quietly takes away. The rule that
@@ -37,17 +43,19 @@ export function SettingsLink({ compact = false }: { compact?: boolean }) {
       aria-label={t("nav.settings")}
       className={
         compact
+          // The compact copy needs no `aurora-touch` floor of its own: `h-11`
+          // already clears 44px.
           ? "flex h-11 w-11 items-center justify-center rounded-xl text-text-secondary transition-colors hover:bg-surface-2 hover:text-text-primary"
           // `aurora-touch` (Phase 54). Measured 36px tall on a touch-emulated
           // 1024x1366 tablet, which is the smallest target found anywhere in
           // the app by the width sweep - smaller even than the header's own
-          // 40px search field. The compact copy is already `h-11`; this is
-          // the sidebar-footer copy that shows from `lg` up, and an iPad at
-          // 1024 renders it with a coarse pointer.
+          // 40px search field. This is the sidebar-footer copy that shows
+          // from `lg` up, and an iPad at 1024 renders it with a coarse
+          // pointer.
           : "aurora-touch flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm text-text-secondary transition-colors hover:bg-surface-2 hover:text-text-primary"
       }
     >
-      <CogIcon size={18} className="shrink-0" />
+      <SlidersHorizontalIcon size={18} className="shrink-0" />
       {!compact && <span className="truncate">{t("nav.settings")}</span>}
     </Link>
   );

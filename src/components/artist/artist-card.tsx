@@ -3,11 +3,12 @@ import type { Artist } from "@/lib/domain";
 import type { Locale } from "@/lib/i18n/locale";
 import { DEFAULT_LOCALE } from "@/lib/i18n/locale";
 import { getT } from "@/lib/i18n/translate";
+import { providerScopedId } from "@/lib/domain/scoped-id";
 import { Artwork } from "@/components/ui/artwork";
 
 export function ArtistCard({ artist, locale = DEFAULT_LOCALE }: { artist: Artist; locale?: Locale }) {
   const t = getT(locale);
-  const href = `/artist/${encodeURIComponent(artist.providerArtistId ?? artist.id)}`;
+  const href = `/artist/${providerScopedId(artist.provider, artist.providerArtistId ?? artist.id)}`;
   return (
     <Link
       href={href}

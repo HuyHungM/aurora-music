@@ -446,6 +446,99 @@ describe("persistence / a signed-in visitor", () => {
     );
   });
 
+  it("does not let a slow write clobber a newer change when TWO writes overlap", async () => {
+    // A local probe rather than the shared `Probe`: the shared one writes
+    // `glassAlpha` and `glassBlur`, i.e. DIFFERENT fields, so a clobber of the
+    // alpha would be invisible — the stale answer and the newer draft would
+    // agree on the field the assertion reads. These two buttons move the SAME
+    // field to values that can be told apart.
+    function SameFieldProbe() {
+      const value = useAppearance();
+      return (
+        <div>
+          <span data-testid="alpha">{value.appearance.glassAlpha}</span>
+          <button
+            type="button"
+            data-testid="setA"
+            onClick={() => value.update({ glassAlpha: 0.3 })}
+          />
+          <button
+            type="button"
+            data-testid="setB"
+            onClick={() => value.update({ glassAlpha: 0.9 })}
+          />
+        </div>
+      );
+    }
+
+    // The test above covers ONE write in flight. This covers the case it
+    // cannot reach: the debounce timer firing a SECOND flush while the first
+    // is still awaiting the server.
+    //
+    // That is the real shape of a drag. `schedule` arms a fresh timer on every
+    // change, so a change made DURING a write produces a second `flush()`
+    // invocation, not a continuation of the first. The second one does
+    // `pendingRef.current = null` as it takes its value — and the first one's
+    // only guard against adopting a stale answer is
+    // `if (pendingRef.current) continue`. The flag it reads is the same flag the
+    // other invocation just consumed, so the guard sees `null`, decides its
+    // answer IS current, and overwrites the draft with the OLDER value.
+    //
+    // Consequence the user sees: the slider shows the value they just set,
+    // then jumps back to the previous one, and — if the second response lands
+    // first — the older value is what stays.
+    const gates: ((result: AppearanceActionResult) => void)[] = [];
+    vi.mocked(setAppearanceAction).mockImplementation(
+      () =>
+        new Promise<AppearanceActionResult>((resolve) => {
+          gates.push(resolve);
+        }),
+    );
+
+    vi.useFakeTimers();
+    render(
+      <AppearanceRoot initial={DEFAULT_APPEARANCE} authenticated>
+        <SameFieldProbe />
+      </AppearanceRoot>,
+    );
+
+    // First change; the debounce elapses and flush #1 starts and blocks.
+    act(() => {
+      screen.getByTestId("setA").click();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(gates).toHaveLength(1);
+
+    // Second change WHILE flush #1 is awaiting; its own timer fires flush #2,
+    // which consumes the pending flag.
+    act(() => {
+      screen.getByTestId("setB").click();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(gates).toHaveLength(2);
+
+    // Now the FIRST write answers, with the older value it was actually given.
+    await act(async () => {
+      gates[0](accepted({ ...DEFAULT_APPEARANCE, glassAlpha: 0.3 }));
+    });
+
+    // The newer value must still be the draft. The stale answer owns a value
+    // the user has already moved past.
+    expect(
+      screen.getByTestId("alpha").textContent,
+      "a slow write's answer overwrote a newer draft",
+    ).toBe("0.9");
+
+    await act(async () => {
+      gates[1](accepted({ ...DEFAULT_APPEARANCE, glassAlpha: 0.9 }));
+    });
+    expect(screen.getByTestId("alpha").textContent).toBe("0.9");
+  });
+
   it("adopts the newest write's answer once it lands", async () => {
     // The companion, so the previous test cannot pass by simply never adopting
     // anything: a current write's answer IS adopted, clamping and all.
@@ -746,13 +839,84 @@ describe("playback is not reachable from the appearance root", () => {
     expect(shell().getAttribute("data-aurora-artwork")).toBe("on");
   });
 
-  it("removes the ambience properties from the document when it unmounts", () => {
-    // The properties are written to `document.documentElement` on purpose, so
-    // that a palette swap does not re-render the shell - but that also means
-    // React never removes them, because React did not put them there. Without
-    // an explicit cleanup, turning the feature off would leave the last
-    // album's colour on the document with nothing left to overwrite it.
-    const style = document.documentElement.style;
+  it("writes the ambience where the gradients resolve, not on the document", () => {
+    // The substitution trap (§32.2) as a behavioural assertion rather than a
+    // textual one. The artwork gradients are declared on the shell root, so a
+    // value written to `document.documentElement` is shadowed by the
+    // stylesheet default and the field silently renders transparent — the
+    // exact failure this file's predecessor measured in a real browser
+    // (strength `1` on the document, `0` at the shell, zero-size core).
+    // Seeding the document first proves the point both ways: the shell's own
+    // inline style must be the component's write, not the document's.
+    const docStyle = document.documentElement.style;
+    docStyle.setProperty("--aurora-artwork-strength", "1");
+    const { unmount } = render(
+      <AppearanceRoot
+        initial={{ ...DEFAULT_APPEARANCE, artworkAmbient: true }}
+        authenticated={false}
+      >
+        <div />
+      </AppearanceRoot>,
+    );
+    try {
+      const shellStyle = shell().style;
+      expect(
+        shellStyle.getPropertyValue("--aurora-artwork-strength"),
+        "the shell carries its own write, not the document's",
+      ).not.toBe("1");
+      expect(docStyle.getPropertyValue("--aurora-artwork-strength")).toBe("1");
+    } finally {
+      unmount();
+      docStyle.removeProperty("--aurora-artwork-strength");
+    }
+  });
+
+  it("cleans the element it wrote to, even if the shell is already gone", () => {
+    // The unmount race the capture above exists for: React removes children
+    // before running the tree's cleanups, so a cleanup that re-queries the
+    // shell falls back to the document element and leaves the colours on a
+    // detached node. Asserted by seeding the shell directly — the colours must
+    // be gone from THAT element afterwards.
+    const { unmount } = render(
+      <AppearanceRoot
+        initial={{ ...DEFAULT_APPEARANCE, artworkAmbient: true }}
+        authenticated={false}
+      >
+        <div />
+      </AppearanceRoot>,
+    );
+    const style = shell().style;
+    for (const property of [
+      "--aurora-artwork-primary",
+      "--aurora-artwork-strength",
+    ] as const) {
+      style.setProperty(property, "oklch(0.6 0.1 250)");
+    }
+    unmount();
+    expect(style.getPropertyValue("--aurora-artwork-primary")).toBe("");
+    expect(style.getPropertyValue("--aurora-artwork-strength")).toBe("");
+  });
+
+  it("removes the ambience properties from the shell when it unmounts", () => {
+    // The properties are written to the shell root on purpose, so that a
+    // palette swap does not re-render the shell - but that also means React
+    // never removes them, because React did not put them there. Without an
+    // explicit cleanup, turning the feature off would leave the last album's
+    // colour on the shell with nothing left to overwrite it.
+    //
+    // Written to the shell and not to the document element for the reason the
+    // substitution trap (§32.2) gives: the gradients that consume these values
+    // are declared on that same element, so a value on the document element is
+    // shadowed by the stylesheet default and never reaches the paint.
+    const { unmount } = render(
+      <AppearanceRoot
+        initial={{ ...DEFAULT_APPEARANCE, artworkAmbient: true }}
+        authenticated={false}
+      >
+        <div />
+      </AppearanceRoot>,
+    );
+    const style = shell().style;
     const properties = [
       "--aurora-artwork-primary",
       "--aurora-artwork-secondary",
@@ -765,15 +929,6 @@ describe("playback is not reachable from the appearance root", () => {
       style.setProperty(property, "oklch(0.6 0.1 250)");
     }
     expect(style.getPropertyValue("--aurora-artwork-strength")).not.toBe("");
-
-    const { unmount } = render(
-      <AppearanceRoot
-        initial={{ ...DEFAULT_APPEARANCE, artworkAmbient: true }}
-        authenticated={false}
-      >
-        <div />
-      </AppearanceRoot>,
-    );
     unmount();
 
     for (const property of properties) {

@@ -15,19 +15,22 @@ export async function addSearch(
     return;
   }
   await db.searchHistory.create({ data: { userId, query: trimmed } });
-  const count = await db.searchHistory.count({ where: { userId } });
-  if (count > HISTORY_LIMIT) {
-    const oldest = await db.searchHistory.findMany({
-      where: { userId },
-      orderBy: { searchedAt: "desc" },
-      select: { id: true },
-      skip: HISTORY_LIMIT,
+  // No `count()`. `skip: HISTORY_LIMIT` with no `take` returns rows only when
+  // the history is actually OVER the limit, so `oldest.length > 0` is already
+  // the exact predicate the count was computing — at the cost of one fewer
+  // sequential round trip on every single search. This is the same shape
+  // `recently-played.ts` adopted for its own trim, with the reasoning written
+  // out there; this call site was simply never brought in line.
+  const oldest = await db.searchHistory.findMany({
+    where: { userId },
+    orderBy: { searchedAt: "desc" },
+    select: { id: true },
+    skip: HISTORY_LIMIT,
+  });
+  if (oldest.length > 0) {
+    await db.searchHistory.deleteMany({
+      where: { userId, id: { in: oldest.map((row) => row.id) } },
     });
-    if (oldest.length > 0) {
-      await db.searchHistory.deleteMany({
-        where: { userId, id: { in: oldest.map((row) => row.id) } },
-      });
-    }
   }
 }
 

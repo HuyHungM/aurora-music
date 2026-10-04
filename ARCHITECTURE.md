@@ -79,6 +79,8 @@ Key files: `src/lib/music/music-engine.ts`, `src/lib/player/engine.ts`,
 | Autoplay UI | `src/components/player/autoplay-button.tsx` | Sole control; every surface renders it. One implementation, one state binder (`use-keep-listening.ts`), one holder/notification contract (`instance.ts`) |
 | Public playlist read | `src/lib/dal/playlist.ts` (`getSharedPlaylistByToken`) | Sole unauthenticated playlist read; returns `SharedPlaylist`, which has no `ownerId` and no `shareToken` |
 | Canonical track identity | `src/lib/domain/track-dedupe.ts` | Sole duplicate policy for playlists, the active queue and Recently Played; owns the key format and the auto-merge classifications (§11a) |
+| Artwork palette | `src/lib/appearance/artwork-palette.ts` | Sole artwork colour source for Ambient Light; owns hue/primary/secondary/glow and every cache decision (§32d) |
+| Audio analysis | `src/lib/appearance/music-reactive.ts` + `src/components/appearance/music-reactive-ambient.tsx` | Sole band extraction and smoothing for Ambient Light; owns bass/mid/treble/energy and the single animation loop. Never touches playback, never chooses a colour (§32e) |
 
 ## 3. MusicEngine
 
@@ -706,6 +708,27 @@ classifySearchInput(value)
   `getAlbum` are reached through structural `PlaylistCapable` /
   `AlbumCapable` narrowing, so a provider without the capability is a
   runtime refusal rather than a cast.
+- **Provider selection is capability-aware, never preference-aware.**
+  `getPreferredProvider()` returns the first non-mock provider in registration
+  order, and it exists for operations where any provider will do (track search,
+  track detail). It must NOT be used to decide whether a CAPABILITY exists.
+  Every capability-gated call resolves through
+  `getProviderForCapability(capability, { preferProviderId })`, which returns
+  the first registered provider that advertises that capability, preferring one
+  named by the caller. Registration order remains the tie-break, so resolution
+  is deterministic, and a capability nobody advertises still yields the same
+  `unsupported` result rather than a throw.
+- **Deep links carry their provider.** `providerAlbumId` / `providerTrackId` /
+  `providerArtistId` are only meaningful to the provider that issued them, so a
+  URL segment is `provider:id` (`@/lib/domain/scoped-id.ts`, a pure module so
+  client components may build one without importing the server-only registry).
+  A BARE id still resolves — by capability — so every link already in a user's
+  history, a bookmark or a shared playlist keeps working. The old behaviour was
+  to strip nothing and guess the preferred provider, which made `/album/[id]`
+  404 for every album that did not come from that one provider, and made the
+  home Popular / Featured / Albums sections render empty on any deployment with
+  a YouTube key while a capable Deezer sat registered.
+  Enforced by `src/lib/providers/__tests__/capability-resolution.test.ts`.
 - **An action boundary, not a feature branch:** `resolveSearchLink` is
   behind `src/app/actions/resolve-search-link.ts`, guarded by
   `guardServerAction({ bucket: "search" })`, which re-classifies its own
@@ -1109,7 +1132,7 @@ normalization definition in SQL.
   from the hostname and port the server was **booted** with, and the only proxy
   headers that could stand in for the public hostname are headers a
   misconfigured proxy gets wrong. So a deployment with a public hostname
-  declares it once (`https://app.auroramuzik.dpdns.org`) and the application stops
+  declares it once (`https://auroramuzik.dpdns.org`) and the application stops
   reading the origin off the wire. Validated and normalized to a bare
   `URL#origin` by `parsePublicOrigin` (`src/lib/config/public-origin.ts`) at
   the `parseEnv` boundary; a **path is rejected**, because Auth.js derives
@@ -1210,6 +1233,37 @@ normalization definition in SQL.
   provider path carries the provider's own flag in the toggle closure). The
   server boundary is independent — every mutation calls `requireUser()` first,
   so UI hiding is display logic, never authorization.
+- **Every optimistic mutation rolls back on BOTH failure shapes.** A server
+  action that returns `{ ok: false }` and a server action that REJECTS are two
+  different exits, and only the first one is visible to an `if (result.ok)`
+  check: a transport drop or a navigation abort throws past it, so the rollback
+  and the notification never ran and the control kept a state the database had
+  never agreed to. Every optimistic path therefore wraps its mutation in
+  `try`/`catch` with ONE shared failure routine — `liked-tracks.tsx` had this,
+  `follow-button.tsx` and the standalone branch of `like-button.tsx` did not.
+  The rollback restores the value CAPTURED at submit rather than a hardcoded
+  opposite, and a continuation that resolves after the user has navigated to a
+  different entity is dropped by comparing a key ref, so it cannot write the
+  previous entity's outcome — or its name in a toast — onto the current one.
+  A mutation that fails with no feedback at all is a false success state, so
+  there is no `if (result.ok)` without an `else` anywhere on a mutation:
+  `playlist-detail-client.tsx` had one and a failed track removal was invisible.
+- **Modal surfaces that are not `Dialog` use the counted scroll lock.**
+  `lockBodyScroll()` is exported from `dialog.tsx` and reused by the full player
+  and the queue sheet. A per-instance `overflow` capture is not nesting-safe:
+  closing the queue while the create-playlist dialog it opened was still on
+  screen restored `overflow` to `""` and let the page scroll behind a live
+  modal — the exact bug the counter exists to prevent.
+- **Notification announcements go through two persistent live regions.**
+  `NotificationHost` mounts one `role="status"` (polite) and one `role="alert"`
+  (assertive) region that exist empty from first paint, and writes the newest
+  item of each politeness into them. Each toast used to BE its own live region,
+  but those regions were inserted into the DOM together with their text, and a
+  live region that appears already populated is commonly not announced at all —
+  so most toasts were silent. Toasts are now `role="group"` with their title as
+  the accessible name, and the region announces the joined title and message.
+  `DialogClose` resolves its name from the active locale rather than a hardcoded
+  English literal, which all six production call sites inherited.
 
 ## 15. PWA architecture
 
@@ -1490,8 +1544,9 @@ instrumentation boot validation → next start → health → smoke
   Vercel's Node.js Functions. There is no `vercel.json`, no OpenNext adapter and
   no Workers bundle. `next.config.ts` lists `pg` in `serverExternalPackages` so
   the driver stays external rather than being bundled by the server compiler.
-  Cloudflare provides DNS only; the apex `auroramuzik.dpdns.org` 301-redirects
-  to the canonical `app.auroramuzik.dpdns.org` and is not an application route.
+  Cloudflare provides DNS only; the `app` subdomain
+  (`app.auroramuzik.dpdns.org`) 301-redirects to the canonical
+  `auroramuzik.dpdns.org` and is not an application route.
   The production database is **Neon** (Lakebase Postgres), reached through the
   Neon Vercel integration's pooled `DATABASE_URL`; migrations and dumps use its
   direct `DATABASE_URL_UNPOOLED`. Neon presents a publicly-trusted certificate,
@@ -2341,15 +2396,26 @@ rather than left as an undocumented gap.
 ### 32.1 One authority, and what it is allowed to touch
 
 `src/lib/appearance/appearance.ts` is the only module that decides what an
-appearance **is**: the shape, the eight ranges, the four presets, the defaults,
-and the wire format. `src/components/appearance/appearance-root.tsx` is the only
-client authority that decides what an appearance **does** to the document.
+appearance **is**: the shape, the eight ranges, the four presets, the ambient
+enums, the defaults, and the wire format.
+`src/components/appearance/appearance-root.tsx` is the only client authority that
+decides what an appearance **does** to the document.
 
-Neither imports anything from `src/lib/player`, `src/lib/music` or
-`src/lib/playback`. That is the whole of the "appearance changes cannot affect
-playback" claim, and it is asserted structurally in
-`src/quality-gates.test.ts` rather than behaviourally, because by the time a
-test can observe the engine an import has already been permitted.
+The **model** imports nothing from `src/lib/player`, `src/lib/music` or
+`src/lib/playback`, and `quality-gates.test.ts` asserts the boundary
+structurally in the direction that matters: nothing under the playback
+directories may import an appearance module, so appearance can never be pulled
+into a playback code path. The claim is structural rather than behavioural
+because by the time a test can observe the engine, an import has already been
+permitted.
+
+The **renderers** are the other half of that boundary and they are narrower than
+"no imports". `artwork-ambient.tsx` and `music-reactive-ambient.tsx` read the
+music engine, and they may only do three things with it: subscribe to state
+(which track, whether playing), and take the read-only `analysisStream()` tap
+(§32e). They cannot construct, load, play, pause, seek or reconfigure anything.
+`src/lib/player` importing nothing from `src/components/appearance` is what keeps
+that direction honest.
 
 Glass settings are deliberately **not** part of the playback session snapshot
 (§26.4). They are a rendering preference of one browser, not a fact about what
@@ -2387,6 +2453,44 @@ silently transparent.
 `design-tokens.test.ts` asserts the ladder's ordering at every point on the
 slider, and asserts that every stylesheet default equals the model's default —
 the two authorities agreeing is the thing most likely to rot silently.
+
+#### A derived token must be declared where the preference lands
+
+A custom property substitutes its `var()` references at the element that
+**declares** it, not the element that uses it. `AppearanceRoot` writes the
+user's values as an inline style on the **shell root**, so every token derived
+from one of them has to be declared on that same element or it is frozen.
+
+Declared at `:root` only, `--glass-filter` resolves `--p-appearance-blur`
+against the stylesheet default, inherits down already computed, and silently
+ignores the user — with the token defined, referenced, consumed, and correct in
+every textual check. That failure froze the entire appearance runtime: all eight
+Glass and Ambient sliders were inert while the application still looked right.
+It is the reason the two big `:root` blocks name the shell root as well.
+
+The cost is that a token derived from a preference has two declarations' worth
+of reach to reason about, so it is asserted structurally rather than left to
+review: `design-tokens.test.ts` computes the transitive closure of tokens derived
+from `APPEARANCE_TOKENS` and fails if any of them is declared on `:root` alone.
+Transitive because `--glass-filter` never mentions a preference directly, and
+`--aurora-artwork-layer` is two hops away.
+
+`:root` stays in the selector list and is not redundant. It is the document's
+default palette, and it is what the stylesheet's defaults are asserted against.
+
+**The corollary is that a portal in this application targets
+`[data-aurora-glass]`, not `document.body`.** `document.body` is a SIBLING of
+the shell root, so a surface portalled there inherits none of the user's inline
+values and silently renders the stylesheet defaults — which is exactly what
+`CreatePlaylistDialog` did until 2026-10-04, measured at `glassAlpha: 0.15`
+with the dialog resolving to `.6`. It now portals into the shell root, so it
+inherits by the ordinary DOM rule and `z-dialog` is unaffected (the shell root is
+an `isolate` stacking context that already contains every surface the dialog has
+to cover). `src/components/tracks/__tests__/add-to-playlist-portal.test.tsx`
+pins the target so it cannot regress. The three root-level boundaries that have
+no shell root at all — `not-found.tsx`, `error.tsx`, `global-error.tsx` — render
+the default theme by design; the reasoning, and why moving the appearance to
+`document.documentElement` was rejected, is in `docs/scope-boundaries.md`.
 
 ### 32.3 Four classes, and the hierarchy they encode
 
@@ -2559,12 +2663,31 @@ Mounted only when `artworkAmbient` is on, so an opted-out application never
 subscribes to the engine at all — not subscribing is strictly cheaper than
 subscribing and returning early.
 
-It writes five custom properties on `document.documentElement` and **not into
-React state**: the properties are read by one decorative layer, and pushing them
-through state would re-render the entire shell on every track change for a
-two-pixel gradient. Custom properties on `:root` are read by descendants without
-invalidating anything React knows about. Because React did not put them there,
-React will not remove them either, so there is an explicit unmount cleanup.
+It writes nine custom properties on the **shell root** (`[data-aurora-glass]`)
+and **not into React state**: the properties are read by one decorative layer,
+and pushing them through state would re-render the entire shell on every track
+change for a two-pixel gradient. Inline style on the element the gradients
+resolve against invalidates nothing React knows about. Because React did not
+put them there, React will not remove them either, so there is an explicit
+unmount cleanup — captured, not re-queried, because at unmount time the shell
+may already be gone and a fresh lookup would clean the wrong element.
+
+The shell root rather than `document.documentElement` is load-bearing, not
+tidy. The artwork gradients (`--aurora-artwork-core`, `--aurora-artwork-layer`,
+the per-edge layers) are declared on that same element — they have to be,
+because they derive from the user's `--p-appearance-aurora`, which
+`AppearanceRoot` writes as an inline style there, and a custom property
+substitutes its `var()` references at the element that declares it. A shell
+declaration therefore **shadows anything inherited from the document**: values
+written to `document.documentElement` never reach the gradients, and the whole
+field silently renders transparent — measured 2026-10-04 with the switch on
+and a track playing (strength `1` on the document, `0` at the shell, zero-size
+core, transparent player glow). A one-line probe proved it before the fix:
+forcing the same values onto the shell turned strength to `1`, the core to a
+904px field, and the player glow coloured. That is the §32.2 substitution trap
+wearing a different failure's clothes: the earlier fix moved the *declarations*
+onto the shell, which is exactly what made document-level *writes* stop
+working.
 
 Only colours are written — no layout property — so nothing reflows and no scroll
 position moves. The analysis is deferred to an idle callback, because a frame
@@ -2579,11 +2702,142 @@ span of `MAX - MIN`. 340 and 339.9 are the same colour, so nothing is lost; the
 bound is exclusive so a reader is not surprised by a hue of 170 in a test, and
 the property is asserted.
 
-### 32.10 What the accessibility position is
+### 32.10 The Player is the emitter, and the music moves the light
+
+The field is anchored to the **measured Player rect**, not to the viewport. The
+emitter is the Player's own root: two stacked `box-shadow`s, which paint outside
+the border box and therefore need no pseudo-element, no extra node and no
+stacking-context work. The gradient origin is published as
+`--aurora-artwork-source-x/y/w/h` from `artwork-ambient.tsx` inside a
+`requestAnimationFrame`, again never through React, because six numbers read only
+by a stylesheet are not worth a shell re-render per resize tick.
+
+There is deliberately **no `scroll` listener**. All three surfaces carrying
+`data-aurora-player` are `position: fixed`, so their viewport rect is invariant
+under document scrolling and a listener could only recompute an unchanged number.
+`src/app/__tests__/scrollbar.test.ts` holds that allowance at zero; if a future
+player surface is ever laid out in flow, that gate is the signal to add the
+listener, with the reason written down.
+
+**The nudge is a ratio, not a percentage.** Direction biases the field by moving
+the gradient centre, which means multiplying the player's measured height by a
+per-direction factor inside a `calc()`. CSS calc cannot multiply a length by a
+percentage — `64px * -70%` is an invalid expression, not a scaled length — and
+one invalid expression invalidates the whole gradient, then `--aurora-artwork-core`,
+then `--aurora-artwork-layer`, then the entire `background-image` on
+`.aurora-backdrop-ambient`. The field therefore painted nothing at all, and took
+the aurora wash with it. The factor is written `-0.7`, which is valid at any
+player size. This is the one place in the appearance token graph where a unit
+choice is load-bearing rather than stylistic.
+
+**The horizontal nudge was declared four times and read zero.** `--aurora-artwork-source-nudge-x`
+had a declaration in every direction rule and no consumer anywhere, so `Left` and
+`Right` did the same thing as each other and both did only half the work: the
+direction rules nulled three of the four viewport-edge gradients, and the
+player-anchored core gradient never moved. It now multiplies the player's
+**width** in the core gradient's centre, so a horizontal direction shifts the
+field sideways proportionally to the player exactly as a vertical one shifts it
+proportionally to the player's height. Measured on a 900×64 player: `all` and
+`bottom` resolve to `calc(0px + 900px / 2 + 900px * 0)`, `left` to `* -.55`,
+`right` to `* .55`, and `top` still `calc(800px + 64px / 2 + 64px * -.7)`.
+
+**Two glow multipliers, and why both default to 1.** `ambientEdgeGlow` scales the
+four `--aurora-artwork-edge-*` gradients and `ambientPlayerGlow` scales both of
+the Player emitter's `box-shadow`s. They are multipliers rather than new
+alphas because Intensity already owns how present the effect is; these answer
+"how much of it sits on the screen edges versus on the Player", which is a
+different question and was previously unanswerable — at `0` the edges paint
+nothing while the Player still glows. Both default to `1`, which multiplies by
+nothing, so an existing user's rendering is unchanged: any other default would
+dim the edges or the Player the moment they upgraded, which is the one change a
+preference update must never make unasked. Neither is named in
+`AMBIENT_PRESETS`, on the same grounds as direction/transition/motion — a preset
+has no opinion about where someone's light should sit. The consumption is
+asserted statically in `ambient-depth.test.tsx`, because the failure mode is the
+§32.2 substitution trap's: a token that is written to the shell root and never
+multiplied into a colour is a slider that moves and changes nothing.
+
+**Music reactivity.** `src/lib/appearance/music-reactive.ts` owns the analysis and
+nothing else: four 0..1 bands (`bass`, `mid`, `treble`, `energy`) read from one
+reused `Uint8Array`, an energy floor so a quiet passage reads as *quiet* rather
+than absent, and a per-band attack/release envelope. The ladder is deliberate —
+bass fastest attack and quickest release, energy fast attack and long release,
+treble slowest of both — because a symmetric coefficient always reads as either
+too laggy or too jittery, and treble on a fast attack is a strobe.
+
+Envelope coefficients are per-millisecond, so behaviour is frame-rate
+independent; `dt` is clamped so a backgrounded tab cannot teleport the value.
+
+`music-reactive-ambient.tsx` is the only place audio becomes a style. One
+`requestAnimationFrame` loop, one lazily-created `AudioContext`, one
+`AnalyserNode` at `fftSize` 512, and **no React state per frame** — the user's
+`off/subtle/full` setting is applied as a multiplier at the single point where
+numbers become styles, so `off` is a coefficient of zero rather than a second
+code path. The loop exists only while Ambient Light is on, reactivity is not
+`off`, audio is actually playing, and `document.visibilityState` is `visible`;
+`visibilitychange` cancels it and `isPlaying` never starts it.
+
+**Audio never chooses a colour.** No frequency value appears in a colour
+function anywhere in `globals.css`; the four `--aurora-music-*` properties are
+only ever multiplied into an artwork-derived alpha, radius or scale. That is what
+separates this from an RGB light show, and it is enforced by the shape of the
+maths rather than by restraint.
+
+**The tap cannot break playback, and usually does not exist.**
+`PlayerEngine.analysisStream()` uses `HTMLMediaElement.captureStream()`, NOT
+`createMediaElementSource`. Routing a media element through Web Audio is a
+one-way door — the source node is single-use, and if the resource turns out not
+to be CORS-readable the element goes **silent**. Aurora plays provider URLs that
+withhold CORS headers, so that approach would risk muting playback for a
+decorative effect. `captureStream` taps the output instead, so a failure costs
+the analysis and nothing else; the accessor returns `null` for both loud and
+quiet failure shapes — a thrown `SecurityError`, and a stream returned with zero
+audio tracks, which would otherwise build an analyser reading silence forever.
+
+Chromium refuses `captureStream()` on a cross-origin media element outright
+("Cannot capture from element with cross-origin data"). Since every provider
+stream is cross-origin and Aurora has no same-origin media route, **in practice
+this layer stands down and Ambient Light is artwork-only.** That is the designed
+degradation, not a defect, and it is why the feature may never be allowed to
+depend on the analysis path. Making it work would require proxying playback
+through our own origin — a new subsystem with a playback risk attached, and
+therefore out of scope until someone decides it is worth it
+(`docs/scope-boundaries.md`).
+
+### 32.11 What the accessibility position is
 
 - Every control is a native element where one exists: `input[type=range]`,
   `button[role=switch]`, a real `radiogroup` with a roving tabindex. Keyboard
   stepping, Home/End and the `slider` role come from the platform.
+- **The enumerated Ambient Light controls are native `<select>` elements**, which
+  is the same rule applied harder. They were a hand-built roving-tabindex
+  radiogroup first: five buttons plus ~90 lines of focus management per group,
+  reimplementing what the browser already ships — arrow-key stepping, the mobile
+  picker, the screen-reader announcement. A custom listbox built to match the
+  glass would also have been a second floating surface with its own focus trap
+  and positioning rules, for a control with at most five values. Each one is a
+  `<label for>` + `<select>` + `<option>`, so the association, the single tab
+  stop and the value semantics are the platform's to keep correct. The glass
+  `PresetGroup` remains a radiogroup: four options that are the panel's headline
+  choice, where the pills are the visual point.
+- **The select TRIGGER is ours; the select POPUP is the platform's, and that is
+  the split.** `ui/select.tsx` is the one select control in the product, and it
+  is a native `<select>` with `appearance: none`, a custom chevron, and the
+  app-wide `:focus-visible` outline — the shared indicator described below. The
+  closed control is therefore a 44px
+  aurora surface like every other control in the panel; the open menu is drawn
+  by the OS, which is the part **no web technology can style** — so a "custom
+  select" in the product sense can only buy a prettier popup by giving up the
+  mobile picker, the screen reader's announcement, type-ahead, and
+  Enter/Escape/Tab/click-outside, all of which the platform implements
+  correctly on every engine. That trade was declined, deliberately.
+  Two consequences are load-bearing and asserted in `select.test.tsx`: `pr-10`
+  is the ONLY thing reserving the space the platform's own arrow occupied, so a
+  long value ("Immersive") would otherwise run under the custom chevron; and
+  the height is stated as `h-11` rather than left to `py-2` + line-height,
+  which measured 38px — under the 40–44px band every neighbouring control
+  occupies. The chevron is `pointer-events-none` because it is decoration over
+  the control's own hit target.
 - State is never colour-only. The switch spells On/Off; the selected preset
   carries `aria-checked` **and** a check glyph; every slider has an
   `aria-valuetext` with its range, because "0.62" is meaningless spoken aloud.
@@ -2616,6 +2870,21 @@ the property is asserted.
   Music home", which Lighthouse's `label-content-name-mismatch` reported. A
   whitespace-only run fixes it and is not rendered as a flex item, so it costs
   the layout nothing.
+- **An SVG paint-server `id` is unique per instance, and it comes from
+  `useId()`.** `url(#id)` binds to the FIRST element with that id in the
+  *document*, not to the one in the nearest subtree, so a hardcoded gradient id
+  silently turns two instances into one. `Brand` renders twice — header and
+  sidebar — and with a shared `id="aurora-mark-g"` the header's stroke bound to
+  the **sidebar's** copy. Because the sidebar is `hidden lg:flex`, that paint
+  server sat inside a `display: none` subtree on every phone, resolved to
+  nothing, and the header logo rendered as a bare `#08070d` tile with no mark on
+  it. Desktop looked correct because the sidebar is visible there and happened
+  to paint the gradient for both. This is the same shape as the §32.2
+  substitution trap in reverse: the declaration is local, the reference is
+  global. Measured 2026-10-04 at 320–393px: two elements with id
+  `aurora-mark-g`, the first at `none@aside.aurora-glass`; after the fix, two
+  unique ids, both reachable, and the mark paints. Pinned by a uniqueness
+  assertion in `src/components/shell/__tests__/brand.test.tsx`.
 - **Known and open:** the header's primary sign-in control is
   `accent-foreground` on `--accent` (`#f5f5f8` on `#8d5bed`) at 14px, measured
   at **3.97:1** where AA needs 4.5:1. It cannot be fixed in the foreground:
@@ -2693,7 +2962,22 @@ the property is asserted.
     the field and closed by the page, never derived from `useTransition`
     (which does not observe `router.push`) or from the URL (which updates
     optimistically). Enforced by `search-locking.test.tsx`,
-    `search-pending.test.ts` and `e2e/search-loading.spec.ts`.
+    `search-pending.test.ts` and `e2e/search-loading.spec.ts`. The same lock
+    also drives the result skeleton (`app/(app)/search/search-pending-results.tsx`),
+    because `/search` is prefetched from the nav and a prefetched route skips
+    the framework's pending phase, so the route boundary cannot be the only
+    loading state: it would leave the previous results painted for the whole
+    request. The skeleton SWAPS the result area rather than overlaying it, so a
+    zero-result or failed response cannot be shown while a request is open, and
+    it is compared against the query the page is showing rather than against
+    "still locked" — the lock is only released in an effect, so an
+    is-pending-only test would leave the skeleton over the results for one
+    frame. Idle is not pending, and a pasted link never gets the text-search
+    skeleton. One `SearchResultSkeleton` serves both callers: the route
+    `loading.tsx` and the lock-driven island. Enforced by
+    `search-pending-results.test.tsx`, the in-flight block of
+    `search-link-page.test.tsx`, and the geometry guards in
+    `loading.test.tsx`.
 23. Recommendations are deterministic and local — the pipeline in
     `src/lib/recommendations/` reads Aurora's own signals, ranks with a
     documented rule set, and returns plain `Track`s. It never calls the
@@ -2769,16 +3053,74 @@ the property is asserted.
     cleanup. Enforced by `src/components/ui/__tests__/presence.test.tsx`
     (17 cases, including both rapid-toggle directions and the unmount
     budget).
-34. **The shared catalog's write path is a trust boundary, because there is
+35. **Hot-path statements are counted, not assumed.** The database is remote
+    (~296 ms per round trip), so a sequential `await` chain is the dominant
+    latency in this product — far more than any client-side cost. Three rules
+    follow, and each is pinned by a test that needs no database: every DAL
+    function takes its Prisma client as a parameter, so a recording stub can
+    assert the exact statement sequence (`src/lib/dal/__tests__/
+    hot-path-round-trips.test.ts`). (a) An existence question is answered by a
+    relation predicate in the `where`, never by resolving the provider ref to an
+    internal id first — `isTrackLiked`, `isFollowing`, `unlikeTrack` and
+    `unfollowArtist` are all one statement because of this. (b) A `count()`
+    that only gates a later bounded read is deleted; `skip: LIMIT` with no
+    `take` already returns exactly the excess rows, so `rows.length > 0` is the
+    same predicate (`addSearch`, and `recordPlayed` before it). (c) Two
+    statements with no data dependency between them are issued together
+    (`recordPlayed`'s catalog upsert and its duplicate scan). Note that Prisma
+    resolves a nested `include` as one statement PER RELATION LEVEL, so a
+    `findMany` with `include: { track: { include: { artist, album } } }` is
+    four statements, not one — and none of the DAL's nested reads are N+1,
+    because they are batched relation loads rather than per-row queries.
+36. **The canonical-duplicate matcher tier is prefiltered by title token.**
+    `CanonicalDuplicateIndex.find` is a Map lookup, then — only on a miss — a
+    scan of every survivor. That tier ran for every NON-duplicate item, so
+    collapsing an n-item collection cost O(n²) `TrackMatcher.match` calls even
+    with zero duplicates, on the main thread, from a user click
+    (`replaceQueue`). It is now an inverted index on the normalized title
+    tokens. This is a PREFILTER, not a second policy: `match()` hard-rejects a
+    pair as `title-mismatch` when the two titles share no token
+    (`track-matcher.ts`), so the union of a candidate's postings is a superset
+    of every mergeable survivor and scanning it can only skip pairs the matcher
+    would have rejected. Measured on 800 items: 319,600 matcher calls → 79,604.
+    `scripts/bench-dedupe.ts` is the runnable record.
+36. **An exhausted recovery cycle steps the track over; it does not stop the
+    session.** `playback/recovery.ts` owns the retry budget and its
+    classification, and the controller drives ONE track — it has no knowledge of
+    the queue. So when a cycle exhausts its budget the controller reports the
+    error and then calls an injected `onUnavailableTrack`, which the host wires
+    to `usePlayerStore.skipUnavailableTrack()`. Same split as
+    `reportDeadSource`: the controller decides *that* a track is unplayable, the
+    store decides *where to go*. The store owns the loop guard — one pass over
+    `playOrder`, reset by the engine's `play` event — so an all-unplayable queue,
+    and `repeat: "all"` which wraps, both terminate instead of cycling. The skip
+    reuses `nextQueueIndex`, the same primitive `next()` uses, so order, shuffle,
+    repeat and cursor semantics are unchanged, and it is deliberately NOT a user
+    action: it must not suppress the Continue Listening signal, because from the
+    listener's point of view playback simply continued. Before this, one dead
+    video was a dead end. Enforced by
+    `src/components/player/__tests__/skip-unavailable.test.tsx`.
+37. **The shared catalog's write path is a trust boundary, because there is
     nothing else to authorize it.** `Track`/`Artist`/`Album` have no owner,
     so the per-row `requireUser`/owner recheck that protects `Playlist`,
     `Like` and `Follow` has no analogue here; the *shape* of what a client may
-    cause to be written is the only control point that exists. `upsertTrack`
-    therefore excludes `streamUrl`, `previewUrl` and `metadata` from its
+    cause to be written is the only control point that exists. Every production
+    caller of `upsertTrack`/`upsertArtist`/`upsertAlbum` is fed an entity that
+    arrived from a client payload, and there is no authoritative writer to
+    refresh from — no provider read runs on those paths — so nothing can tell a
+    genuine metadata correction from a crafted payload. Therefore **all three
+    upsert `update` branches are identity-only**: a row is populated on create
+    and never has a client-supplied field written back onto it. `upsertTrack`
+    additionally excludes `streamUrl`, `previewUrl` and `metadata` from its
     parameter type and writes neither on create nor on update, and
     `addTrackSchema` omits them so the untrusted edge strips them. This does
     not weaken invariant 8 — it is the write-side counterpart of it: no URL
-    reaches the catalog, and none is ever playback input.
+    reaches the catalog, and none is ever playback input. The cost is stated
+    rather than hidden: a legitimately corrected title or artwork is not
+    persisted, which is the deliberate trade for an unowned shared row.
+    Enforced by `src/lib/dal/__tests__/catalog-write-boundary.test.ts` (the
+    write SHAPE, no database needed) and `catalog.db.test.ts` (the resulting
+    rows).
 35. **Bun is the only package manager, and the lockfile says so.** `bun.lock`
     is the sole dependency authority; a `package-lock.json` in the tree is a
     defect, not a compatibility shim, because two lockfiles silently disagree
@@ -2926,7 +3268,7 @@ the property is asserted.
     three dismissals), `e2e/menu-clipping.spec.ts` (the resolved geometry), and
     §21.4.
 
-### 32.11 Interaction states stay glass
+### 32.12 Interaction states stay glass
 
 The four surface classes describe surfaces at rest. A component that is
 translucent at rest and opaque the moment it is touched is a second design

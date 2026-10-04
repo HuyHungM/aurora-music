@@ -62,6 +62,20 @@ export interface AudioSurface {
   pause(): void;
   addEventListener(type: string, handler: (event: Event) => void): void;
   removeEventListener(type: string, handler: (event: Event) => void): void;
+  /**
+   * A parallel copy of what the element is playing, for OPTIONAL analysis.
+   *
+   * Deliberately NOT `createMediaElementSource`. Routing a media element through
+   * Web Audio is a one-way door: the source node can only be created once, and if
+   * the stream turns out not to be CORS-readable the element goes SILENT. Aurora
+   * plays provider URLs that routinely withhold CORS headers, so that approach
+   * would risk muting playback for the sake of a decorative effect.
+   *
+   * `captureStream` taps the output instead of intercepting it, so a failure
+   * here costs the analysis and nothing else. Optional, so a test fake never has
+   * to implement it.
+   */
+  captureStream?(): MediaStream;
 }
 
 /**
@@ -466,6 +480,41 @@ export class PlayerEngine {
    * URL is signed and short-lived, so returning `src` here would put a
    * credential-shaped string one careless log away from being printed.
    */
+  /**
+   * A parallel stream of the current output, for OPTIONAL Ambient Light
+   * analysis. `null` whenever the element cannot provide a USABLE one, which is
+   * the normal answer for a provider stream and must be treated as "no music
+   * reactivity", never as an error.
+   *
+   * TWO failure shapes, and both matter. Chromium THROWS a `SecurityError` for a
+   * media element whose resource is cross-origin without CORS, and for some
+   * states it instead hands back a stream carrying ZERO audio tracks. Only the
+   * first is loud; the second builds an analyser that reads silence forever,
+   * which is why a trackless stream is treated exactly like a throw.
+   *
+   * Called per analysis start, not per frame: the stream is long-lived and
+   * capturing it repeatedly would allocate a new one each time.
+   */
+  analysisStream(): MediaStream | null {
+    const capture = this.surface.captureStream;
+    if (typeof capture !== "function") {
+      return null;
+    }
+    let stream: MediaStream | null = null;
+    try {
+      stream = capture.call(this.surface) ?? null;
+    } catch {
+      return null;
+    }
+    // No audio track means nothing to analyse. Treating this as usable would
+    // spin an animation loop and an AudioContext for the rest of the session,
+    // reading zeros — a silent cost with no possible benefit.
+    if (!stream || stream.getAudioTracks().length === 0) {
+      return null;
+    }
+    return stream;
+  }
+
   mediaDiagnostics(): MediaDiagnostics {
     const element = this.surface as AudioSurface & {
       ended?: unknown;

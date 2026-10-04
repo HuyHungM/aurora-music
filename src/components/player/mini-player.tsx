@@ -24,6 +24,10 @@ export function MiniPlayer() {
   const currentTime = useMusicEngineState((s) => s.position);
   const duration = useMusicEngineState((s) => s.duration);
   const error = useMusicEngineState((s) => s.error);
+  // `currentIndex`, not `position`: `playAt` takes a queue SLOT and `position`
+  // is elapsed seconds. Same distinction `player-bar.tsx` makes for the same
+  // button.
+  const queueIndex = useMusicEngineState((s) => s.currentIndex);
   const repeat = useMusicEngineState((s) => s.repeat);
   // Same canonical source as the bar and the full player. Read from the engine
   // store, never from local state, so this control cannot disagree with the
@@ -51,6 +55,9 @@ export function MiniPlayer() {
   return (
     <div
       role="region"
+      // Same light-source role as the desktop bar: on a phone this is the only
+      // player on screen, so it is the only thing the ambient can emanate from.
+      data-aurora-player="mini"
       aria-label={t("player.miniPlayer")}
       // Same chrome glass level as the desktop player bar (`aurora-glass`),
       // so the two are one surface at two widths rather than two designs
@@ -67,7 +74,7 @@ export function MiniPlayer() {
         type="button"
         aria-label={t("player.expandPlayer")}
         onClick={openFullPlayer}
-        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1 text-left"
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-xl py-1 text-left"
       >
         <Artwork src={artworkUrl} alt="" size="thumbnail" pixelSize={44} />
         <span className="flex min-w-0 flex-1 flex-col gap-px">
@@ -75,6 +82,32 @@ export function MiniPlayer() {
           <span className="t-metadata truncate">{error ? error.message : artistName}</span>
         </span>
       </button>
+      {/* RETRY. The mini player swapped the artist line for the error text and
+          stopped there, so on a phone — where the bar is `hidden` and the full
+          player is a tap away — a failed track had no recovery affordance on the
+          surface that is actually on screen. The desktop bar and the full player
+          both had one; this was the odd surface out.
+
+          Reuses the same recovery path as the bar (`engine.playAt(queueIndex)`
+          at the current queue slot), so nothing about the retry mechanism is
+          duplicated — only the affordance is now present everywhere.
+
+          A sibling of the expand button rather than a child of it: a control
+          inside the track button would make the two a single, ambiguous
+          activation target. */}
+      {error && queueIndex >= 0 ? (
+        <button
+          type="button"
+          data-mini-retry
+          aria-label={t("player.retryPlayback")}
+          onClick={() => {
+            engine?.playAt(queueIndex);
+          }}
+          className="aurora-touch grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-2 hover:text-text-primary"
+        >
+          {t("common.retry")}
+        </button>
+      ) : null}
       {/* Shuffle, Repeat and Up next are `hidden sm:grid` (Phase 54).
 
           MEASURED, not assumed. At a 360px viewport this row is
@@ -125,6 +158,9 @@ export function MiniPlayer() {
       <button
         type="button"
         aria-label={t("player.upNext")}
+        // Read by the queue panel's outside-dismissal handler so the trigger
+        // counts as "inside" and keeps toggling.
+        data-queue-trigger
         onClick={openQueue}
         className="hidden h-11 w-11 shrink-0 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary sm:grid"
       >

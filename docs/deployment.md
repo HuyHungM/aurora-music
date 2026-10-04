@@ -36,14 +36,14 @@ is gitignored and never committed.
 
 ### Canonical origin and DNS
 
-- Canonical origin: `https://app.auroramuzik.dpdns.org`.
-- The apex `auroramuzik.dpdns.org` **301-redirects to the canonical origin**,
+- Canonical origin: `https://auroramuzik.dpdns.org`.
+- The `app` subdomain (`app.auroramuzik.dpdns.org`) **301-redirects to the canonical origin**,
   preserving path and query, over HTTPS, without a redirect loop. This redirect
-  is an edge/DNS responsibility (a Cloudflare redirect rule on the apex host),
-  **not** an application route — the app does not serve the apex.
-- Cloudflare remains the DNS provider for the zone. `app` resolves to the
-  Vercel deployment and the Vercel project's production domain is
-  `app.auroramuzik.dpdns.org`.
+  is an edge/DNS responsibility (a Cloudflare redirect rule on the `app` host),
+  **not** an application route — the app does not serve the `app` subdomain.
+- Cloudflare remains the DNS provider for the zone. The apex (`auroramuzik.dpdns.org`,
+  bare domain) resolves to the Vercel deployment and the Vercel project's
+  production domain is `auroramuzik.dpdns.org`.
 - TLS terminates at Vercel; the app does not force HSTS.
 
 ### Environment variables (Vercel Project Settings)
@@ -53,9 +53,9 @@ Production (and Preview, where useful) environment. Never commit values.
 
 | Variable | Notes |
 | --- | --- |
-| `DATABASE_URL` | Neon **pooled** connection string, written by the Neon Vercel integration. This is the application-traffic URL. Keep `sslmode=require` (or `verify-full`); never weaken verification. |
+| `DATABASE_URL` | Neon **pooled** connection string, written by the Neon Vercel integration. This is the application-traffic URL. Set `sslmode=verify-full` explicitly — see "Database TLS and the provider CA"; never weaken verification. |
 | `DATABASE_URL_UNPOOLED` | Neon **direct** (non-pooled) connection string, same database, host without the `-pooler` suffix. **Required for `prisma migrate deploy`, `pg_dump`/`pg_restore` and the restore drill.** See "Pooled vs direct" below. |
-| `AURORA_PUBLIC_URL` | `https://app.auroramuzik.dpdns.org` — required in production. |
+| `AURORA_PUBLIC_URL` | `https://auroramuzik.dpdns.org` — required in production. |
 | `AUTH_SECRET` | Required in production (Auth.js). Generate with `openssl rand -base64 32`. |
 | `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Optional; enables Google sign-in. |
 | `AUTH_GITHUB_ID` / `AUTH_GITHUB_SECRET` | Optional; enables GitHub sign-in. |
@@ -177,7 +177,7 @@ install (`bun install`)
 → migration deploy (`bunx prisma migrate deploy`, direct Neon URL)   ← separate, pre-promote step
 → deploy to Vercel (Vercel builds `next build` and starts the deployment)
 → readiness (`GET /api/health` → 200 `{"status":"ok"}`)
-→ smoke (`bun run smoke:prod https://app.auroramuzik.dpdns.org`)
+→ smoke (`bun run smoke:prod https://auroramuzik.dpdns.org`)
 → traffic
 ```
 
@@ -251,10 +251,19 @@ database only.
 
 The application reaches PostgreSQL through Prisma's driver adapter
 (`@prisma/adapter-pg`) with the connection in `DATABASE_URL`. TLS is decided by
-that URL: `sslmode=require`, `verify-ca` and `verify-full` all perform full
-certificate **and** hostname verification against the runtime's trust store
-(`pg-connection-string` currently treats all three as `verify-full`). Against
-Neon that succeeds with no extra configuration.
+that URL.
+
+**Write `sslmode=verify-full` explicitly.** That is the only spelling whose
+meaning does not depend on which `pg` version is installed. `require` and
+`verify-ca` are currently aliases of `verify-full`, but
+`pg-connection-string` prints a `SECURITY WARNING` saying so, and in pg v9 they
+adopt standard libpq semantics — where `require` means "encrypt if you can, do
+not verify the certificate". A URL written as `require` therefore verifies today
+and silently stops verifying on the next major bump, with nothing in this
+repository's guards catching it: `db-tls.ts` only refuses the downgrade when
+`uselibpqcompat=true` is present alongside it. `verify-full` has no such
+ambiguity, so it costs nothing to be correct now. Against Neon it succeeds with
+no extra configuration.
 
 When a provider signs with its own CA — the
 `self-signed certificate in certificate chain` failure, which is what the local
@@ -298,7 +307,7 @@ CA; never weaken the connection:
 2. Store it outside the repository and outside any web root (e.g.
    `~/.secrets/aiven-ca.pem`) and set `AURORA_DATABASE_CA_CERT_PATH` to that
    absolute path in `.env`.
-3. Leave `sslmode=require` (and the rest of `DATABASE_URL`) unchanged.
+3. Leave `sslmode=verify-full` (and the rest of `DATABASE_URL`) unchanged.
 4. Run `bun run db:check` (`SELECT 1` plus the `getUserByAccount` lookup
    against a sentinel key).
 
@@ -368,10 +377,37 @@ bug.
 refuses if the target equals the source database, and requires a plain lowercase
 name. It is not part of the default pipeline and must never be.
 
-**Unverified against Neon.** The drill was written and last run against Aiven.
-Neon supports multiple databases per branch and logical dumps, so it is expected
-to work, but it has not been re-run since production moved. Run it once against
-Neon — on a **branch**, not on `main` — and confirm before relying on it.
+**Verified against Neon (2026-10-03).** The drill above was replayed
+against Neon on a disposable branch, not on `main`:
+
+1. identified the pre-migration backup
+   (`aurora-main-pre-migration-20261002-234520.pgc`, 65,482 bytes,
+   `pg_restore --list` exit 0, 142 TOC entries, pre-migration index set
+   `Like_userId_idx` / `Follow_userId_idx` present);
+2. validated the backup (non-zero size guard, structurally readable);
+3. created disposable branch `restore-drill-20261003` off production `main`
+   (copy-on-write; production untouched);
+4. created disposable database `aurora_restore_drill` on that branch and
+   restored with `pg_restore --no-owner --no-privileges --exit-on-error
+   --single-transaction` over the **direct** endpoint (pooler is not used
+   for restore);
+5. ran `prisma migrate deploy` against the restore target: the backup held
+   8/10 migrations, the two pending (`drop_user_audio_eq`,
+   `like_follow_recency_indexes`) applied cleanly, `migrate status`
+   reached 10/10 with 0 pending and 0 failed;
+6. verified schema/data on the restored copy: `audioEq` absent, recency
+   indexes `Like_userId_createdAt_idx` / `Follow_userId_createdAt_idx`
+   present, row counts User 2 / Account 2 / Track 28 / RecentlyPlayed 29 /
+   Playlist 2 / Like 3 / Follow 2 / PlaybackState 2, zero orphaned
+   Like/Follow/RecentlyPlayed rows;
+7. compared against production `main`: identical migration list (10/10),
+   identical `Like`/`Follow` index sets, identical baseline counts;
+8. left the disposable branch for expiry/cleanup (never `main`).
+
+**Neon branch history is not a backup.** Branch copy-on-write and the
+6-hour point-in-time window undo only very recent mistakes. The external
+`pg_dump` custom-format archive above is the real backup; steps 1–8 are
+how it is proven restorable.
 
 ## Feature flags and kill switches
 
@@ -424,25 +460,25 @@ Set the public origin. It is what Google's registered redirect URI must match,
 and the only way to get there is to stop deriving it from the request:
 
 ```env
-AURORA_PUBLIC_URL="https://app.auroramuzik.dpdns.org"
+AURORA_PUBLIC_URL="https://auroramuzik.dpdns.org"
 ```
 
-`https://app.auroramuzik.dpdns.org` is the canonical production origin. The
-previous `https://auroramuzik.dpdns.org` host is the legacy deployment and must
+`https://auroramuzik.dpdns.org` is the canonical production origin. The
+previous `https://app.auroramuzik.dpdns.org` host is the legacy deployment and must
 not be treated as canonical anywhere.
 
 Google Cloud Console → Credentials → the OAuth client:
 
 | Field | Value |
 | --- | --- |
-| Authorized JavaScript origin | `https://app.auroramuzik.dpdns.org` |
-| Authorized redirect URI | `https://app.auroramuzik.dpdns.org/api/auth/callback/google` |
+| Authorized JavaScript origin | `https://auroramuzik.dpdns.org` |
+| Authorized redirect URI | `https://auroramuzik.dpdns.org/api/auth/callback/google` |
 
 GitHub OAuth app → Authorization callback URL:
 
 | Field | Value |
 | --- | --- |
-| Authorization callback URL | `https://app.auroramuzik.dpdns.org/api/auth/callback/github` |
+| Authorization callback URL | `https://auroramuzik.dpdns.org/api/auth/callback/github` |
 
 No port, no trailing slash, and no `http://`. The origin the *process* listens
 on is chosen by Vercel and is not part of OAuth. `AURORA_PUBLIC_URL` exists
@@ -457,29 +493,29 @@ Verify the generated URI rather than the configuration, because the two can
 disagree:
 
 ```bash
-curl -s https://app.auroramuzik.dpdns.org/api/auth/providers
+curl -s https://auroramuzik.dpdns.org/api/auth/providers
 # callbackUrl must be exactly:
-#   https://app.auroramuzik.dpdns.org/api/auth/callback/google
+#   https://auroramuzik.dpdns.org/api/auth/callback/google
 ```
 
 If `AURORA_PUBLIC_URL` and `AUTH_URL` (or `NEXTAUTH_URL`) are both set and
 disagree, the server refuses to boot. Do not resolve that by deleting one —
 they are one declaration in two places, and the disagreement is the bug.
 
-### Legacy origin (`auroramuzik.dpdns.org`)
+### Legacy origin (`app.auroramuzik.dpdns.org`)
 
-`app.auroramuzik.dpdns.org` is the canonical production origin. The previous
-`auroramuzik.dpdns.org` host is the legacy deployment and must not be treated
+`auroramuzik.dpdns.org` is the canonical production origin. The previous
+`app.auroramuzik.dpdns.org` host is the legacy deployment and must not be treated
 as canonical in configuration, naming, monitoring or reports. It may still
 exist during the migration; do not delete it, and do not change how it routes,
 without first inspecting the current Cloudflare routing configuration. Once the
 Vercel production origin is verified, turning the legacy host into a 301
-redirect to `https://app.auroramuzik.dpdns.org` (preserving path and query) is a
+redirect to `https://auroramuzik.dpdns.org` (preserving path and query) is a
 separate, reviewed change.
 
 ## Edge responsibilities (not in-app)
 
-- TLS termination (no HSTS forced by the app), the apex 301 redirect, rate
+- TLS termination (no HSTS forced by the app), the `app`-subdomain 301 redirect, rate
   limiting, backups.
 - Host-header sanitization is not a requirement *when* `AURORA_PUBLIC_URL` is
   set — the application pins the origin itself and ignores the header.

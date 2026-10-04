@@ -197,7 +197,7 @@ export function PlaylistArtworkEditor({
               placeholder={t("playlistArtwork.urlPlaceholder")}
               aria-describedby="playlist-artwork-hint"
               aria-invalid={!urlLooksValid ? true : undefined}
-              className="h-10 rounded-lg border border-border-subtle bg-surface-2 px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+              className="h-10 rounded-xl border border-border-subtle bg-surface-2 px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent"
             />
             <p id="playlist-artwork-hint" className="text-xs text-text-muted">
               {urlLooksValid ? t("playlistArtwork.urlHint") : t("playlistArtwork.urlInvalid")}
@@ -205,7 +205,7 @@ export function PlaylistArtworkEditor({
           </div>
 
           {error ? (
-            <p role="alert" className="text-sm text-red-400">
+            <p role="alert" className="text-sm text-danger">
               {error}
             </p>
           ) : null}

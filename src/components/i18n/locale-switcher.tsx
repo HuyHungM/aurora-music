@@ -101,10 +101,10 @@ export function LocaleSwitcher({ compact = false }: { compact?: boolean }) {
         ) : (
           <>
             <span className="flex min-w-0 flex-1 flex-col leading-tight">
-              <span className="text-[11px] uppercase tracking-[0.14em] text-text-muted">
+              <span className="t-utility uppercase tracking-[0.14em] text-text-muted">
                 {t("settings.language")}
               </span>
-              <span className="truncate text-[13px] font-semibold text-text-primary">
+              <span className="truncate text-sm font-semibold text-text-primary">
                 {LOCALE_NAMES[locale]}
               </span>
             </span>

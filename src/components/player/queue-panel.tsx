@@ -19,10 +19,13 @@ import { identityToTrack } from "@/lib/music/identity-track";
 import { Artwork } from "@/components/ui/artwork";
 import { Button } from "@/components/ui/button";
 import { focusFirstByLabel, useFocusTrap } from "@/components/ui/focus";
+import { lockBodyScroll } from "@/components/ui/dialog";
 import { AddToPlaylistMenu } from "@/components/tracks/add-to-playlist-menu";
+import { queueNotifications } from "@/components/ui/notify-events";
 import { getRadioSession, subscribeRadioSession } from "@/lib/radio/instance";
 import { KeepListeningToggle } from "@/components/player/keep-listening-toggle";
 import { useLocale } from "@/components/i18n/locale-provider";
+import { formatNumber } from "@/lib/i18n/translate";
 import { useSyncExternalStore } from "react";
 import { ArrowDownIcon, ArrowUpIcon, ListMusicIcon, PauseIcon, PlayIcon, QueueIcon, RadioIcon, XIcon } from "@/components/ui/icons";
 
@@ -81,6 +84,7 @@ function QueueItemMenu({
   trackTitle,
   disabled,
   onMove,
+  onRemove,
   canMoveUp,
   canMoveDown,
 }: {
@@ -92,6 +96,8 @@ function QueueItemMenu({
   // afford a visible drag handle. See the note on the move buttons in
   // `renderRow` for the measurement behind that decision.
   onMove?: (direction: "up" | "down") => void;
+  /** Panel-level removal: the panel owns the title for the confirmation. */
+  onRemove?: (position: number) => void;
   canMoveUp: boolean;
   canMoveDown: boolean;
 }) {
@@ -114,7 +120,9 @@ function QueueItemMenu({
   } = usePresence(isOpen);
   const engine = useMusicEngine();
   const { t } = useLocale();
-  const removeFromQueue = (position: number) => engine?.queue.remove(position);
+  const removeFromQueue = (pos: number) => {
+    onRemove?.(pos);
+  };
   // Same rule as every other menu in the product (`menu-placement.ts`),
   // measured against the surface this panel actually rendered.
   const openUp = useMenuOpenUp({
@@ -188,6 +196,13 @@ function QueueItemMenu({
         // portaled dialog owns its own); swallowing it here would yank
         // the whole row menu out from under them.
         if (showPlaylistMenu) {
+          // ...but returning is not enough. This listener is registered in
+          // CAPTURE, so returning lets the event continue to the panel-level
+          // handler on bubble, which closed the entire queue panel. The picker
+          // handles Escape itself (`add-to-playlist-menu.tsx`); the panel must
+          // not hear about it. Consuming here is what "it owns Escape" means.
+          e.preventDefault();
+          e.stopPropagation();
           return;
         }
         e.preventDefault();
@@ -195,6 +210,39 @@ function QueueItemMenu({
         // bubble): closing a row menu must not close the whole panel.
         e.stopPropagation();
         setIsOpen(false);
+        return;
+      }
+
+      // ROVING FOCUS. `role="menu"` promises arrow-key navigation, and this
+      // menu had none: its only key handler was Escape, so ArrowDown inside an
+      // open row menu fell through to the panel-level handler and SKIPPED TO
+      // THE NEXT TRACK instead of moving between the menu's own five items.
+      // `track-action-menu.tsx` has had this handler all along; the queue row
+      // menu simply never got it.
+      if (
+        e.key === "ArrowDown" ||
+        e.key === "ArrowUp" ||
+        e.key === "Home" ||
+        e.key === "End"
+      ) {
+        const items = Array.from(
+          surfaceRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ??
+            [],
+        );
+        if (items.length === 0) return;
+        // Consume in capture so the panel handler never sees the key at all.
+        e.preventDefault();
+        e.stopPropagation();
+        const current = items.indexOf(document.activeElement as HTMLElement);
+        const next =
+          e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? items.length - 1
+              : e.key === "ArrowDown"
+                ? (current + 1 + items.length) % items.length
+                : (current - 1 + items.length) % items.length;
+        items[next]?.focus();
       }
     }
 
@@ -273,7 +321,7 @@ function QueueItemMenu({
                 role="menu"
                 aria-label={t("menus.trackActions")}
                 {...menuPresence}
-                className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float pointer-events-auto absolute z-dropdown w-48 overflow-hidden rounded-lg border border-border-subtle`}
+                className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float pointer-events-auto absolute z-dropdown w-48 overflow-hidden rounded-xl border border-border-subtle`}
                 style={surfaceStyle}
               >
                 <button
@@ -433,7 +481,8 @@ function useRadioStatus() {
 
 export function QueuePanel() {
   const engine = useMusicEngine();
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  const queue = queueNotifications(t);
   const radioStatus = useRadioStatus();
   // Phase 54: decides whether this instance is a modal sheet or a non-modal
   // side panel. See the store above - the two are genuinely different
@@ -504,6 +553,64 @@ export function QueuePanel() {
     focusFirstByLabel(t("queue.upNext"));
   }, [closeQueue, t]);
 
+  /**
+   * OUTSIDE POINTER DISMISSAL.
+   *
+   * At `lg` there is no scrim, so before this the only non-Escape way out of
+   * the side panel was the close button: clicking anywhere in the page left an
+   * open panel over it. One `pointerdown` listener per open lifecycle covers
+   * mouse and touch with a single code path (pointer events are what a mouse
+   * click and a finger tap both produce), and it is registered only while the
+   * panel is open.
+   *
+   * WHY `pointerdown` AND NOT A DELAYED `click`. The failure the task warns
+   * about — trigger click opens, the same event then reaches the global
+   * listener and closes it — is a real hazard with any check that runs after
+   * the state update. It cannot happen here because containment is tested
+   * against the DOM, not against state: the trigger is inside the accepted
+   * region, so its own pointerdown returns before any close is considered. No
+   * `setTimeout`, no state read, no artificial ordering.
+   *
+   * THREE THINGS COUNT AS "INSIDE", and each is a real way for the panel to be
+   * legitimately in use while something outside it is pressed:
+   *
+   *   1. the panel itself, including the row menus portaled into its own
+   *      layer (`QueueMenuLayerContext`), which are children of it;
+   *   2. the queue trigger, which toggles rather than dismisses;
+   *   3. any OTHER overlay — the create-playlist dialog opened from a row
+   *      menu inside the panel is portaled to `document.body`, so it is not a
+   *      descendant of the panel. Pressing its fields must not yank the queue
+   *      out from under it.
+   */
+  useEffect(() => {
+    if (!isQueueOpen) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+
+      // 1. The panel, and therefore the row menus it owns.
+      if (dialogRef.current?.contains(target)) return;
+
+      // 2. The trigger: its pointerdown toggles, so it must not also dismiss.
+      const trigger = (target as Element).closest?.("[data-queue-trigger]");
+      if (trigger) return;
+
+      // 3. Another overlay stacked above this one.
+      const overlay = (target as Element).closest?.(
+        '[role="dialog"], [role="alertdialog"], [role="menu"]',
+      );
+      if (overlay) return;
+
+      closeAndRestoreFocus();
+    };
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [isQueueOpen, closeAndRestoreFocus]);
+
   // Phase 54: the sheet is modal, so it behaves like one.
   //
   // A 70svh panel floating over a still-scrollable page, with no scrim, no
@@ -519,11 +626,13 @@ export function QueuePanel() {
 
   useEffect(() => {
     if (!isModalQueue) return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previous;
-    };
+    // The COUNTED lock, not a private capture. A row menu inside the sheet can
+    // open the portaled create-playlist dialog; if the queue is then closed
+    // while that dialog is still up, a per-instance restore put `overflow` back
+    // to `""` and let the page scroll behind a live modal. That is the exact
+    // bug `dialog.tsx`'s counter was written to prevent, so this reuses it
+    // instead of keeping a second copy of the same logic here.
+    return lockBodyScroll();
   }, [isModalQueue]);
 
   useEffect(() => {
@@ -581,6 +690,19 @@ export function QueuePanel() {
 
   const currentItem = items.find(({ pos }) => pos === position) ?? null;
   const upcoming = items.filter(({ pos }) => (currentItem ? pos !== position : true));
+
+  // Row removal lives HERE, not in the row menu: the row knows its position
+  // and title, but only the panel can name the removed track for the
+  // confirmation and it owns the list it is removing from. `QueueItemMenu`
+  // therefore reports the position and this removes, so the two can never
+  // disagree about whether the entry is gone.
+  const removeQueueEntry = (pos: number) => {
+    const removed = items.find((entry) => entry.pos === pos)?.track;
+    engine?.queue.remove(pos);
+    if (removed && typeof removed.title === "string") {
+      queue.removed(identityToTrack(removed));
+    }
+  };
 
   const renderRow = ({ pos, track }: { pos: number; track: (typeof items)[number]["track"] }) => {
     if (!track) {
@@ -700,6 +822,7 @@ export function QueuePanel() {
               trackTitle={track.title}
               disabled={isCurrent}
               onMove={(direction) => moveQueueItem(pos, direction)}
+              onRemove={(removedPos) => removeQueueEntry(removedPos)}
               canMoveUp={pos > 0}
               canMoveDown={pos < items.length - 1}
             />
@@ -773,11 +896,26 @@ export function QueuePanel() {
         // from, and the panel clipping its own layer would put the clipping
         // back one level up. The rounded corners never needed it —
         // `rounded-2xl` clips this element's own background and border.
+        //
+        // DESKTOP ANCHOR (revised). It sat at a hard-coded
+        // `bottom: calc(6rem + 1.5rem)` from the VIEWPORT, which is two
+        // independent facts spelled out by hand: the player bar's height and a
+        // gap under it. The player bar's height already exists as
+        // `--p-layout-player` (globals.css), so the panel now derives from it
+        // and the two cannot drift apart when that token changes. The gap drops
+        // to `0.75rem` so the panel reads as attached to the control that
+        // opened it rather than floating at an arbitrary distance.
+        //
+        // The horizontal anchor is the other half of the misalignment: `right-6`
+        // put the panel 1.5rem from the viewport edge while the player bar's own
+        // content is inset by its `px-5` (1.25rem) inside the bar, so the panel's
+        // right edge never lined up with anything the user is looking at. It now
+        // sits on that same 1.25rem content edge, still inside the safe area.
         className={`presence-sheet aurora-glass-float fixed z-dialog mx-auto flex flex-col rounded-2xl border border-border-subtle focus:outline-none left-[max(1rem,env(safe-area-inset-left))] right-[max(1rem,env(safe-area-inset-right))] max-w-md ${
           hasCurrentTrack
             ? "bottom-[calc(var(--p-queue-sheet-bottom)+env(safe-area-inset-bottom))] max-h-[min(70svh,calc(100dvh-var(--p-queue-sheet-bottom)-env(safe-area-inset-bottom)-env(safe-area-inset-top)))]"
             : "bottom-[calc(4.5rem+env(safe-area-inset-bottom))] max-h-[min(70svh,calc(100dvh-4.5rem-env(safe-area-inset-bottom)-env(safe-area-inset-top)))]"
-        } lg:bottom-[calc(6rem+1.5rem)] lg:right-6 lg:left-auto lg:mx-0 lg:w-96`}
+        } lg:bottom-[calc(var(--p-layout-player)+0.75rem)] lg:right-[max(1.25rem,env(safe-area-inset-right))] lg:left-auto lg:mx-0 lg:w-96`}
       >
       <div className="flex items-center gap-2 border-b border-border-subtle px-4 py-3">
         <QueueIcon size={18} className="text-text-muted" />
@@ -786,7 +924,7 @@ export function QueuePanel() {
           <span className="ml-2 text-xs font-normal text-text-muted">
             {items.length === 1
               ? t("queue.tracksCountOne")
-              : t("queue.tracksCount", { count: items.length })}
+              : t("queue.tracksCount", { count: formatNumber(locale, items.length) })}
           </span>
           {radioStatus?.label ? (
             <span className="mt-0.5 block truncate text-xs font-normal text-accent">
@@ -795,6 +933,41 @@ export function QueuePanel() {
           ) : null}
         </h2>
         <span className="flex-1" />
+        {/* CLEAR. `clearQueue` has existed in the store since the queue did and
+            had zero production callers, which left a long radio session with no
+            exit except pressing Next once per entry — and made the documented
+            "Clear Queue overrides a radio session" invariant unreachable.
+
+            It calls the EXISTING store action, so the queue/player contract is
+            whatever it already was: the current track stops, the queue empties,
+            and persistence follows the same path it always did. Nothing about
+            the engine is reimplemented here.
+
+            `stopPropagation` because this sits inside the panel: without it the
+            click would also be seen by the panel's own outside-pointer logic,
+            which exempts `[role="dialog"]` but not a bare header button. The
+            clear would race the dismissal. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="aurora-touch shrink-0"
+          data-queue-clear
+          onPointerDown={(event) => {
+            // `pointerdown`, not just `click`. The panel's outside dismissal
+            // listens on `pointerdown`, which fires BEFORE `click`, so a
+            // `stopPropagation` on the click alone is too late — the panel has
+            // already unmounted and the clear would run against a dead tree.
+            // The panel exempts `[role="dialog"]` and the trigger; this button
+            // is inside the dialog but is not one, so it has to stop the event
+            // itself.
+            event.stopPropagation();
+          }}
+          onClick={() => {
+            engine?.queue.clear();
+          }}
+        >
+          {t("queue.clear")}
+        </Button>
         <Button variant="ghost" size="icon" className="h-11 w-11" aria-label={t("queue.close")} onClick={closeAndRestoreFocus}>
           <XIcon size={18} />
         </Button>

@@ -1,9 +1,0 @@
-{
-  "mcp": {
-    "Neon": {
-      "type": "remote",
-      "url": "https://mcp.neon.tech/mcp",
-      "enabled": true
-    }
-  }
-}

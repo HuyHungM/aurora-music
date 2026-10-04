@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { HeroSection } from "@/components/home/hero-section";
 import { usePlayerStore } from "@/lib/player/store";
 import { PlayerEngine } from "@/lib/player/engine";
 import { FakeAudioSurface, makePlayableTrack } from "@/lib/player/__tests__/fake-audio";
 import { mountTestFacade } from "@/components/player/__tests__/test-facade";
+
+vi.mock("@/app/actions/playlist", () => ({
+  listUserPlaylistsAction: vi.fn().mockResolvedValue({ ok: true, playlists: [] }),
+  addTrackToPlaylistAction: vi.fn().mockResolvedValue({ ok: true }),
+  createPlaylistAction: vi.fn().mockResolvedValue({ ok: true, playlistId: "new" }),
+}));
 
 let unmountFacade: (() => void) | undefined;
 
@@ -90,5 +97,39 @@ describe("HeroSection", () => {
     const track = makePlayableTrack("t1", { title: "Hero Track", albumName: "Hero Album" });
     render(<HeroSection track={track} />);
     expect(screen.getByText(/Hero Album/)).toBeTruthy();
+  });
+
+  it("renders the canonical More button beside Play", () => {
+    const track = makePlayableTrack("t1", { title: "Hero Track" });
+    render(<HeroSection track={track} />);
+    // Same localized trigger label as every other `TrackActionMenu`.
+    const more = screen.getByRole("button", { name: "Thao tác với Hero Track" });
+    expect(more).toBeTruthy();
+    // The menu's own wrapper (`relative shrink-0`) sits beside Play inside
+    // the same actions row — never an overlay on the artwork or metadata.
+    const play = screen.getByRole("button", { name: "Phát Hero Track" });
+    expect(play.parentElement).toBe(more.parentElement?.parentElement);
+    expect(play.parentElement?.className).toContain("flex");
+  });
+
+  it("opens the existing track action menu from More", async () => {
+    const user = userEvent.setup();
+    const track = makePlayableTrack("t1", { title: "Hero Track" });
+    render(<HeroSection track={track} />);
+    await user.click(screen.getByRole("button", { name: "Thao tác với Hero Track" }));
+    // The menu is the shared one: public actions present, no second menu.
+    expect(screen.getByRole("menu", { name: "Thao tác với bài hát" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Phát tiếp theo" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Thêm vào hàng chờ" })).toBeTruthy();
+  });
+
+  it("opens More with the keyboard", async () => {
+    const user = userEvent.setup();
+    const track = makePlayableTrack("t1", { title: "Hero Track" });
+    render(<HeroSection track={track} />);
+    const more = screen.getByRole("button", { name: "Thao tác với Hero Track" });
+    more.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("menu", { name: "Thao tác với bài hát" })).toBeTruthy();
   });
 });

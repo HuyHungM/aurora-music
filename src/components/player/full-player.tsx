@@ -11,6 +11,7 @@ import { PlayerLikeButton } from "@/components/tracks/liked-tracks";
 import { TrackActionMenu } from "@/components/tracks/track-action-menu";
 import { identityToTrack } from "@/lib/music/identity-track";
 import { focusFirstByLabel, useFocusTrap } from "@/components/ui/focus";
+import { lockBodyScroll } from "@/components/ui/dialog";
 import { usePresence } from "@/components/ui/presence";
 import { Button } from "@/components/ui/button";
 import { AutoplayButton } from "@/components/player/autoplay-button";
@@ -49,6 +50,18 @@ export function FullPlayer() {
   // One shared source for availability and labels: see `useShuffleControl`.
   const shuffleControl = useShuffleControl();
   const repeat = useMusicEngineState((s) => s.repeat);
+  // Playback failure. This surface used to read nothing from `error`, so on a
+  // phone — where the player bar is `hidden` and this takeover is the ONLY
+  // player — a track that could not be resolved left the user with a paused
+  // player, no explanation and no way to recover short of a reload. The bar has
+  // had a banner and a Retry since Phase 27; this is the same affordance, in the
+  // surface that is modal on small screens.
+  const error = useMusicEngineState((s) => s.error);
+  // `currentIndex`, NOT `position`. `position` is elapsed SECONDS; `playAt`
+  // takes a queue SLOT. `player-bar.tsx:51` reads the same field for the same
+  // Retry button, and copying it as `position` here made Retry on a 200-second
+  // track call `playAt(120)` against a 3-entry queue.
+  const queueIndex = useMusicEngineState((s) => s.currentIndex);
   const { t } = useLocale();
   const rd = repeatDisplay(repeat);
   const repeatLabel =
@@ -95,6 +108,20 @@ export function FullPlayer() {
   // the same logic in a third file.
   useFocusTrap(dialogRef, isFullPlayerOpen);
 
+  // SCROLL LOCK. This surface declares `aria-modal="true"` and covers the whole
+  // viewport, but the document behind it stayed scrollable — `overscroll-contain`
+  // is on the INNER scroller (the portrait column) and does not cover the
+  // `fixed inset-0 overflow-hidden` box itself. `Dialog` and the queue sheet
+  // both lock; this one did not. Same counted module lock, so an overlay opened
+  // from here (the queue sheet) releases it correctly instead of the queue's
+  // own per-instance capture stomping it.
+  useEffect(() => {
+    if (!isFullPlayerOpen) {
+      return undefined;
+    }
+    return lockBodyScroll();
+  }, [isFullPlayerOpen]);
+
   // Presence (Phase 48). Split deliberately from the track check below: when
   // playback stops there is no track to animate, so a full-screen takeover
   // with nothing in it must vanish immediately rather than fade an empty
@@ -117,6 +144,10 @@ export function FullPlayer() {
       ref={dialogRef}
       role="dialog"
       aria-label={t("player.nowPlayingDialog")}
+      // The full-screen takeover is the strongest emitter in the product: it
+      // fills the viewport, so the same anchored field that reads as a glow
+      // around the bar reads as an illuminated room here.
+      data-aurora-player="full"
       aria-modal="true"
       tabIndex={-1}
       {...fullPlayerPresence}
@@ -157,6 +188,32 @@ export function FullPlayer() {
           <XIcon size={20} />
         </Button>
       </div>
+
+      {/* PLAYBACK FAILURE. Sits directly under the header, above the
+          composition, so it is visible in portrait AND in the landscape
+          two-column layout without displacing the transport controls. `status`
+          rather than `alert`: the failure is reported, not urgent, and it must
+          not interrupt. Same markup and same retry path as the player bar's. */}
+      {error ? (
+        <div
+          role="status"
+          className="relative mx-4 mb-2 flex items-center gap-3 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-2 text-xs text-text-secondary"
+        >
+          <span className="min-w-0 flex-1">{error.message}</span>
+          <button
+            type="button"
+            aria-label={t("player.retryPlayback")}
+            onClick={() => {
+              if (queueIndex >= 0) {
+                engine?.playAt(queueIndex);
+              }
+            }}
+            className="aurora-touch shrink-0 rounded-full border border-border-strong px-3 py-1 font-semibold text-text-primary transition-colors hover:border-accent/50 hover:text-accent"
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      ) : null}
 
       {/* PHASE 54 - an intentional landscape composition.
 
@@ -266,7 +323,7 @@ export function FullPlayer() {
             duration={duration}
             onSeek={(v) => engine?.seek(v)}
           />
-          <div className="flex justify-between text-[11px] tabular-nums text-text-muted">
+          <div className="t-utility flex justify-between tabular-nums text-text-muted">
             <span>{formatPlaybackTime(currentTime)}</span>
             <span>{formatPlaybackTime(duration)}</span>
           </div>
@@ -367,6 +424,9 @@ export function FullPlayer() {
             size="icon"
             className="h-11 w-11 shrink-0"
             aria-label={t("player.upNext")}
+            // Read by the queue panel's outside-dismissal handler so the
+            // trigger counts as "inside" and keeps toggling.
+            data-queue-trigger
             onClick={openQueue}
           >
             <QueueIcon size={20} />

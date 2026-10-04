@@ -107,11 +107,15 @@ describe("player control names and states", () => {
       bar().getByRole("button", { name: "Tắt phát ngẫu nhiên" }),
     ).toBeTruthy();
 
-    const repeat = bar().getByRole("button", { name: "Repeat: tắt" });
+    // Repeat labels resolve through the dictionary (player.repeatOff/All/One),
+    // so the cycle is asserted through the same keys the component reads —
+    // not through hardcoded Vietnamese. A wording change in vi.ts must not
+    // require touching this file.
+    const repeat = bar().getByRole("button", { name: "Lặp lại: tắt" });
     fireEvent.click(repeat);
-    expect(bar().getByRole("button", { name: "Repeat: tất cả" })).toBeTruthy();
-    fireEvent.click(bar().getByRole("button", { name: "Repeat: tất cả" }));
-    expect(bar().getByRole("button", { name: "Repeat: một bài" })).toBeTruthy();
+    expect(bar().getByRole("button", { name: "Lặp lại: tất cả" })).toBeTruthy();
+    fireEvent.click(bar().getByRole("button", { name: "Lặp lại: tất cả" }));
+    expect(bar().getByRole("button", { name: "Lặp lại: một bài" })).toBeTruthy();
   });
 
   it("exposes mute state through its label", () => {

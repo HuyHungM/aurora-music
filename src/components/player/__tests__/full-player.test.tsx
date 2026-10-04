@@ -122,7 +122,7 @@ describe("FullPlayer", () => {
     expect(screen.getByRole("slider", { name: "Tua" })).toBeTruthy();
     expect(screen.getByRole("slider", { name: "Âm lượng" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /phát ngẫu nhiên/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /repeat/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /lặp lại/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Tiếp theo" })).toBeTruthy();
   });
 

@@ -308,10 +308,15 @@ export function SearchField({
   // resolved to, which would have made Glass Mode invisible in the one place
   // it is supposed to be most obvious.
   //
-  // `focus:ring-2 focus:ring-accent/25` is unchanged and deliberately so:
-  // focus visibility may not depend on a border becoming luminous (§37). The
-  // ring is an accent-coloured shadow, it is present in both glass states, and
-  // nothing about a lighter border can remove it.
+  // The `focus:ring-2 focus:ring-accent/25` pair is REMOVED from both, and
+  // `focus:outline-none` with it. `focus:outline-none` is (0,2,0) and therefore
+  // outranked the blanket `:focus-visible` outline in `globals.css`, so it
+  // killed the app-wide indicator; the 25%-alpha `box-shadow` it left behind
+  // measured ~1.9:1 against the canvas and was dropped outright under
+  // `forced-colors: active`. With both gone the global outline applies and is
+  // the indicator. `focus:border-accent` stays, and §37 still holds: focus
+  // visibility may not depend on a border becoming luminous, and now it does
+  // not — the outline is what a sighted keyboard user sees.
   //
   // `select-text` stays on both, which is also why this is a `const` above the
   // return rather than a comment inside the attribute list: the text-selection
@@ -328,13 +333,13 @@ export function SearchField({
   // resolve by stylesheet order, not by the order written here. Full literals.
   // Every token already ships elsewhere, so the locked state costs no new CSS.
   const pageFieldClass =
-    "aurora-glass h-13 w-full select-text rounded-2xl border border-border-strong py-3.5 pl-11 pr-12 text-[15px] text-text-primary shadow-sm placeholder:text-text-disabled focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 [&::-webkit-search-cancel-button]:appearance-none";
+    "aurora-glass h-13 w-full select-text rounded-2xl border border-border-strong py-3.5 pl-11 pr-12 text-[15px] text-text-primary shadow-sm transition-[border-radius] duration-200 placeholder:text-text-disabled focus:rounded-full focus:border-accent [&::-webkit-search-cancel-button]:appearance-none";
   const pageFieldClassLocked =
-    "aurora-glass h-13 w-full select-text rounded-2xl border border-border-strong py-3.5 pl-11 pr-12 text-[15px] text-text-muted shadow-sm placeholder:text-text-disabled focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 [&::-webkit-search-cancel-button]:appearance-none";
+    "aurora-glass h-13 w-full select-text rounded-2xl border border-border-strong py-3.5 pl-11 pr-12 text-[15px] text-text-muted shadow-sm transition-[border-radius] duration-200 placeholder:text-text-disabled focus:rounded-full focus:border-accent [&::-webkit-search-cancel-button]:appearance-none";
   const headerFieldClass =
-    "aurora-touch aurora-glass-nested h-10 w-full select-text rounded-full border border-border-subtle pl-10 pr-9 text-sm text-text-primary placeholder:text-text-disabled focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 [&::-webkit-search-cancel-button]:appearance-none";
+    "aurora-touch aurora-glass-nested h-10 w-full select-text rounded-full border border-border-subtle pl-10 pr-9 text-sm text-text-primary placeholder:text-text-disabled focus:border-accent [&::-webkit-search-cancel-button]:appearance-none";
   const headerFieldClassLocked =
-    "aurora-touch aurora-glass-nested h-10 w-full select-text rounded-full border border-border-subtle pl-10 pr-9 text-sm text-text-muted placeholder:text-text-disabled focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 [&::-webkit-search-cancel-button]:appearance-none";
+    "aurora-touch aurora-glass-nested h-10 w-full select-text rounded-full border border-border-subtle pl-10 pr-9 text-sm text-text-muted placeholder:text-text-disabled focus:border-accent [&::-webkit-search-cancel-button]:appearance-none";
 
   const fieldClass = isPage
     ? isSearching
@@ -353,37 +358,25 @@ export function SearchField({
       aria-busy={isSearching}
       className={
         isPage
-          ? "w-full max-w-2xl"
-          : "mx-auto hidden w-full max-w-xl flex-1 md:block"
+          ? // Full-bleed on phones, capped on tablet and desktop. The cap is
+            // `max-w-4xl` (896px, up from 672px): the /search field is the
+            // page's primary control, so it earns more than the old six-column
+            // measure, but beyond ~896px a single-line input buys nothing and
+            // only pushes eye travel. `mx-auto` centres whatever slack the cap
+            // leaves.
+            "mx-auto w-full md:max-w-4xl"
+          : // Shorter than it was: `md:max-w-md` (448px, down from 768px).
+            // The navbar field is a shortcut to /search, not the search
+            // surface itself — it only has to take a query, not to display a
+            // long one comfortably. Capping it keeps the header balanced on
+            // tablet and desktop instead of letting one control eat the row.
+            "mx-auto hidden w-full flex-1 md:block md:max-w-md"
       }
     >
       <label htmlFor={id} className="sr-only">
         {label}
       </label>
       <div className="relative">
-        {/*
-          ONE POSITIONED SLOT, TWO MARKS. The spinner REPLACES the magnifier
-          inside the same absolutely-positioned wrapper instead of being added
-          next to it, which is what keeps the field's width identical in both
-          states — a search that widened its own input would move the text the
-          user is reading under their cursor. It also costs nothing: the ring's
-          class string is copied verbatim from an existing spinner
-          (`add-to-playlist-menu.tsx`), so no new utility is emitted.
-        */}
-        <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-text-muted">
-          {isSearching ? (
-            <span
-              // Decorative: the state is already announced by the form's
-              // `aria-busy` and the region below, and a second `role="img"`
-              // would have the busy indicator read twice.
-              aria-hidden="true"
-              data-testid="search-spinner"
-              className="block h-5 w-5 animate-spin rounded-full border-2 border-text-muted border-t-transparent"
-            />
-          ) : (
-            <SearchIcon size={isPage ? 18 : 17} />
-          )}
-        </span>
         <input
           id={id}
           ref={inputRef}
@@ -406,6 +399,37 @@ export function SearchField({
           aria-describedby={isSearching && busyText ? busyId : undefined}
           className={fieldClass}
         />
+        {/*
+          ONE POSITIONED SLOT, TWO MARKS. The spinner REPLACES the magnifier
+          inside the same absolutely-positioned wrapper instead of being added
+          next to it, which is what keeps the field's width identical in both
+          states — a search that widened its own input would move the text the
+          user is reading under their cursor. It also costs nothing: the ring's
+          class string is copied verbatim from an existing spinner
+          (`add-to-playlist-menu.tsx`), so no new utility is emitted.
+
+          AFTER the input, deliberately. The input carries `aurora-glass`, whose
+          `backdrop-filter` makes it a stacking context, so it paints level with
+          this absolutely-positioned slot and the LATER of the two wins — put the
+          slot first, as it was, and the icon painted underneath the field's own
+          fill and was invisible. The clear button below has always been ordered
+          this way for the same reason, and no z-index is involved either way:
+          `z-10` would have been a raw layer number, which `layering.test.ts`
+          fails on purpose. Order is the fix; the layer stack stays total. */}
+        <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-text-muted">
+          {isSearching ? (
+            <span
+              // Decorative: the state is already announced by the form's
+              // `aria-busy` and the region below, and a second `role="img"`
+              // would have the busy indicator read twice.
+              aria-hidden="true"
+              data-testid="search-spinner"
+              className="block h-5 w-5 animate-spin rounded-full border-2 border-text-muted border-t-transparent"
+            />
+          ) : (
+            <SearchIcon size={isPage ? 18 : 17} />
+          )}
+        </span>
         {showClear ? (
           <button
             type="button"

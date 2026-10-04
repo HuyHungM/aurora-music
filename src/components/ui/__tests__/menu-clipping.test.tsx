@@ -119,6 +119,14 @@ describe("a card that hosts a menu trigger", () => {
     expect(clips(menu)).toEqual([]);
   });
 
+  it("does not clip the hero spotlight's action menu", async () => {
+    const { HeroSection } = await import("@/components/home/hero-section");
+    render(<HeroSection track={track} />);
+
+    const { menu } = await openTheMenu();
+    expect(clips(menu)).toEqual([]);
+  });
+
   it("rounds the decorative wash itself, so the corners survive the clip", () => {
     const { container } = render(
       <EntityHeader artworkAlt="cover" eyebrow="Bài hát" title="Track t1" />,

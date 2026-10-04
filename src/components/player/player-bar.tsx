@@ -66,6 +66,12 @@ export function PlayerBar() {
     <div
       role="region"
       aria-label={t("player.bar")}
+      // THE LIGHT SOURCE. Ambient Light treats this element's rendered bounds as
+      // the origin of the ambient field, so this surface is what glows rather
+      // than the thumbnail inside it. The attribute is also what
+      // `ArtworkAmbient` measures to anchor the field, which is why it is on
+      // all three player surfaces and not on the artwork.
+      data-aurora-player="bar"
       // `aurora-glass` replaces `bg-background-subtle/95 backdrop-blur-md`
       // (Phase 53, §29). The player is the surface most often overlapped by
       // scrolling content, which is exactly why the chrome glass level is the
@@ -161,13 +167,28 @@ export function PlayerBar() {
           </Button>
         </div>
 
-        {/* Secondary: time + queue + volume. The seek block stays
-            narrow at xl so the right zone can never overflow onto the
-            transport controls at 1280px; it widens where room allows. */}
+        {/* Secondary: seek + time + queue + volume.
+
+            SEEK IS VISIBLE FROM `lg`, NOT `xl`. It used to render only at
+            `xl` and up, which left every desktop user between 1024 and 1279px —
+            the most common laptop band — with no way to scrub and no elapsed or
+            total time at all. Only the Media Session scrub was available there.
+
+            It is NARROW at `lg` (`w-24`) and widens where the room genuinely
+            appears. The width ladder is measured against the bar's own grid at
+            1024px, the narrowest desktop this bar renders at: the sidebar takes
+            66, `px-5` 40, the two `gap-4` 32, and the transport cluster ~200,
+            leaving ~686px for the identity and secondary zones. The secondary
+            zone needs ~140px without seek and ~248px with a `w-24` seek (the
+            volume slider is still `xl`-gated there), so the identity zone keeps
+            ~438px — artwork 48, the title/artist column, Like and the menu.
+            Nothing is squeezed out and nothing can reach the transport column,
+            because both flanking grid tracks are `minmax(0,1fr)` and every
+            child carries `min-w-0`. */}
         <div className="flex min-w-0 items-center gap-3 justify-self-end">
-          <div className="hidden w-32 flex-col gap-1 xl:flex 2xl:w-48">
+          <div className="hidden w-24 flex-col gap-1 lg:flex xl:w-32 2xl:w-48">
             <SeekSlider position={currentTime} duration={duration} onSeek={(v) => engine?.seek(v)} />
-            <div className="flex justify-between text-[11px] tabular-nums text-text-muted">
+            <div className="t-utility flex justify-between tabular-nums text-text-muted">
               <span>{formatPlaybackTime(currentTime)}</span>
               <span>{formatPlaybackTime(duration)}</span>
             </div>
@@ -185,6 +206,9 @@ export function PlayerBar() {
               size="icon"
               className="h-11 w-11"
               aria-label={t("player.upNext")}
+              // Read by the queue panel's outside-dismissal handler so the
+              // trigger counts as "inside" and keeps toggling.
+              data-queue-trigger
               onClick={openQueue}
             >
               <QueueIcon size={20} />

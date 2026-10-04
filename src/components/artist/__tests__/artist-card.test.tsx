@@ -23,16 +23,18 @@ describe("ArtistCard", () => {
     expect(screen.getByText("Test Artist")).toBeTruthy();
   });
 
-  it("links to providerArtistId when available", () => {
+  it("links to a provider-scoped id, so the route can ask the right provider", () => {
+    // Provider-scoped because a bare providerArtistId left `/artist/[id]`
+    // guessing which provider to ask, and it guessed the preferred one.
     render(<ArtistCard artist={makeArtist({ providerArtistId: "ext-42" })} />);
     const link = screen.getByRole("link");
-    expect(link.getAttribute("href")).toBe("/artist/ext-42");
+    expect(link.getAttribute("href")).toBe("/artist/mock:ext-42");
   });
 
-  it("falls back to internal id when providerArtistId is missing", () => {
+  it("falls back to the internal id, still provider-scoped", () => {
     render(<ArtistCard artist={makeArtist({ providerArtistId: undefined })} />);
     const link = screen.getByRole("link");
-    expect(link.getAttribute("href")).toBe("/artist/a1");
+    expect(link.getAttribute("href")).toBe("/artist/mock:a1");
   });
 
   it("renders first genre when available", () => {

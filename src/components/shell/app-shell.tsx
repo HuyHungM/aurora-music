@@ -19,6 +19,7 @@ import {
   AuthPromptHost,
   LikedTracksProvider,
 } from "@/components/tracks/liked-tracks";
+import { NotificationHost } from "@/components/ui/notification-host";
 
 export async function AppShell({
   user,
@@ -47,25 +48,32 @@ export async function AppShell({
     .then((jar) => jar.has(INSTALL_DISMISS_COOKIE))
     .catch(() => false);
   const appearancePromise = getRequestAppearance();
-  const [locale, installDismissed, appearance] = await Promise.all([
-    localePromise,
-    installDismissedPromise,
-    appearancePromise,
-  ]);
-  const t = getT(locale);
   // Seed for the single client mirror of DAL likes (Phase 38): the
   // provider's optimistic toggles roll back against this same table,
   // so rows, menus, player, and track page can never diverge.
   //
-  // Kept OUT of the group above because it needs `user`, and it is the one
-  // read that is genuinely sequential with it. It is also the widest: up to
-  // 1000 provider-scoped keys per navigation. See ARCHITECTURE.md §13.1 for
-  // why it selects only the two columns it needs.
-  const initialLiked = user
-    ? (await listUserLikes(user.id, { limit: 1000 })).map(
-        (like) => `${like.provider}:${like.trackId}`,
+  // It used to be awaited AFTER the group below, on the reasoning that it needs
+  // `user` — but `user` is already a resolved prop of this component, not
+  // something awaited alongside these three. Nothing about this read depends on
+  // the locale, the cookie jar or the appearance, so putting it in the group
+  // costs nothing and removes one sequential database round trip from EVERY
+  // navigation in the app. It is also the widest read here (up to 1000
+  // provider-scoped keys), so at the repository's ~296 ms remote round trip that
+  // single move was the single largest avoidable latency on the shell's
+  // critical path. See ARCHITECTURE.md §13.1 for why it selects only the two
+  // columns it needs.
+  const likesPromise = user
+    ? listUserLikes(user.id, { limit: 1000 }).then((likes) =>
+        likes.map((like) => `${like.provider}:${like.trackId}`),
       )
-    : [];
+    : Promise.resolve<string[]>([]);
+  const [locale, installDismissed, appearance, initialLiked] = await Promise.all([
+    localePromise,
+    installDismissedPromise,
+    appearancePromise,
+    likesPromise,
+  ]);
+  const t = getT(locale);
   // Appearance is resolved here, once, and handed to `AppearanceRoot` as a
   // prop. Two independent reasons the shell root is the right place for it:
   //
@@ -149,6 +157,12 @@ export async function AppShell({
           <PlayerHost />
           {/* Announced once, politely, when the app is running installed. */}
           <InstalledAnnouncement />
+          {/* The one notification host. Mounted here — inside the shell but
+              outside every dialog, menu and player surface — so any feature
+              can notify without rendering its own container. Viewport-fixed
+              and pointer-transparent except on the toasts themselves, so it
+              never blocks the page behind it. */}
+          <NotificationHost />
         </LikedTracksProvider>
       </InstallProvider>
       <AuthPromptHost

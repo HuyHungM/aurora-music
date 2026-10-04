@@ -97,6 +97,55 @@ function referencedTokens(css: string): string[] {
 }
 
 /**
+ * Every declaration paired with the selector list of the rule that contains it.
+ *
+ * A plain declaration scan cannot answer "which selector declared this", and
+ * that is the whole question for the substitution rule: the same
+ * `--p-appearance-blur` reference means different things depending on whether
+ * the declaration sits on `:root` or on the shell root. Braces are counted
+ * over the comment-stripped copy so that prose containing a brace cannot
+ * desynchronise the nesting, and at-rules (`@media`, `@theme`) push their own
+ * prelude so a nested rule reports the selector that actually applies.
+ */
+function declarationsBySelector(): { name: string; value: string; selector: string }[] {
+  const css = GLOBALS.replace(
+    /@keyframes\s+[\w-]+\s*\{(?:[^{}]|\{[^{}]*\})*\}/g,
+    "",
+  );
+  const out: { name: string; value: string; selector: string }[] = [];
+  const stack: string[] = [];
+  let prelude = "";
+  let i = 0;
+  while (i < css.length) {
+    const ch = css[i];
+    if (ch === "{") {
+      stack.push(prelude.replace(/\s+/g, " ").trim());
+      prelude = "";
+      i++;
+      continue;
+    }
+    if (ch === "}") {
+      stack.pop();
+      prelude = "";
+      i++;
+      continue;
+    }
+    if (ch === ";") {
+      const m = prelude.match(/(--[a-z0-9-]+)\s*:\s*([^;{}]+)$/);
+      if (m && stack.length > 0) {
+        out.push({ name: m[1], value: m[2].trim(), selector: stack[stack.length - 1] });
+      }
+      prelude = "";
+      i++;
+      continue;
+    }
+    prelude += ch;
+    i++;
+  }
+  return out;
+}
+
+/**
  * The temporary shim: the run of declarations between the shim banner and
  * the end of the `:root` block. It is a set of top-level declarations
  * rather than a nested block, so it is sliced by its banner marker.
@@ -223,6 +272,49 @@ describe("design token integrity", () => {
     );
 
     expect(dangling).toEqual([]);
+  });
+
+  it("declares no preference-derived token on :root alone", () => {
+    // A custom property substitutes its `var()` references at the element
+    // that DECLARES it, not the one that uses it. `AppearanceRoot` writes the
+    // user's values as an inline style on the shell root, so a token derived
+    // from one of them (`--glass-filter` from `--p-appearance-blur`,
+    // `--aurora-artwork-core` from `--p-appearance-aurora`, and so on) has to
+    // be declared on that same element.
+    //
+    // Declared at `:root` instead, it resolves against the defaults above,
+    // inherits down already computed, and silently ignores the user. That
+    // failure is invisible to every other test in this file, because the
+    // wiring really is present: the token is defined, it is referenced, and
+    // nothing about the text is wrong. It froze the whole appearance runtime
+    // — every Glass and Ambient control inert while the app still looked
+    // correct — so it is asserted structurally here instead.
+    //
+    // The closure is transitive on purpose: `--glass-filter` never mentions a
+    // preference directly, and `--aurora-artwork-layer` is two hops away.
+    const writable = new Set<string>([
+      ...Object.values(APPEARANCE_TOKENS),
+      "--aurora-background-image",
+    ]);
+    const located = declarationsBySelector();
+    const derived = new Set<string>();
+    const queue = [...writable];
+    while (queue.length > 0) {
+      const target = queue.shift() as string;
+      for (const d of located) {
+        if (derived.has(d.name)) continue;
+        if (new RegExp(`var\\(\\s*${target}\\s*[,)]`).test(d.value)) {
+          derived.add(d.name);
+          queue.push(d.name);
+        }
+      }
+    }
+
+    const rootOnly = located
+      .filter((d) => derived.has(d.name) && d.selector === ":root")
+      .map((d) => d.name);
+
+    expect([...new Set(rootOnly)]).toEqual([]);
   });
 
   it("keeps the legacy shim alias-only (single source of truth, §73)", () => {

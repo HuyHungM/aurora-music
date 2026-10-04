@@ -1,7 +1,19 @@
 # Deterministic CI (Phase 24; Bun migration in Phase 50). No secrets, no live
 # providers, no credentials: the live playback suite self-skips without
-# AURORA_E2E_LIVE_PLAYBACK=1, and AUTH_SECRET below is a dummy dev value
-# (auth is not exercised here).
+# AURORA_E2E_LIVE_PLAYBACK=1, and AUTH_SECRET below is a dummy dev value.
+#
+# Authentication IS exercised, and always has been safe to: `e2e/auth.setup.ts`
+# seeds SYNTHETIC users and mints session JWTs against the `postgres:16`
+# SERVICE CONTAINER in this job's `DATABASE_URL` — never a shared or remote
+# database — and `auth-cleanup` deletes them afterwards and asserts zero
+# leftovers. AUTH_SECRET is a placeholder precisely because nothing here
+# reaches a real provider.
+#
+# The `e2e` job runs `test:e2e:playback`, which selects `chromium` AND both
+# phone projects. The phone projects existed and were fully configured but
+# were never selected by any script, so `e2e/mobile-layout.spec.ts` — the
+# sweep that asserts the 44px touch floor and the header overflow bands —
+# only ever ran at a desktop profile in CI.
 #
 # Bun is the canonical package manager: bun.lock is the only lockfile and
 # `bun install --frozen-lockfile` is the only dependency install. Node is

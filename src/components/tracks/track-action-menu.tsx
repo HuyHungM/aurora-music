@@ -3,12 +3,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { Track } from "@/lib/domain";
 import { useMusicEngine } from "@/lib/music/use-music-engine";
-import { CheckIcon, PlusIcon, SkipForwardIcon, ListMusicIcon, RadioIcon } from "@/components/ui/icons";
+import { HeartIcon, PlusIcon, SkipForwardIcon, ListMusicIcon, RadioIcon } from "@/components/ui/icons";
 import { getRadioSession } from "@/lib/radio/instance";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { usePresence } from "@/components/ui/presence";
 import { useMenuOpenUp } from "@/components/ui/menu-placement";
 import { AddToPlaylistMenu } from "./add-to-playlist-menu";
+import { queueNotifications } from "@/components/ui/notify-events";
 
 function TrackActionMenuContent({
   track,
@@ -31,8 +32,17 @@ function TrackActionMenuContent({
 }) {
   const engine = useMusicEngine();
   const { t } = useLocale();
-  const playNext = (track: Track) => engine?.queue.playNext(track);
-  const addToQueue = (track: Track) => engine?.queue.add(track);
+  // Posters take the caller's own `t()` — nothing in notify-events reads
+  // locale, so importing it can never pull the provider graph.
+  const queue = queueNotifications(t);
+  const playNext = (track: Track) => {
+    engine?.queue.playNext(track);
+    queue.playNext(track);
+  };
+  const addToQueue = (track: Track) => {
+    engine?.queue.add(track);
+    queue.added(track);
+  };
   const menuRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef<HTMLButtonElement[]>([]);
 
@@ -102,7 +112,7 @@ function TrackActionMenuContent({
       role="menu"
       aria-label={t("menus.trackActions")}
       {...presenceProps}
-      className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float absolute right-0 z-dropdown w-48 overflow-hidden rounded-lg border border-border-subtle ${
+      className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float absolute right-0 z-dropdown w-48 overflow-hidden rounded-xl border border-border-subtle ${
         openUp ? "bottom-full mb-1" : "top-full mt-1"
       }`}
     >
@@ -145,11 +155,16 @@ function TrackActionMenuContent({
           onClick={onLikeToggle}
           className="flex w-full items-center gap-3 px-3 py-2.5 text-sm text-text-primary transition-colors hover:bg-surface-2/60 focus:bg-surface-2/60 focus:outline-none active:bg-surface-2"
         >
-          {isLiked ? (
-            <CheckIcon size={16} className="text-accent" />
-          ) : (
-            <span className="h-4 w-4" />
-          )}
+          {/* Same HeartIcon the LikeButton uses, at the same size as every
+              other row icon (16px, gap-3, text-muted). Liked fills with the
+              accent exactly like LikeButton's `fill-accent`; unliked stays
+              the outline every sibling row already has. The icon is
+              decorative — `base()` sets aria-hidden — so the menuitem's
+              accessible name stays the label text alone. */}
+          <HeartIcon
+            size={16}
+            className={isLiked ? "fill-accent text-accent" : "text-text-muted"}
+          />
           <span>{isLiked ? t("menus.unlike") : t("menus.like")}</span>
         </button>
       ) : null}

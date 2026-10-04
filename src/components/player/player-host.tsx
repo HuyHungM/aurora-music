@@ -38,6 +38,10 @@ import { QueuePanel } from "./queue-panel";
 import { FullPlayer } from "./full-player";
 import { createRadioSession } from "@/lib/radio/session";
 import { setRadioSession } from "@/lib/radio/instance";
+import { LOCALE_COOKIE, resolveLocale, type Locale } from "@/lib/i18n/locale";
+import { getT } from "@/lib/i18n/translate";
+import { notifyQueueFinished } from "@/components/ui/notify-events";
+import { TrackAnnouncer } from "@/components/player/track-announcer";
 import { createInfiniteListeningCoordinator } from "@/lib/listening/coordinator";
 import { setKeepListeningCoordinator } from "@/lib/listening/instance";
 import { getKeepListeningAction } from "@/app/actions/listening";
@@ -103,6 +107,13 @@ export function PlayerHost() {
       reportDeadSource: (ref) => {
         void invalidatePlaybackResolutionAction(ref.source, ref.id).catch(() => {});
       },
+      // A track whose recovery budget is exhausted is unplayable, not
+      // transiently broken. Stepping over it is what stops one dead video from
+      // ending the session. The store owns the queue, its cursor and the
+      // loop guard, so the decision is injected rather than reimplemented here.
+      onUnavailableTrack: () => {
+        usePlayerStore.getState().skipUnavailableTrack();
+      },
     });
     setPlaybackController(controller);
 
@@ -140,6 +151,24 @@ export function PlayerHost() {
     music.initialize();
     setMusicEngine(music);
     logger.info("PlayerHost initialized", { event: "app_initialized" });
+
+    // Natural queue completion → one toast. The facade emits `queueEnd`
+    // only when `ended` arrives with no next track and no pending load —
+    // never for an empty start, never for a manual clear (clear routes
+    // through stop() → queueManager.clear(), not `ended`), and never on
+    // re-render. The locale is read live from the cookie per completion
+    // (not captured), and the store's stable id collapses any double
+    // emit into a single toast.
+    const unsubscribeQueueEnd = music.on("queueEnd", () => {
+      // Client-safe locale read: the cookie is the only request-free
+      // signal; absent/parasitic values fall back to Vietnamese.
+      const match =
+        typeof document !== "undefined"
+          ? document.cookie.match(new RegExp(`(?:^|;\\s*)${LOCALE_COOKIE}=([^;]*)`))
+          : null;
+      const locale: Locale = resolveLocale(match?.[1]);
+      notifyQueueFinished(getT(locale));
+    });
 
     const persistence = new PlaybackPersistenceController({
       getPlaybackStateAction,
@@ -340,6 +369,7 @@ export function PlayerHost() {
       tornDown = true;
       document.removeEventListener("visibilitychange", handleVisibilityHidden);
       window.removeEventListener("pagehide", handlePageHide);
+      unsubscribeQueueEnd();
       unsubscribeStore();
       keepListening.end();
       setKeepListeningCoordinator(null);
@@ -364,6 +394,12 @@ export function PlayerHost() {
           lifecycle is tied to the engine's, but it holds no playback state of
           its own - it observes this store and calls its own pause(). */}
       <PlaybackOwnershipHost />
+      {/* The ONE place the current track is announced to screen readers.
+          Mounted beside the surfaces rather than inside any of them, because the
+          mini player and the full player are both mounted at the same time at
+          most widths — a region in each would announce every track change twice.
+          See `track-announcer.tsx`. */}
+      <TrackAnnouncer />
       <MiniPlayer />
       <PlayerBar />
       <QueuePanel />

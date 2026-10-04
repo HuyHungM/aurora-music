@@ -30,6 +30,7 @@ import {
 } from "@/app/actions/appearance";
 import { AuroraBackdrop } from "./aurora-backdrop";
 import { ArtworkAmbient } from "./artwork-ambient";
+import { MusicReactiveAmbient } from "./music-reactive-ambient";
 
 /**
  * How long a continuous control settles before it is written anywhere.
@@ -228,9 +229,24 @@ export function AppearanceRoot({
       setStatus("saving");
       const result = await writeToAccount(queued);
 
-      if (pendingRef.current) {
-        // A newer change arrived mid-flight. The draft stays as the user left
-        // it, and the next pass writes the newer value instead.
+      // IS THE DRAFT STILL WHAT WE SENT? Not "is something queued".
+      //
+      // `pendingRef` is a QUEUE, and using a queue as a mutual-exclusion flag
+      // is the bug this replaces. A change made while this write is in flight
+      // arms a SECOND timer, so a second `flush()` starts, takes its value and
+      // sets `pendingRef.current = null` — consuming the very flag the first
+      // flush was about to read. The first flush then saw `null`, concluded its
+      // own answer was current, and adopted it, so a drag's slider jumped back
+      // to the previous value (measured: draft `0.9` overwritten by the answer
+      // to `0.3`).
+      //
+      // `draftRef` is the authority on what the user is looking at right now,
+      // and no other invocation can clear it. Identity — not equality — because
+      // a preset legitimately produces a value equal to what is already shown,
+      // and an unchanged draft is then genuinely this write's to adopt.
+      if (draftRef.current !== queued) {
+        // The user moved on while this was out. Their value stands; the newer
+        // write that carries it is already in flight or queued.
         continue;
       }
 
@@ -401,11 +417,28 @@ export function AppearanceRoot({
         // `data-aurora-blur` rules in globals.css.
         data-aurora-blur={appearance.glassBlur === 0 ? "off" : "on"}
         data-aurora-artwork={appearance.artworkAmbient ? "on" : "off"}
+        // The three Ambient Light switches, as attributes rather than as
+        // computed style. Each one selects a stylesheet rule, which is what
+        // lets a single-edge direction set the other three gradients to `none`
+        // — a real removal from the `background-image` list — instead of
+        // leaving four layers with three at zero alpha.
+        data-aurora-artwork-direction={appearance.ambientDirection}
+        data-aurora-artwork-transition={appearance.ambientTransition}
+        data-aurora-artwork-motion={appearance.ambientMotion}
         style={style}
         className={className ? `relative isolate flex min-h-dvh ${className}` : "relative isolate flex min-h-dvh"}
       >
         <AuroraBackdrop />
-        {appearance.artworkAmbient ? <ArtworkAmbient /> : null}
+        {appearance.artworkAmbient ? (
+          <>
+            <ArtworkAmbient />
+            {/* Music reactivity is a sibling of the palette renderer and not part
+                of it: the palette owns COLOUR, this owns MOVEMENT. Mounting it
+                under the same flag is what makes "Ambient Light off" stop audio
+                analysis as well as colour extraction. */}
+            <MusicReactiveAmbient />
+          </>
+        ) : null}
         {children}
       </div>
     </AppearanceContext.Provider>

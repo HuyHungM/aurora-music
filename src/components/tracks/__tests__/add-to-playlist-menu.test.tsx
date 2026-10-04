@@ -32,7 +32,7 @@ describe("AddToPlaylistMenu", () => {
     render(<AddToPlaylistMenu track={mockTrack} onClose={vi.fn()} />);
 
     expect(screen.getByRole("menu", { name: "Thêm vào playlist" })).toBeTruthy();
-    expect(screen.getByText("Đang tải playlist...")).toBeTruthy();
+    expect(screen.getByText("Đang tải playlist…")).toBeTruthy();
   });
 
   it("loads and displays playlists", async () => {

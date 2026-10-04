@@ -77,7 +77,7 @@ describe("Phase 6F accessibility and touch target fixes", () => {
     it("repeat button meets 44px minimum", () => {
       usePlayerStore.setState({ currentTrack: makeTrack("1") });
       render(<MiniPlayer />);
-      const btn = screen.getByRole("button", { name: /repeat/i });
+      const btn = screen.getByRole("button", { name: /lặp lại/i });
       expect(btn.className).toContain("h-11");
       expect(btn.className).toContain("w-11");
     });

@@ -333,8 +333,11 @@ describe("scrollbar system", () => {
     }
 
     // And the glass alphas must actually be lifted, or the override is a
-    // second copy of the same values.
-    const base = /:root\s*\{([\s\S]*?)\n\}/.exec(GLOBALS)?.[1] ?? "";
+    // second copy of the same values. The base block's selector is a LIST,
+    // because every token derived from a preference is declared both at `:root`
+    // and on the shell root (see the stylesheet header): `:root` alone is the
+    // default palette and would not match.
+    const base = /:root[^{}]*\{([\s\S]*?)\n\}/.exec(GLOBALS)?.[1] ?? "";
     const baseOpacity = /--scrollbar-opacity:\s*([\d.]+%)/.exec(base)?.[1];
     const glassOpacity = /--scrollbar-opacity:\s*([\d.]+%)/.exec(glassBody)?.[1];
     expect(baseOpacity).toBeDefined();

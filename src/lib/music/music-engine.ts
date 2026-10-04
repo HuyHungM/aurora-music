@@ -357,8 +357,16 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
     return lastItems;
   }
 
-  function snapshotPlayOrder(): readonly number[] {
-    const playOrder = queueManager.getOrderState().playOrder;
+  /**
+   * Reference-stabilized play order.
+   *
+   * Takes the order as a parameter because `buildSnapshot` already holds it:
+   * `getOrderState()` returns a defensive copy, so calling it here as well cost
+   * a second full `[...playOrder]` allocation and a second O(n) scan on every
+   * snapshot — and a snapshot is built once per store notification PER
+   * SUBSCRIBER.
+   */
+  function snapshotPlayOrder(playOrder: readonly number[]): readonly number[] {
     // Same reference-stabilization as snapshotQueue: the manager hands back
     // a defensive copy, so without this every snapshot would look like a
     // reorder and useSyncExternalStore would re-render forever.
@@ -406,13 +414,21 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
     // from the reference cache below. This runs once per store notification
     // per subscriber, so at 4Hz engine ticks the discarded map was the
     // single largest allocation on the playback path.
+    //
+    // ONE `getOrderState()`, not two. `snapshotPlayOrder()` used to call it
+    // again internally, and each call copies the whole play order
+    // (`[...state.playOrder]`), so every snapshot allocated the array twice and
+    // scanned it twice. The order is already in hand here, so the inner call is
+    // now given it. Same published value, half the array work — and this is
+    // the part of the snapshot cost that can be removed without depending on
+    // any assumption about how the store hands out its state object.
     const order = queueManager.getOrderState();
     // Frozen at runtime (verified by tests); the cast reflects that the
     // shape is unchanged, only sealed against consumer mutation.
     const snapshot = {
       currentTrack: currentIdentity(),
       queue: snapshotQueue(),
-      playOrder: snapshotPlayOrder(),
+      playOrder: snapshotPlayOrder(order.playOrder),
       currentIndex: order.currentIndex,
       isPlaying: state.isPlaying,
       // Whole seconds, not the raw float. Progress UI renders seconds (time
@@ -609,7 +625,7 @@ export function createMusicEngine(deps: MusicEngineDeps): MusicEngine {
       return queueManager.getOrderState().playOrder.length;
     },
     get playOrder(): readonly number[] {
-      return snapshotPlayOrder();
+      return snapshotPlayOrder(queueManager.getOrderState().playOrder);
     },
   };
 

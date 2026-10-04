@@ -20,10 +20,21 @@ export async function upsertArtist(
       bio: artist.bio,
       genres: artist.genres,
     },
-    update: {
-      name: artist.name,
-      image: artist.image,
-    },
+    // IDENTITY-ONLY. `Artist` is a shared, unowned row (see the module
+    // comment), and every production caller is fed an `Artist` that arrived
+    // from a client payload. Writing `name`/`image`/`bio`/`genres` here is
+    // therefore not a refresh — it is "the last account to touch this artist
+    // decides what it is called, for every user and every anonymous visitor of
+    // a shared playlist".
+    //
+    // There is no authoritative writer to refresh from: no provider read runs
+    // on these paths, so nothing here can distinguish a genuine metadata
+    // correction from a crafted payload. The only discriminator available is
+    // the CALLER, and there is no caller distinction — every caller is a client.
+    // So the update branch writes nothing. A legitimately better name is never
+    // persisted; that is the deliberate cost of an unowned shared row, and it
+    // is the same trade `streamUrl`/`previewUrl`/`metadata` already make.
+    update: {},
   });
   return row.id;
 }
@@ -57,11 +68,16 @@ export async function upsertAlbumByArtistId(
       image: album.artwork,
       releaseDate: album.releaseDate,
     },
-    update: {
-      name: album.title,
-      artistId,
-      image: album.artwork,
-    },
+    // IDENTITY-ONLY, for the same reason as `upsertArtist`: an `Album` is a
+    // shared, unowned row and its display fields are attacker-reachable through
+    // any client payload that names an `albumId`.
+    //
+    // This branch used to write `name: album.title`, where `upsertTrack` passes
+    // `track.albumName ?? "Unknown album"` — so a payload carrying an `albumId`
+    // with no album name renamed that album, for the whole product, to a literal
+    // placeholder. `artistId` was in the same branch, letting a payload re-parent
+    // an album globally. Neither is recoverable now that they have been written.
+    update: {},
   });
   return row.id;
 }
@@ -162,17 +178,22 @@ export async function upsertTrack(
       providerUrl: track.providerUrl,
       explicit: track.explicit,
     },
-    update: {
-      title: track.title,
-      artistId,
-      albumId,
-      duration: track.duration,
-      artworkUrl: track.artworkUrl,
-      genres: track.genres,
-      releaseDate: track.releaseDate,
-      providerUrl: track.providerUrl,
-      explicit: track.explicit,
-    },
+    // IDENTITY-ONLY, for the reason given on `upsertArtist`'s update branch.
+    //
+    // This branch used to write nine client-supplied fields — `title`,
+    // `artistId`, `albumId`, `duration`, `artworkUrl`, `genres`, `releaseDate`,
+    // `providerUrl`, `explicit` — onto a shared, unowned row keyed only by
+    // `(provider, providerTrackId)`. Any authenticated account could therefore
+    // permanently rewrite any track's title and artwork as seen by every user of
+    // the product and by every anonymous visitor of a shared playlist, by
+    // calling `likeTrackAction` with a crafted `track`. `streamUrl` was excluded
+    // from this branch for exactly this reason; the display fields were the same
+    // hole with a different payload.
+    //
+    // `albumId` and `artistId` are excluded too, and that is the sharper half:
+    // they are relations, so overwriting them re-points the track at a different
+    // Artist or Album row for everyone.
+    update: {},
   });
   return row.id;
 }

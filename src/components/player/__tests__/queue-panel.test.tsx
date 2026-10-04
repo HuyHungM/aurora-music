@@ -131,7 +131,243 @@ describe("QueuePanel", () => {
     expect(within(queueDialog()).getByText("Track M")).toBeTruthy();
   });
 
-  it("moves focus into the panel on open and back to Up next on Escape", async () => {
+  /**
+   * Outside dismissal. At `lg` the panel has no scrim, so a press anywhere
+   * in the page previously left it open over the content. One `pointerdown`
+   * listener per open lifecycle covers mouse and touch together.
+   */
+  it("stays open when a press lands inside the panel", async () => {
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+      yt("b", { title: "Track B", artistName: "Two" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    const dialog = await screen.findByRole("dialog", { name: "Hàng chờ" });
+
+    // The panel's own header — not a control, so nothing else can explain
+    // the press being absorbed.
+    fireEvent.pointerDown(dialog.querySelector("h2") as HTMLElement);
+    expect(usePlayerStore.getState().isQueueOpen).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Hàng chờ" })).toBeTruthy();
+  });
+
+  it("closes when a press lands outside the panel", async () => {
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+
+    fireEvent.pointerDown(document.body);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Hàng chờ" })).toBeNull(),
+    );
+    expect(usePlayerStore.getState().isQueueOpen).toBe(false);
+  });
+
+  it("does not treat the queue trigger as outside, so its own press is absorbed", async () => {
+    // The failure mode this guards: the same press that opens the panel is
+    // also seen by the global listener, which closes it again. Containment is
+    // tested against the DOM, not against state, so it cannot race.
+    //
+    // The trigger is OPEN-ONLY (`openQueue` sets the flag; it does not
+    // toggle), and that is deliberately left as it is: adding a toggle would
+    // change trigger behaviour, which is not what this task is for. What the
+    // exemption guarantees is that the outside handler never acts as a
+    // de-facto toggle either.
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+    ]);
+
+    const trigger = bar().getByRole("button", { name: "Tiếp theo" });
+    fireEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+
+    fireEvent.pointerDown(trigger);
+    expect(usePlayerStore.getState().isQueueOpen).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Hàng chờ" })).toBeTruthy();
+
+    fireEvent.click(trigger);
+    expect(usePlayerStore.getState().isQueueOpen).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Hàng chờ" })).toBeTruthy();
+  });
+
+  it("leaves another overlay alone instead of dismissing the queue under it", async () => {
+    // The create-playlist dialog is portaled to `document.body`, so it is not
+    // a descendant of the panel. Pressing inside it must not close the queue
+    // that opened it.
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+
+    const overlay = document.createElement("div");
+    overlay.setAttribute("role", "dialog");
+    const field = document.createElement("input");
+    overlay.appendChild(field);
+    document.body.appendChild(overlay);
+
+    fireEvent.pointerDown(field);
+    expect(usePlayerStore.getState().isQueueOpen).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Hàng chờ" })).toBeTruthy();
+
+    overlay.remove();
+  });
+
+  it("leaves the row menu alone while it is open inside the panel", async () => {
+    // The row menu renders into the panel's own layer, so it is a descendant
+    // of the panel and containment covers it without a special case.
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+      yt("b", { title: "Track B", artistName: "Two" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+
+    fireEvent.click(
+      within(queueDialog()).getByRole("button", { name: "Thao tác với Track B" }),
+    );
+    const menu = await screen.findByRole("menu", { name: "Thao tác với bài hát" });
+    fireEvent.pointerDown(menu);
+    expect(usePlayerStore.getState().isQueueOpen).toBe(true);
+  });
+
+  it("stops listening once closed", async () => {
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+    ]);
+
+    const trigger = bar().getByRole("button", { name: "Tiếp theo" });
+    fireEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+    fireEvent.click(within(queueDialog()).getByRole("button", { name: "Đóng hàng chờ" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Hàng chờ" })).toBeNull(),
+    );
+
+    // Listener released: a press now is inert rather than reaching a panel
+    // that is mid-exit.
+    fireEvent.pointerDown(document.body);
+    expect(usePlayerStore.getState().isQueueOpen).toBe(false);
+  });
+
+  it("moves focus between its own items with the arrow keys", async () => {
+    // Regression pin. `role="menu"` promises arrow-key navigation and this menu
+    // had none: ArrowDown fell through to the panel-level handler, which maps
+    // ↓/↑ to next/previous TRACK. So ↓ inside an open row menu skipped to the
+    // next track instead of moving to the next menu item.
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+      yt("b", { title: "Track B", artistName: "Two" }),
+      yt("c", { title: "Track C", artistName: "Three" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+    fireEvent.click(
+      within(queueDialog()).getByRole("button", { name: "Thao tác với Track B" }),
+    );
+    const menu = await screen.findByRole("menu", { name: "Thao tác với bài hát" });
+
+    const items = () =>
+      Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    expect(items().length).toBeGreaterThan(1);
+
+    items()[0].focus();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(items()[1]);
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(items()[0]);
+
+    // Wraps, and never escapes to the panel's next/previous handler.
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(items()[items().length - 1]);
+
+    const positionBefore = usePlayerStore.getState().position;
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowDown" });
+    expect(usePlayerStore.getState().position).toBe(positionBefore);
+    expect(usePlayerStore.getState().isQueueOpen).toBe(true);
+  });
+
+  it("leaves Escape to the playlist picker instead of closing the whole panel", async () => {
+    // The picker owns Escape. Returning from the row menu's capture handler was
+    // not enough: the event continued to the panel-level bubble handler and
+    // closed the entire queue panel, yanking it out from under the picker.
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+      yt("b", { title: "Track B", artistName: "Two" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+    fireEvent.click(
+      within(queueDialog()).getByRole("button", { name: "Thao tác với Track B" }),
+    );
+    await screen.findByRole("menu", { name: "Thao tác với bài hát" });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Thêm vào playlist" }));
+
+    const panel = await screen.findByRole("dialog", { name: "Hàng chờ" });
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    // The panel is still open — the picker consumed the key.
+    expect(usePlayerStore.getState().isQueueOpen).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Hàng chờ" })).toBeTruthy();
+    void panel;
+  });
+
+  it("actually removes the row and confirms it", async () => {
+    // Regression pin. Removal moved from the row menu up to the panel so the
+    // panel can name the removed track in the confirmation; nothing covered
+    // the removal itself, and a report-only path removed nothing at all.
+    render(<PlayerHost />);
+    await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
+    usePlayerStore.getState().replaceQueue([
+      yt("a", { title: "Track A", artistName: "One" }),
+      yt("b", { title: "Track B", artistName: "Two" }),
+      yt("c", { title: "Track C", artistName: "Three" }),
+    ]);
+
+    fireEvent.click(bar().getByRole("button", { name: "Tiếp theo" }));
+    await screen.findByRole("dialog", { name: "Hàng chờ" });
+
+    fireEvent.click(
+      within(queueDialog()).getByRole("button", { name: "Thao tác với Track B" }),
+    );
+    await screen.findByRole("menu", { name: "Thao tác với bài hát" });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Xóa khỏi hàng chờ" }));
+
+    await waitFor(() => {
+      expect(usePlayerStore.getState().queue.map((track) => track.id)).toEqual([
+        "a",
+        "c",
+      ]);
+    });
+    expect(within(queueDialog()).queryByText("Track B")).toBeNull();
+  });
+
+it("moves focus into the panel on open and back to Up next on Escape", async () => {
     render(<PlayerHost />);
     await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
 

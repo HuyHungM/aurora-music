@@ -758,21 +758,28 @@ describe("the advanced disclosure", () => {
     expect(dimLabel).not.toBe(alphaLabel);
   });
 
-  it("offers the artwork ambience as a labelled checkbox", async () => {
+  it("offers the artwork ambience as a labelled switch", async () => {
     const user = userEvent.setup();
     renderPanel();
     await user.click(screen.getByTestId("appearance-advanced-toggle"));
 
-    const toggle = screen.getByTestId("artwork-ambient") as HTMLInputElement;
-    expect(toggle.type).toBe("checkbox");
-    // Off until asked, and the label is text rather than a tooltip.
-    expect(toggle.checked).toBe(false);
+    const toggle = screen.getByTestId("artwork-ambient");
+    // The SAME control as the Glass switch above, not a second kind of switch.
+    // It used to be `<input type=checkbox>`, whose state was a tick mark and a
+    // checked property nothing else in the panel could see.
+    expect(toggle.tagName).toBe("BUTTON");
+    expect(toggle.getAttribute("role")).toBe("switch");
+    // Off until asked, and the state is a word rather than a tooltip.
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.textContent).toContain("Off");
     expect(document.querySelector("[data-aurora-artwork]")?.getAttribute(
       "data-aurora-artwork",
     )).toBe("off");
 
     await user.click(toggle);
     expect(draft().artworkAmbient).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(toggle.textContent).toContain("On");
     expect(document.querySelector("[data-aurora-artwork]")?.getAttribute(
       "data-aurora-artwork",
     )).toBe("on");

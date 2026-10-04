@@ -3,11 +3,15 @@ import type { Album } from "@/lib/domain";
 import type { Locale } from "@/lib/i18n/locale";
 import { DEFAULT_LOCALE } from "@/lib/i18n/locale";
 import { getT } from "@/lib/i18n/translate";
+import { providerScopedId } from "@/lib/domain/scoped-id";
 import { Artwork } from "@/components/ui/artwork";
 
 export function AlbumCard({ album, locale = DEFAULT_LOCALE }: { album: Album; locale?: Locale }) {
   const t = getT(locale);
-  const href = `/album/${encodeURIComponent(album.providerAlbumId ?? album.id)}`;
+  // Provider-scoped, so the route can ask the provider the album actually came
+  // from. A bare id forced `/album/[id]` to guess, and it guessed the preferred
+  // provider — which made every non-preferred album a 404.
+  const href = `/album/${providerScopedId(album.provider, album.providerAlbumId ?? album.id)}`;
   return (
     <Link
       href={href}

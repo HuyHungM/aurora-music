@@ -174,20 +174,23 @@ export function SparkleIcon(props: IconProps) {
 }
 
 /**
- * Settings (Phase 53).
+ * Settings (Phase 53, redrawn).
  *
- * A gear, and specifically not a "sliders" or "paint" glyph: those two
- * already mean two different things in this application, and the gear is the
- * one symbol that reads as "application-level" rather than "something you are
- * looking at". Drawn as a ring with eight teeth rather than a filled cog so
- * the interior hole keeps it legible at 18px in the sidebar footer.
+ * Three horizontal sliders with knobs, not a gear: the settings surface in
+ * this app is glass/aurora tuning, so the glyph reads as "adjust" rather than
+ * "machinery". Each track is drawn as two segments with a gap where the knob
+ * sits, so the line never shows through the circle at 18px. Knobs are offset
+ * per row, which is what separates this from a list or menu glyph.
  */
-export function CogIcon(props: IconProps) {
+export function SlidersHorizontalIcon(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <circle cx="12" cy="12" r="3.1" />
-      <path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8" />
-      <path d="M18.5 5.5 16.7 7.3M7.3 16.7l-1.8 1.8M18.5 18.5l-1.8-1.8M7.3 7.3 5.5 5.5" />
+      <path d="M3 6h4M11 6h10" />
+      <circle cx="9" cy="6" r="2" />
+      <path d="M3 12h10M17 12h4" />
+      <circle cx="15" cy="12" r="2" />
+      <path d="M3 18h2M9 18h12" />
+      <circle cx="7" cy="18" r="2" />
     </svg>
   );
 }
@@ -334,6 +337,23 @@ export function CheckIcon(props: IconProps) {
   return (
     <svg {...base(props)}>
       <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+/**
+ * Information: a circle with a stem and dot.
+ *
+ * Distinct from `AlertCircleIcon` on purpose: that one is a circle with an
+ * exclamation bar, reserved for errors. An informational toast that borrows
+ * the error glyph would read as a failure; this one reads as neutral.
+ */
+export function InfoIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="16" x2="12" y2="12" />
+      <line x1="12" y1="8" x2="12.01" y2="8" />
     </svg>
   );
 }

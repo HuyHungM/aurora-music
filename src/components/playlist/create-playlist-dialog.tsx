@@ -4,6 +4,7 @@ import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Dialog, DialogTitle, DialogClose, DialogActions } from "@/components/ui/dialog";
 import { useLocale } from "@/components/i18n/locale-provider";
+import { playlistNotifications } from "@/components/ui/notify-events";
 import { Button } from "@/components/ui/button";
 import { createPlaylistAction } from "@/app/actions/playlist";
 
@@ -23,6 +24,7 @@ function CreatePlaylistForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { t } = useLocale();
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const playlist = playlistNotifications(t);
   // Synchronous in-flight guard. `isSubmitting` state does not flush between
   // same-tick activations, so a double-Enter/double-click before re-render
   // would fire two `createPlaylistAction` calls and mint two playlists. A ref
@@ -64,6 +66,8 @@ function CreatePlaylistForm({
       if (onCreated) {
         onCreated(createdId);
       } else {
+        // Standalone creation navigates away: the dialog's own navigation
+        // is the confirmation, so no toast here (two surfaces, one action).
         onClose();
       }
       if (!onCreated && navigateOnCreate) {
@@ -71,6 +75,9 @@ function CreatePlaylistForm({
       }
     } else {
       setError(t("playlist.createError"));
+      // Creation failed with no stronger surface: the inline error stays
+      // the report, and a toast carries it past the dialog.
+      playlist.createFailed();
     }
   };
 
@@ -91,7 +98,7 @@ function CreatePlaylistForm({
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t("playlist.namePlaceholder")}
           maxLength={200}
-          className="h-10 rounded-lg border border-border-subtle bg-surface-2 px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+          className="h-10 rounded-xl border border-border-subtle bg-surface-2 px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent"
           aria-describedby={error ? "title-error" : undefined}
           aria-invalid={error ? true : undefined}
           autoFocus
@@ -112,7 +119,7 @@ function CreatePlaylistForm({
           placeholder={t("playlist.descriptionPlaceholder")}
           rows={3}
           maxLength={500}
-          className="rounded-lg border border-border-subtle bg-surface-2 px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent resize-none"
+          className="rounded-xl border border-border-subtle bg-surface-2 px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent resize-none"
         />
       </div>
 
@@ -120,7 +127,7 @@ function CreatePlaylistForm({
         <p
           id="title-error"
           role="alert"
-          className="text-sm text-red-400"
+          className="text-sm text-danger"
         >
           {error}
         </p>

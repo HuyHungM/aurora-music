@@ -36,7 +36,7 @@ export function KeepListeningToggle() {
           <span className="text-xs font-medium text-text-primary">
             {t("keepListening.label")}
           </span>
-          <span className="truncate text-[11px] leading-relaxed text-text-muted">
+          <span className="t-utility truncate leading-relaxed text-text-muted">
             {status.generating
               ? t("keepListening.generating")
               : status.enabled
@@ -48,7 +48,7 @@ export function KeepListeningToggle() {
             active treatment is the only thing a greyscale or high-contrast
             reader would otherwise have to go on. */}
         <span
-          className={`ml-auto shrink-0 text-[11px] font-medium ${
+          className={`t-utility ml-auto shrink-0 font-medium ${
             status.enabled ? "text-accent" : "text-text-muted"
           }`}
         >
@@ -56,7 +56,7 @@ export function KeepListeningToggle() {
         </span>
       </div>
       {save.error ? (
-        <p role="alert" className="mt-1.5 text-[11px] text-red-400">
+        <p role="alert" className="t-utility mt-1.5 text-danger">
           {t(save.error)}
         </p>
       ) : null}

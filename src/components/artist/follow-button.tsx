@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import type { Artist } from "@/lib/domain";
 import { Button } from "@/components/ui/button";
 import { CheckIcon, PlusIcon } from "@/components/ui/icons";
@@ -10,6 +10,7 @@ import {
 } from "@/app/actions/artist";
 import { requestAuthPrompt } from "@/components/tracks/liked-tracks";
 import { useLocale } from "@/components/i18n/locale-provider";
+import { followNotifications } from "@/components/ui/notify-events";
 
 export function FollowButton({
   artist,
@@ -52,27 +53,68 @@ export function FollowButton({
   }
   const [isPending, startTransition] = useTransition();
   const { t } = useLocale();
+  const follow = followNotifications(t);
+
+  // Which artist is on screen RIGHT NOW, readable from a continuation that
+  // captured its own `artistKey` at submit time. Without it, following artist A
+  // and navigating to artist B while A's mutation is in flight let A's
+  // resolution write A's outcome onto B's button and toast A's name.
+  const artistKeyRef = useRef(artistKey);
+  useEffect(() => {
+    artistKeyRef.current = artistKey;
+  }, [artistKey]);
 
   const handleFollow = () => {
-    const nextFollowing = !following;
+    // The PREVIOUS value, not a hardcoded opposite. The rollback restores what
+    // was actually on screen; `setFollowing(false)`/`setFollowing(true)` were
+    // only correct because the two branches happened to pair up, and they
+    // clobbered the reconciled state above whenever the artist changed
+    // mid-flight.
+    const previous = following;
+    const nextFollowing = !previous;
+    const submittedFor = artistKey;
+    const submittedName = artist.name;
     setFollowing(nextFollowing);
+
     startTransition(async () => {
-      if (nextFollowing) {
-        const result = await followArtistAction(artist);
-        if (!result.ok) {
-          setFollowing(false);
-          if (!isAuthenticated) {
-            requestAuthPrompt();
-          }
+      // ONE failure path for every way this can go wrong.
+      //
+      // `followArtistAction`/`unfollowArtistAction` catch internally and
+      // return `{ ok: false }`, but a REJECTED action — transport drop,
+      // navigation abort — never reaches that branch at all. Before this
+      // `try`/`catch` the optimistic flip was permanent on rejection: the
+      // button claimed a state the database did not have, with no toast and no
+      // prompt. `liked-tracks.tsx` has had this catch all along; follow never
+      // got the fix.
+      const fail = () => {
+        setFollowing(previous);
+        if (!isAuthenticated) {
+          requestAuthPrompt();
+        } else {
+          follow.failed();
         }
-      } else {
-        const result = await unfollowArtistAction(artist);
+      };
+
+      try {
+        const result = nextFollowing
+          ? await followArtistAction(artist)
+          : await unfollowArtistAction(artist);
+
+        // A newer artist owns the button now; this continuation is stale.
+        if (submittedFor !== artistKeyRef.current) return;
+
         if (!result.ok) {
-          setFollowing(true);
-          if (!isAuthenticated) {
-            requestAuthPrompt();
-          }
+          fail();
+          return;
         }
+        if (nextFollowing) {
+          follow.followed(submittedName);
+        } else {
+          follow.unfollowed(submittedName);
+        }
+      } catch {
+        if (submittedFor !== artistKeyRef.current) return;
+        fail();
       }
     });
   };

@@ -70,19 +70,31 @@ export async function recordPlayed(
   db: PrismaClient = prisma,
   playedAt: Date = new Date(),
 ): Promise<void> {
-  const trackId = await upsertTrack(db, track);
-
-  // Bounded to RECENT_LIMIT rows, and read BEFORE the write so two concurrent
-  // plays of the same source still land on the unique index rather than on a
-  // stale read. The matcher cost is at most 50 cheap comparisons on a path
-  // that already performs a track upsert and is rate limited to 300/minute by
-  // `recordPlayedAction`.
-  const existing = await db.recentlyPlayed.findMany({
-    where: { userId },
-    include: { track: { include: { artist: true, album: true } } },
-    orderBy: { playedAt: "desc" },
-    take: RECENT_LIMIT,
-  });
+  // The catalog upsert and the duplicate scan are INDEPENDENT, and were awaited
+  // in series for a full round trip of pure latency on the hottest write in the
+  // product.
+  //
+  // `findRecentDuplicate` needs only `track` — not `trackId` — so it has no data
+  // dependency on the upsert. The upsert writes `Artist`/`Album`/`Track`; the
+  // scan reads `RecentlyPlayed` joined to those same tables. They touch
+  // overlapping rows but neither writes what the other reads, and the
+  // `upsert` at the bottom is the first statement that needs BOTH results.
+  //
+  // The scan is still issued before the write is CONSUMED, so the concurrency
+  // property the comment below depends on is unchanged: two concurrent plays of
+  // the same source still land on the unique index rather than on a stale read.
+  const [trackId, existing] = await Promise.all([
+    upsertTrack(db, track),
+    // Bounded to RECENT_LIMIT rows. The matcher cost is at most 50 cheap
+    // comparisons on a path that already performs a track upsert and is rate
+    // limited to 300/minute by `recordPlayedAction`.
+    db.recentlyPlayed.findMany({
+      where: { userId },
+      include: { track: { include: { artist: true, album: true } } },
+      orderBy: { playedAt: "desc" },
+      take: RECENT_LIMIT,
+    }),
+  ]);
 
   const duplicate = findRecentDuplicate(existing, track);
   const survivorTrackId = duplicate?.trackId ?? trackId;

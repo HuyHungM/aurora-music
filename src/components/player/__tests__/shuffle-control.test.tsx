@@ -451,7 +451,10 @@ describe("shuffle across every surface", () => {
         (b) => b.getAttribute("aria-label") ?? "",
       );
       const shuffleAt = labels.findIndex((l) => l.includes("ngẫu nhiên"));
-      const repeatAt = labels.findIndex((l) => l.startsWith("Repeat"));
+      // Repeat labels are localized ("Lặp lại: …" in vi, "Repeat …" in en):
+      // match either, so a wording change in one locale cannot silently
+      // reorder — or un-find — the control.
+      const repeatAt = labels.findIndex((l) => /^(Repeat|Lặp lại)/.test(l));
       expect(shuffleAt, name).toBeGreaterThanOrEqual(0);
       expect(repeatAt, name).toBeGreaterThan(shuffleAt);
       unmount();

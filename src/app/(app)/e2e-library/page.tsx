@@ -79,7 +79,7 @@ export default async function E2EFixtureLibraryPage() {
       </div>
 
       {fixtureArtist ? (
-        <div className="flex items-center gap-3 rounded-card border border-border-subtle bg-surface-1 p-4">
+        <div className="flex items-center gap-3 rounded-2xl border border-border-subtle bg-surface-1 p-4">
           <FollowButton
             artist={fixtureArtist}
             initialFollowing={artistFollowing}
@@ -100,7 +100,7 @@ export default async function E2EFixtureLibraryPage() {
           {tracks.map((track) => (
             <li
               key={`${track.provider}:${track.id}`}
-              className="flex flex-col gap-3 rounded-card border border-border-subtle bg-surface-1 p-4"
+              className="flex flex-col gap-3 rounded-2xl border border-border-subtle bg-surface-1 p-4"
             >
               <div className="flex items-center gap-3">
                 <LikeButton

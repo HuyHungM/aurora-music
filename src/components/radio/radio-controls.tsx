@@ -8,6 +8,7 @@ import { getRadioSession, subscribeRadioSession } from "@/lib/radio/instance";
 import type { RadioLabel, RecentStation } from "@/lib/radio/session";
 import { Button } from "@/components/ui/button";
 import { PlayIcon, RadioIcon } from "@/components/ui/icons";
+import { radioNotifications } from "@/components/ui/notify-events";
 
 /** Subscribes to the memory-only radio session (null-safe before mount). */
 export function useRadioSession(): {
@@ -57,6 +58,7 @@ export function StartTrackRadioButton({
   const engine = useMusicEngine();
   const { t } = useLocale();
   const session = useRadioSession();
+  const radio = radioNotifications(t);
   return (
     <Button
       variant={variant}
@@ -67,10 +69,18 @@ export function StartTrackRadioButton({
         if (!engine) {
           return;
         }
-        void getRadioSession()?.startTrackRadio(engine, track, {
-          key: "radio.labelFromTrack",
-          params: { title: track.title },
-        });
+        void getRadioSession()
+          ?.startTrackRadio(engine, track, {
+            key: "radio.labelFromTrack",
+            params: { title: track.title },
+          })
+          .then((started) => {
+            if (started) {
+              radio.startedTrack(track);
+            } else {
+              radio.failed();
+            }
+          });
       }}
       className="aurora-glass-nested aurora-press gap-1.5"
     >
@@ -92,6 +102,7 @@ export function StartArtistRadioButton({
   const engine = useMusicEngine();
   const { t } = useLocale();
   const session = useRadioSession();
+  const radio = radioNotifications(t);
   return (
     <Button
       variant={variant}
@@ -102,10 +113,18 @@ export function StartArtistRadioButton({
         if (!engine) {
           return;
         }
-        void getRadioSession()?.startArtistRadio(engine, artist, {
-          key: "radio.labelFromArtist",
-          params: { name: artist.name },
-        });
+        void getRadioSession()
+          ?.startArtistRadio(engine, artist, {
+            key: "radio.labelFromArtist",
+            params: { name: artist.name },
+          })
+          .then((started) => {
+            if (started) {
+              radio.startedArtist(artist.name);
+            } else {
+              radio.failed();
+            }
+          });
       }}
       className="aurora-glass-nested aurora-press gap-1.5"
     >
@@ -119,6 +138,7 @@ export function StartDiscoveryRadioButton({ autoStart = false }: { autoStart?: b
   const engine = useMusicEngine();
   const { t } = useLocale();
   const session = useRadioSession();
+  const radio = radioNotifications(t);
   return (
     <div className="flex flex-col items-start gap-2">
       <Button
@@ -131,9 +151,17 @@ export function StartDiscoveryRadioButton({ autoStart = false }: { autoStart?: b
           if (!engine) {
             return;
           }
-          void getRadioSession()?.startDiscoveryRadio(engine, {
-            key: "radio.labelDiscovery",
-          });
+          void getRadioSession()
+            ?.startDiscoveryRadio(engine, {
+              key: "radio.labelDiscovery",
+            })
+            .then((started) => {
+              if (started) {
+                radio.startedDiscovery();
+              } else {
+                radio.failed();
+              }
+            });
         }}
         className="aurora-glass-nested aurora-press gap-2"
       >
@@ -141,7 +169,7 @@ export function StartDiscoveryRadioButton({ autoStart = false }: { autoStart?: b
         <span>{session.generating ? t("radio.startingRadio") : t("radio.startDiscovery")}</span>
       </Button>
       {session.error ? (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-danger">
           {t(session.error)}
         </p>
       ) : null}

@@ -219,19 +219,82 @@ describe("TrackActionMenu", () => {
     const user = userEvent.setup();
     const onLikeToggle = vi.fn();
     render(<TrackActionMenu track={makeTrack("t1")} showLike={true} isLiked={true} onLikeToggle={onLikeToggle} />);
-    
+
     await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
-    
+
     expect(screen.getByRole("menuitem", { name: "Bỏ thích" })).toBeTruthy();
   });
 
   it("hides like action when showLike is false", async () => {
     const user = userEvent.setup();
     render(<TrackActionMenu track={makeTrack("t1")} showLike={false} />);
-    
+
     await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
-    
+
     expect(screen.queryByRole("menuitem", { name: "Thích" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Bỏ thích" })).toBeNull();
+  });
+
+  it("shows a heart icon beside Like, aligned with the other row icons", async () => {
+    // The Like row used to be the one row without an icon (a check when
+    // liked, an empty spacer when not). It now carries the same HeartIcon
+    // the LikeButton uses, at the same 16px as every sibling row.
+    const user = userEvent.setup();
+    const onLikeToggle = vi.fn();
+    const { container } = render(
+      <TrackActionMenu track={makeTrack("t1")} showLike={true} onLikeToggle={onLikeToggle} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
+    const item = screen.getByRole("menuitem", { name: "Thích" });
+    const svg = item.querySelector("svg");
+    expect(svg).not.toBeNull();
+    // Decorative: the menuitem's accessible name stays the label text alone.
+    expect(svg?.getAttribute("aria-hidden")).toBe("true");
+    // Unliked: outline heart in the muted tone every sibling row uses.
+    expect(svg?.className.baseVal ?? svg?.getAttribute("class") ?? "").toContain(
+      "text-text-muted",
+    );
+    // Same geometry as the Play-next / queue / radio / playlist rows.
+    expect(item.className).toContain("gap-3");
+    expect(container.querySelector('[role="menu"]')?.className).toContain("w-48");
+  });
+
+  it("fills the heart with the accent when liked", async () => {
+    // Mirrors LikeButton's `fill-accent`: liked is a filled heart, not a
+    // different glyph, and the row text flips to Unlike on the same state.
+    const user = userEvent.setup();
+    const onLikeToggle = vi.fn();
+    render(
+      <TrackActionMenu track={makeTrack("t1")} showLike={true} isLiked={true} onLikeToggle={onLikeToggle} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
+    const item = screen.getByRole("menuitem", { name: "Bỏ thích" });
+    const svg = item.querySelector("svg");
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute("aria-hidden")).toBe("true");
+    const classes = svg?.className.baseVal ?? svg?.getAttribute("class") ?? "";
+    expect(classes).toContain("fill-accent");
+    expect(classes).toContain("text-accent");
+  });
+
+  it("fires the existing Like action when the row is clicked", async () => {
+    // The icon is decoration inside the same button: no nested control, no
+    // propagation change, the row still calls through. The menu itself stays
+    // open here in the bare harness because the passed `onLikeToggle` is a
+    // bare spy — production callers route through `shared.toggle`, and the
+    // like mutation is what the menu-close assertions elsewhere cover. What
+    // matters for this row is that the click reaches the existing handler
+    // exactly once, which the bare checkmark version of this row never had
+    // a regression test for either.
+    const user = userEvent.setup();
+    const onLikeToggle = vi.fn();
+    render(<TrackActionMenu track={makeTrack("t1")} showLike={true} onLikeToggle={onLikeToggle} />);
+
+    await user.click(screen.getByRole("button", { name: "Thao tác với Track t1" }));
+    await user.click(screen.getByRole("menuitem", { name: "Thích" }));
+
+    expect(onLikeToggle).toHaveBeenCalledTimes(1);
   });
 });

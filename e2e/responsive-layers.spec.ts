@@ -142,30 +142,33 @@ async function openLibraryWithTrackPlaying(page: Page) {
  * that works in either language and needs no hardcoded expectation elsewhere.
  */
 async function activeLanguage(page: Page): Promise<string> {
-  // Scoped to whichever switcher is actually LAID OUT, not to the banner and
-  // not to a specific one. Both the header and the sidebar render a
-  // `LocaleSwitcher`, and Phase 54 made the header's compact copy `lg:hidden`
-  // precisely because the sidebar footer already carries the full one from
-  // `lg` up — two identical controls in the busiest region of the shell at
-  // once is a defect. So the visible control is the header's below `lg` and
-  // the sidebar's at `lg` and above, and the probe follows whichever it is.
+  // Scoped to the /settings page's full switcher, not to the header's. The
+  // header carries ONE slot across two bands — the compact switcher below
+  // `md`, the compact Settings link from `md` to `lg` — so "whichever
+  // switcher is laid out" is unanswerable at tablet widths: there is none in
+  // the header, and the sidebar's is `hidden lg:flex`. The /settings page
+  // renders the SAME full `LocaleSwitcher` at every width inside
+  // `section[aria-labelledby="settings-language"]`, which is structural and
+  // locale-independent, so the probe navigates there and follows that one.
   //
-  // The two earlier ways of writing this were both wrong in a way that only
-  // showed up at one end of the range: `.first()` picked the sidebar's copy,
-  // which is in the DOM but unclickable below `lg` (the aside is
-  // `hidden lg:flex`, and it precedes the header in the source), and scoping
-  // to the banner found nothing at all once the header's copy was hidden.
+  // The earlier version scoped to `[data-testid="locale-switcher"]:visible`,
+  // which picked the header's copy below `lg` and the sidebar's at `lg`+.
+  // That probe was only correct while the header always carried a switcher;
+  // the tablet swap ended that.
+  await page.goto("/settings");
   return (await page
-    .locator('[data-testid="locale-switcher"]:visible')
+    .locator('section[aria-labelledby="settings-language"] [data-testid="locale-switcher"]')
     .getAttribute("aria-label")) ?? "";
 }
 
 async function setLanguage(page: Page, option: "en" | "vi") {
-  await page.locator('[data-testid="locale-switcher"]:visible').click();
-  // Both switchers render their own full list of options, so this one DOES
-  // need `:visible` — only the copy inside the dropdown that was just opened
-  // is laid out.
-  const target = page.locator(`[data-testid="locale-option-${option}"]:visible`);
+  await page.goto("/settings");
+  const scope = 'section[aria-labelledby="settings-language"]';
+  await page.locator(`${scope} [data-testid="locale-switcher"]`).click();
+  // Both the settings copy and the sidebar's render their own full list of
+  // options, so this one DOES need `:visible` — only the copy inside the
+  // dropdown that was just opened is laid out.
+  const target = page.locator(`${scope} [data-testid="locale-option-${option}"]:visible`);
   await expect(target).toBeVisible();
   await target.click();
   // Switching is instant by design (cookie written synchronously, server
@@ -189,6 +192,9 @@ authTest.describe("responsive layout and the player stack", () => {
       await activeLanguage(pageA),
       "could not restore English; a later test would fail for the wrong reason",
     ).toBe("Language");
+    // The locale repair above navigated to /settings, so return to the
+    // fixture route before the test starts measuring.
+    await pageA.goto("/e2e-library");
   });
 
   for (const width of WIDTHS) {
@@ -197,7 +203,6 @@ authTest.describe("responsive layout and the player stack", () => {
     }) => {
       await pageA.setViewportSize({ width, height: 900 });
       await openLibraryWithTrackPlaying(pageA);
-
       const m = await measure(pageA);
       const isDesktop = width >= LG;
 
@@ -259,11 +264,20 @@ authTest.describe("responsive layout and the player stack", () => {
     // correct in the language the test just left. Switching does not reload,
     // and playback lives in a store rather than in the component tree, so the
     // player stays mounted and resizing alone is enough to change the layout.
+    // Returning to /e2e-library after the switch: the locale helpers navigate
+    // to /settings, so the fixture route has to be re-entered before
+    // measuring.
     await openLibraryWithTrackPlaying(pageA);
 
     try {
       await setLanguage(pageA, "vi");
       expect(await activeLanguage(pageA)).not.toBe("Language");
+      // Re-enter the fixture route: the locale helpers navigate to
+      // /settings, so measuring must not start there.
+      await pageA.goto("/e2e-library");
+      await expect(
+        pageA.getByRole("heading", { name: "E2E fixture library" }),
+      ).toBeVisible();
 
       for (const width of [360, 412, 820, 1440]) {
         await pageA.setViewportSize({ width, height: 900 });

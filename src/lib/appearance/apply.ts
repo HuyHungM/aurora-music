@@ -46,6 +46,11 @@ export const APPEARANCE_TOKENS: Record<AppearanceControlName, string> = {
   backgroundDim: "--p-appearance-dim",
   backgroundSaturation: "--p-appearance-bg-saturation",
   backgroundBlur: "--p-appearance-bg-blur",
+  ambientBlur: "--p-appearance-ambient-blur",
+  ambientSpread: "--p-appearance-ambient-spread",
+  ambientFade: "--p-appearance-ambient-fade",
+  ambientEdgeGlow: "--p-appearance-ambient-edge",
+  ambientPlayerGlow: "--p-appearance-ambient-player",
 };
 
 /** Unit a control's value is written with. Blur is px; the rest are unitless. */
@@ -58,6 +63,17 @@ const CONTROL_UNITS: Record<AppearanceControlName, string> = {
   backgroundDim: "",
   backgroundSaturation: "",
   backgroundBlur: "px",
+  // The Ambient Light depth controls are normalized on the wire and mapped to
+  // bounded CSS values in the stylesheet, so they are unitless HERE. Writing px
+  // would put the compositing budget in the preference instead of the
+  // stylesheet, which is the wrong place for it.
+  ambientBlur: "",
+  ambientSpread: "",
+  ambientFade: "",
+  // Multipliers, not lengths: both are unitless factors the stylesheet applies
+  // to alpha percentages it already owns.
+  ambientEdgeGlow: "",
+  ambientPlayerGlow: "",
 };
 
 /** The minimal surface `applyAppearanceStyles` needs. `CSSStyleDeclaration` fits. */

@@ -39,8 +39,8 @@ order and `AGENTS.md` for the toolchain contract.
 Aurora runs as a **native Next.js application on Vercel**. Vercel detects the
 framework, runs `next build` and serves the app through Node.js Functions;
 there is no `vercel.json`, no OpenNext adapter and no Workers bundle. Cloudflare
-provides **DNS only** (the apex `auroramuzik.dpdns.org` 301-redirects to the
-canonical `https://app.auroramuzik.dpdns.org`).
+provides **DNS only** (the `app` subdomain `app.auroramuzik.dpdns.org` 301-redirects to the
+canonical `https://auroramuzik.dpdns.org`).
 
 Production runs on **Neon**: connect the Neon Vercel integration to the project
 and it writes `DATABASE_URL` (pooled) and `DATABASE_URL_UNPOOLED` (direct) for

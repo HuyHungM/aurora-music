@@ -27,6 +27,7 @@ import { Artwork } from "@/components/ui/artwork";
 import { Button } from "@/components/ui/button";
 import { PlayIcon, QueueIcon } from "@/components/ui/icons";
 import { useLocale } from "@/components/i18n/locale-provider";
+import { queueNotifications } from "@/components/ui/notify-events";
 import { plural } from "@/lib/i18n/translate";
 import { providerDisplayName } from "@/lib/search/input";
 import { TopResultCard } from "./top-result-card";
@@ -71,6 +72,7 @@ function LinkCollectionCard({
 }) {
   const engine = useMusicEngine();
   const { locale, t } = useLocale();
+  const queue = queueNotifications(t);
 
   const tracks: Track[] = useMemo(
     () => resource.tracks.map(identityToTrack),
@@ -91,10 +93,11 @@ function LinkCollectionCard({
     if (!engine) return;
     // One entry per row through the existing add path, which already
     // de-duplicates, so a pasted collection can never inflate the queue with
-    // repeated entries (SPEC §17).
+    // repeated entries (SPEC §17). One grouped toast, never one per row.
     for (const track of tracks) {
       engine.queue.add(track);
     }
+    queue.addedMany(tracks.length);
   };
 
   const kindLabel =

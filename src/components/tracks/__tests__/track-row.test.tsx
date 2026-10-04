@@ -285,7 +285,7 @@ describe("TrackRow duration and navigation", () => {
     });
     render(<TrackRow track={track} />);
     const link = screen.getByRole("link", { name: /Track abc123/ });
-    expect(link.getAttribute("href")).toBe("/track/abc123");
+    expect(link.getAttribute("href")).toBe("/track/youtube:abc123");
   });
 
   it("prefers the provider id in the track link", () => {
@@ -295,7 +295,7 @@ describe("TrackRow duration and navigation", () => {
     });
     render(<TrackRow track={track} />);
     expect(screen.getByRole("link").getAttribute("href")).toBe(
-      "/track/provider-vid-9",
+      "/track/youtube:provider-vid-9",
     );
   });
 
@@ -330,6 +330,6 @@ describe("TrackRow duration and navigation", () => {
     });
     // The link exists alongside playback — navigating and playing are
     // separate affordances on the same row.
-    expect(screen.getByRole("link").getAttribute("href")).toBe("/track/t1");
+    expect(screen.getByRole("link").getAttribute("href")).toBe("/track/jamendo:t1");
   });
 });

@@ -40,14 +40,25 @@ describe("catalog upsertArtist", () => {
     ).resolves.toBe(2);
   });
 
-  it("refreshes the display name on update", async () => {
+  it("keeps the first-seen display name, because a second payload is untrusted", async () => {
+    // This test used to assert the OPPOSITE — that a later `upsertArtist`
+    // renames the row — and that assertion encoded a real defect. `Artist` is a
+    // shared, unowned row and every production caller is fed a client payload
+    // (`ARCHITECTURE.md` invariant 34), so "last writer wins" meant any
+    // authenticated account could rename any artist for the whole product by
+    // calling `followArtistAction` with a crafted artist.
+    //
+    // There is no authoritative writer to refresh from: no provider read runs on
+    // these paths, so nothing can tell a genuine correction from an attack. The
+    // write-shape assertions live in `catalog-write-boundary.test.ts`, which
+    // needs no database; this one pins the resulting ROW.
     const artist = dbTest.makeArtist(namespace, 3);
     await upsertArtist(prisma, artist);
     await upsertArtist(prisma, { ...artist, name: "Renamed Artist 3" });
     const row = await prisma.artist.findUniqueOrThrow({
       where: { provider_providerArtistId: { provider: namespace, providerArtistId: "artist-3" } },
     });
-    expect(row.name).toBe("Renamed Artist 3");
+    expect(row.name).toBe(artist.name);
   });
 });
 
@@ -162,12 +173,17 @@ describe("catalog upsertTrack", () => {
     ).resolves.toBeNull();
   });
 
-  it("is idempotent across runs", async () => {
+  it("is idempotent across runs, and keeps the first-seen title", async () => {
+    // Idempotence is unchanged: the same identity still resolves to the same
+    // row. The TITLE assertion is the part that changed — it used to be
+    // `"Retitled"`, which asserted that a second client payload rewrites a
+    // shared, unowned row that every user reads. See invariant 34 and
+    // `catalog-write-boundary.test.ts`.
     const track = dbTest.makeTrack(namespace, 22);
     const first = await upsertTrack(prisma, track);
     const second = await upsertTrack(prisma, { ...track, title: "Retitled" });
     expect(second).toBe(first);
     const row = await prisma.track.findUniqueOrThrow({ where: { id: first } });
-    expect(row.title).toBe("Retitled");
+    expect(row.title).toBe(track.title);
   });
 });

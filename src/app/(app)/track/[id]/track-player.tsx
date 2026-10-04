@@ -12,6 +12,7 @@ import { useLocale } from "@/components/i18n/locale-provider";
 import { StartTrackRadioButton } from "@/components/radio/radio-controls";
 import { TrackActionMenu } from "@/components/tracks/track-action-menu";
 import { formatTrackDuration } from "@/lib/player/format";
+import { queueNotifications } from "@/components/ui/notify-events";
 
 export function TrackPlayer({
   track,
@@ -22,6 +23,7 @@ export function TrackPlayer({
 }) {
   const engine = useMusicEngine();
   const { t } = useLocale();
+  const queue = queueNotifications(t);
   const currentTrack = useMusicEngineState((s) => s.currentTrack);
   const isPlaying = useMusicEngineState((s) => s.isPlaying);
 
@@ -118,7 +120,10 @@ export function TrackPlayer({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => engine?.queue.playNext(track)}
+              onClick={() => {
+                engine?.queue.playNext(track);
+                queue.playNext(track);
+              }}
               aria-label={t("track.playNextLabel", { title: track.title })}
             >
               {t("menus.playNext")}
@@ -126,7 +131,10 @@ export function TrackPlayer({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => engine?.queue.add(track)}
+              onClick={() => {
+                engine?.queue.add(track);
+                queue.added(track);
+              }}
               aria-label={t("track.addToQueueLabel", { title: track.title })}
             >
               {t("queue.title")}

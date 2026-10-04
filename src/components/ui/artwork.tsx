@@ -70,6 +70,12 @@ export function Artwork({
         fill
         unoptimized
         loading={eager ? "eager" : "lazy"}
+        // `loading="eager"` only says "do not defer"; it does not tell the
+        // browser this is the page's LCP element. The hero artwork and the top
+        // result card both opt into `eager` precisely because they are the
+        // largest above-the-fold paint, so they should also carry the fetch
+        // priority. Everything else stays `auto` and lazy.
+        fetchPriority={eager ? "high" : "auto"}
         decoding="async"
         className={`bg-surface-3 object-cover ${rounded} ${className}`}
       />
@@ -83,6 +89,7 @@ export function Artwork({
       height={px}
       unoptimized
       loading={eager ? "eager" : "lazy"}
+      fetchPriority={eager ? "high" : "auto"}
       decoding="async"
       // `aspect-square` is load-bearing, not decoration. Tailwind's preflight
       // sets `img { height: auto }`, which beats the `height` attribute, so the

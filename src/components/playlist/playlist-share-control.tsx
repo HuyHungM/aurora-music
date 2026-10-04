@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/icons";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { plural } from "@/lib/i18n/translate";
+import { notifyNotification } from "@/components/ui/notifications";
 import type { Playlist, PlaylistVisibility } from "@/lib/domain";
 
 /**
@@ -141,10 +142,6 @@ function useCanNativeShare(): boolean {
  * The URL is last because it is the least informative thing in the dialog - it
  * is identical for every playlist except for a token the reader does not care
  * about.
- *
- * Success feedback is an inline live region rather than a toast: the
- * repository has no toast system, and inventing a dependency for one
- * confirmation would be a larger change than the feature warrants.
  */
 export function PlaylistShareControl({
   playlist,
@@ -267,6 +264,24 @@ export function PlaylistShareControl({
     // than merely restricted. Both paths are tried before reporting failure.
     const clipboard =
       typeof navigator !== "undefined" ? navigator.clipboard : undefined;
+    const confirm = () => {
+      setError(null);
+      setCopied(true);
+      // The one floating confirmation in the app. The dialog stays open on
+      // the same state, the button label flips back after 2.4s, and the
+      // inline `sr-only` live region below keeps the assistive-tech
+      // announcement at the point of action — the toast is what carries the
+      // confirmation past both, after the dialog closes or the label resets.
+      // Per the notification contract, this is the ONE case that reports
+      // nowhere else: a fire-and-forget copy whose control cannot hold the
+      // confirmation on its own.
+      notifyNotification({
+        id: `playlist-share-copied:${playlist.id}`,
+        kind: "success",
+        title: t("playlistShare.linkCopied"),
+        message: t("playlistShare.copiedAnnouncement"),
+      });
+    };
     try {
       if (clipboard?.writeText) {
         await clipboard.writeText(shareUrl);
@@ -274,20 +289,18 @@ export function PlaylistShareControl({
         setError(t("playlistShare.copyError"));
         return;
       }
-      setError(null);
-      setCopied(true);
+      confirm();
     } catch {
       // A rejected write is usually a denied permission; the synchronous path
       // does not consult that permission, so it is worth one attempt before
       // telling the person the copy failed.
       if (legacyCopy(shareUrl)) {
-        setError(null);
-        setCopied(true);
+        confirm();
         return;
       }
       setError(t("playlistShare.copyError"));
     }
-  }, [shareUrl, t]);
+  }, [shareUrl, t, playlist.id]);
 
   const handleNativeShare = useCallback(async () => {
     if (!shareUrl) {
@@ -495,7 +508,7 @@ export function PlaylistShareControl({
                 // messages - so it is explicitly `select-text` and must never
                 // inherit `select-none` from the dialog or the button beside
                 // it. A read-only field still selects and copies normally.
-                className="h-10 w-full min-w-0 cursor-text select-text rounded-lg border border-border-subtle bg-surface-2 px-3 text-sm text-text-secondary focus:border-accent focus:outline-none"
+                className="h-10 w-full min-w-0 cursor-text select-text rounded-xl border border-border-subtle bg-surface-2 px-3 text-sm text-text-secondary focus:border-accent"
               />
               {/* One primary action, and the two secondary-looking controls out
                   of the field's own row. Three controls beside a 360px-wide
@@ -542,7 +555,7 @@ export function PlaylistShareControl({
           {error ? (
             <div
               role="alert"
-              className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-red-400"
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-danger"
             >
               <AlertCircleIcon size={16} className="shrink-0" />
               <span>{error}</span>
@@ -559,7 +572,11 @@ export function PlaylistShareControl({
             </div>
           ) : null}
 
-          {/* Success announcement for assistive tech, without a toast. */}
+          {/* Point-of-action announcement. The toast is the floating
+              confirmation that survives the dialog; this `sr-only` live
+              region is what announces the copy AT the control, while the
+              dialog still holds focus. One is the moment, the other is the
+              record — removing either loses a user. */}
           <p aria-live="polite" className="sr-only">
             {copied ? t("playlistShare.copiedAnnouncement") : ""}
           </p>

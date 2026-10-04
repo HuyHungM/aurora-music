@@ -37,14 +37,14 @@ YouTube-backed browser playback and authenticated personal-library features.
 
 | Capability | Status |
 |---|---|
-| Home / discovery sections (recommendations always; popular / featured / albums / artists when the active provider advertises those capabilities) | Implemented, capability-gated |
-| Unified multi-provider track search + capability-gated artist/album search | Implemented |
+| Home / discovery sections (recommendations always; popular / featured / albums / artists resolved from whichever registered provider advertises them) | Implemented, capability-resolved |
+| Unified multi-provider track search + capability-resolved artist/album search | Implemented |
 | Same search field accepts a Spotify / YouTube / Deezer link (classified before any provider call) | Implemented |
 | Album browsing (detail + track list + play) | Implemented |
 | Artist browsing (detail + track list + play + follow) | Implemented |
 | Track details (player + like + recommendations) | Implemented |
 | Playback (play / pause / seek / volume / mute) | Implemented |
-| Queue (replace, next, previous, play next, clear, move, remove, shuffle, repeat) | Implemented |
+| Queue (replace, next, previous, play next, **clear**, move, remove, shuffle, repeat) | Implemented |
 | Library (likes, recently played, playlists overview) | Implemented, auth-required |
 | Likes (like / unlike / liked state) | Implemented, auth-required |
 | Follows (follow / unfollow / following state) | Implemented, auth-required |
@@ -91,7 +91,7 @@ Mechanics:
   (`http://<lan-ip>:3000`) starts OAuth against that same origin instead of
   `localhost` — which would try to return the token to the phone itself.
 - **A deployment with a public hostname declares it** as
-  `AURORA_PUBLIC_URL` (`https://app.auroramuzik.dpdns.org`), and that declaration —
+  `AURORA_PUBLIC_URL` (`https://auroramuzik.dpdns.org`), and that declaration —
   not the `Host` header — decides the `redirect_uri`. Two things make this
   necessary rather than cosmetic. The internal origin the process listens on
   (a loopback port, or Vercel's own deployment address) must never reach Google:
@@ -307,10 +307,27 @@ Authenticated users own:
   the field is non-editable (read-only, announced unavailable, query kept
   visible), clear is disabled, and a second submit is refused at the single
   submit path — so no duplicate or racing request can start. The magnifier
-  becomes a spinner in its own slot, and the route skeleton (`loading.tsx`,
-  same geometry as the results) replaces the page. The lock is released by the
+  becomes a spinner in its own slot, and result skeletons of the same geometry
+  as the results replace the result area. The lock is released by the
   results page rendering, on every outcome; a request that never returns is
   released by a bounded safety timer instead, so the field cannot strand.
+- **The result skeleton is driven by the search lock, not only by the route.**
+  `/search` is prefetched from the nav, and a prefetched route skips the
+  framework's pending phase, so the route boundary (`loading.tsx`) cannot
+  paint for it. Skeletons are therefore also rendered from the client-side
+  search lock, armed at submit: they appear in the same frame as the submit
+  and cover the whole window, whether or not the route boundary reported
+  pending. Both callers render the one `SearchResultSkeleton`, so the loading
+  state is a single design rather than two to keep in step.
+- **A pending search never shows an empty or error result.** While a search is
+  in flight the result area is the skeleton alone: results, "no results" and
+  the category errors are swapped out rather than layered under it, so a zero
+  -result or failed response cannot be shown for the length of a request. The
+  skeleton stops in the same commit that carries the answer — not one frame
+  later — because it is compared against the query the page is showing rather
+  than against "still locked". Idle is not pending: the idle page keeps its
+  prompt and history, and a pasted provider link never gets the text-search
+  skeleton, because it resolves to a different body.
 - **The same field accepts a provider link.** It classifies what is in it
   — ordinary text, a link Aurora can read, or a link it cannot — before
   anything is requested, and says so with a one-line hint under the field
@@ -561,6 +578,17 @@ Concrete guarantees (no WCAG certification claimed):
 - Error announcements via `role=alert` error fallback (Try again / Back
   home affordances; retries never reset playback).
 - Offline status announced via `role=status aria-live=polite`.
+- **Toasts are announced through live regions that exist before they have
+  content.** Two persistent regions (polite for success/info/warning,
+  assertive for errors) are mounted empty and written into afterwards; the
+  visible toasts are labelled groups. A region inserted into the DOM together
+  with its text is commonly not announced at all, so this is what makes a
+  notification actually reach a screen reader.
+- **Menus honour their own arrow keys.** A `role=menu` surface moves focus
+  between its items with ↑/↓/Home/End and consumes those keys, so pressing ↓
+  inside an open queue row menu moves within the menu rather than skipping to
+  the next track. Escape inside a nested surface belongs to that surface, not
+  to the panel hosting it.
 - Touch targets: 44px minimum (`h-11 w-11` icon buttons).
 - **Overlays are removed from the accessibility tree as they close.** A
   dialog, popover, menu or sheet that is animating out is `inert` and
@@ -644,7 +672,13 @@ screenshot.
 - **Mobile navigation:** bottom nav bar (`lg:hidden`), safe-area padding.
 - **Mobile mini player** (`lg:hidden`, above bottom nav, shown only when a
   track is loaded) expands to the **mobile full player** (modal dialog with
-  focus management, `lg:hidden`).
+  focus management and a scroll lock, `lg:hidden`).
+- **A failed track is reported on every player surface, including the mobile
+  one.** The desktop player bar and the mobile full player both show the
+  failure and offer Retry. The full player previously showed neither: on a
+  phone, where the bar is hidden and the takeover is the only player, a track
+  that could not be resolved left a paused player with no explanation and no
+  way forward short of reloading the page.
 - **Bottom stack on mobile is content → mini player → bottom navigation.**
   The navigation owns the viewport bottom; the mini player sits on top of it
   by exactly the navigation's own height plus the safe-area inset. Only the
@@ -995,6 +1029,17 @@ place, and the Settings route was already reachable from the shell.
   every backdrop filter in the application in one selection. This is offered
   rather than inferred: the product does not inspect the device's hardware to
   decide (see `docs/scope-boundaries.md`).
+- **Three of the eight sliders need a background image.** Background dimming,
+  image saturation and image blur act on the background image layer, which is
+  not rendered at all when no background is chosen — removing it saves a
+  full-viewport composited layer and two gradient paints for every user who
+  never picked one. With no background chosen those three are **disabled and say
+  why**, rather than left live with nothing to act on, and they re-enable the
+  moment a background exists. The other five work in every configuration.
+- **Aurora intensity appears twice on purpose.** The one value drives both the
+  general aurora wash, which exists whether or not Ambient Light is on, and the
+  artwork field. It stays in Advanced for the wash and appears under Ambient
+  Light for the field; both write the same number.
 
 ### 17.2 Backgrounds
 
@@ -1035,7 +1080,71 @@ place, and the Settings route was already reachable from the shell.
   exposed as text or a glyph as well as a colour, and every error is a
   translated sentence in both supported languages.
 
-### 17.4 What is deliberately absent
+### 17.4 Ambient Light
+
+- **The Player is the light source.** Ambient Light is not a page tint and not a
+  background image: the colours come from the artwork of the track that is
+  playing, and they emanate from the Player itself outward across the interface.
+  The Player's own surface brightens and spreads light around itself while the
+  rest of the interface is lit by it.
+- **Opt-in.** Off by default. Switching Ambient Light on is what starts
+  artwork colour extraction, and switching it off stops both that and any audio
+  reaction.
+- **Preset, Direction, Transition, Motion and Music Reactive are menus.** Each is
+  a standard dropdown listing its choices in words, rather than a row of buttons
+  or a slider. Keyboard navigation, the touch picker and screen-reader
+  announcement are the device's, not Aurora's.
+- **The closed control is an Aurora control; the open list is the device's.** A
+  select is 44px tall, rounded, hairline-bordered and translucent, with the
+  selected value clear, a chevron on the right, and hover, focus and disabled
+  states that match every other control on the page. The list that opens is
+  drawn by the operating system, because that is the one part of a select no web
+  technology can restyle — and replacing it would cost the phone picker, the
+  screen reader's announcement of the value, type-ahead, and the arrow, Enter,
+  Escape and outside-click behaviour, to buy cosmetics. Every select in the
+  product is one shared component, so this is the appearance everywhere rather
+  than a convention that each new menu has to remember.
+- **Intensity says how much light; two glow sliders say where it sits.** Edge
+  Glow and Player Glow are multipliers on the light the stylesheet already
+  computes — the four viewport-edge glows, and the Player's own two glows
+  respectively. Neither adds light Intensity did not already allow, and both
+  default to 100%, which renders exactly as they did before they existed. Edge
+  Glow at 0 leaves only the Player lit; Player Glow at 0 leaves the field with
+  no visible source. Both ship inside "More controls" with the other
+  refinements, and neither is owned by a preset.
+- **Left and Right actually move the light.** Direction biases the Player-anchored
+  field, so a horizontal choice shifts the field sideways (proportional to the
+  Player's width, as the vertical choice is to its height) rather than only
+  switching off the other edges.
+- **Colour is the artwork's; movement may be the music's.** Nothing in the audio
+  path is allowed to choose a hue. The palette is decided by the cover and stays
+  put while the track is playing; the music may change how far the light
+  reaches, how brightly it burns and how quickly it settles.
+- **One control, three positions.** **Music Reactive** — Off, Subtle, Full —
+  sits with the rest of the depth controls, as a plain menu. Subtle is the
+  default, so a user who has already asked for Ambient Light gets the restrained
+  end of it. Users are never shown FFT, band, attack or release vocabulary.
+- **The reaction is a breath, not a light show.** Bass produces the largest and
+  slowest response — the light pushes outward and eases back. Mid contributes
+  only subtle movement. Treble contributes only a whisper of extra brightness.
+  Values are smoothed with a fast rise and a slow fall, so a beat lifts the light
+  and it settles, rather than blinking on and off. There is no colour cycling, no
+  flashing and no bar display at any position of the control.
+- **Silence is not darkness.** During a quiet passage the light stays where the
+  artwork put it. The music adds to a baseline; it never replaces one, so the
+  interface is never unlit just because the track is quiet.
+- **Pausing stops the reaction, not the light.** With playback paused the music
+  has nothing to say, so nothing animates; the artwork-derived light remains. The
+  same holds when the tab is hidden, when Ambient Light is off, and when the
+  browser will not permit the audio to be read.
+- **Playback is never at risk.** If the audio cannot be analysed — the usual case
+  for a provider stream the browser will not let a page observe — Ambient Light
+  degrades to the artwork-only wash and says nothing about it. Music cannot make
+  a track stop, skip, stutter or play twice.
+- **Reduced motion wins.** With reduced motion requested, the artwork light
+  remains and the reactive movement is removed entirely.
+
+### 17.5 What is deliberately absent
 
 - Upload-based backgrounds, and multi-megabyte binaries in the database.
 - Automatic quality downgrade based on the device.

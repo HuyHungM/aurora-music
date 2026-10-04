@@ -13,6 +13,7 @@ import { catalogTrackKey } from "@/components/tracks/track-list";
 import { EntityHeader } from "@/components/ui/entity-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useLocale } from "@/components/i18n/locale-provider";
+import { playlistNotifications } from "@/components/ui/notify-events";
 import { formatDate, plural } from "@/lib/i18n/translate";
 import { MusicNoteIcon } from "@/components/ui/icons";
 import type { TrackRef } from "@/lib/domain";
@@ -29,6 +30,7 @@ export function PlaylistDetailClient({
 }) {
   const router = useRouter();
   const { t, locale } = useLocale();
+  
   // Server props are the source of truth: router.refresh() re-renders
   // with fresh props (no remount), so reorder/rename results flow
   // straight through. Removals stay optimistic via a local id set —
@@ -84,13 +86,29 @@ export function PlaylistDetailClient({
         provider: track.provider as string,
         providerTrackId: track.providerTrackId ?? track.id,
       };
-      const result = await removeTrackFromPlaylistAction(playlist.id, trackRef);
+      try {
+        const result = await removeTrackFromPlaylistAction(playlist.id, trackRef);
 
-      if (result.ok) {
+        if (!result.ok) {
+          // Was silently ignored. A rate limit, an authorization failure or a
+          // transport drop left the row exactly where it was with no toast, no
+          // inline error and no re-render — the user clicked the bin and nothing
+          // happened at all. Every sibling mutation on this page reports.
+          playlistNotifications(t).removeFailed(track.title);
+          return;
+        }
         setRemovedTrackIds((prev) => new Set(prev).add(track.id));
+        // Built here rather than captured: the poster object is rebuilt per
+        // render, so holding it in the dependency list would re-create this
+        // callback on every render for no benefit.
+        playlistNotifications(t).removed(track.title, playlist.title);
+      } catch {
+        // A rejected action never reaches `result.ok`, so without this the
+        // failure is still invisible — the row stays, silently.
+        playlistNotifications(t).removeFailed(track.title);
       }
     },
-    [playlist.id],
+    [playlist.id, playlist.title, t],
   );
 
   const handleReorder = useCallback(() => {

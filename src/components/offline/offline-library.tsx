@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FolderIcon, MusicNoteIcon } from "@/components/ui/icons";
 import { useLocale } from "@/components/i18n/locale-provider";
+import { queueNotifications } from "@/components/ui/notify-events";
 import { useMusicEngine } from "@/lib/music/use-music-engine";
 import { plural } from "@/lib/i18n/translate";
 import { pickDirectory, supportsDirectoryPicker } from "@/lib/offline/capability";
@@ -65,6 +66,7 @@ function folderNameOf(handle: OfflineDirectoryHandle): string | null {
 export function OfflineLibrary() {
   const { t, locale } = useLocale();
   const engine = useMusicEngine();
+  const queue = queueNotifications(t);
   const [state, setState] = useState<PanelState>({ kind: "unsupported" });
 
   // Created once, kept out of state: a store is a handle to browser storage,
@@ -180,12 +182,13 @@ export function OfflineLibrary() {
     },
     [engine],
   );
-  const queueTrack = useCallback(
-    (track: Track) => {
-      engine?.queue.add(track);
-    },
-    [engine],
-  );
+  // Not memoized: the poster is rebuilt per render, so a dependency array
+  // would either churn or have to lie about an outer-scope value. The row
+  // that receives this is not memoized either, so nothing is lost.
+  const queueTrack = (track: Track) => {
+    engine?.queue.add(track);
+    queue.added(track);
+  };
 
   const header = (
     <section className="flex flex-col items-start gap-3">

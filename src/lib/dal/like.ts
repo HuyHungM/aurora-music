@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import type { Track, TrackRef } from "@/lib/domain";
 import { prisma } from "@/lib/db";
-import { upsertTrack, findTrackInternalId } from "@/lib/dal/catalog";
+import { upsertTrack } from "@/lib/dal/catalog";
 import { likeIdentityInclude, mapLike } from "@/lib/dal/mappers";
 import type { Like } from "@/lib/domain";
 
@@ -28,11 +28,19 @@ export async function unlikeTrack(
   ref: TrackRef,
   db: PrismaClient = prisma,
 ): Promise<void> {
-  const trackId = await findTrackInternalId(db, ref);
-  if (!trackId) {
-    return;
-  }
-  await db.like.deleteMany({ where: { userId, trackId } });
+  // ONE round trip, not two. This used to resolve the provider ref to an
+  // internal `Track.id` first and then delete by it — a read whose only purpose
+  // was to produce a value the delete predicate could have expressed directly.
+  // `isTrackLiked` in this same file already answers the identical question in
+  // one query by putting the relation predicate in the `where`, and this is that
+  // shape applied to the write.
+  //
+  // Behaviour is unchanged: a `deleteMany` whose predicate matches nothing
+  // deletes nothing and reports `count: 0`, and the return type is `void`, so
+  // the old "catalog miss → early return" branch was unobservable.
+  await db.like.deleteMany({
+    where: { userId, track: { provider: ref.provider, providerTrackId: ref.providerTrackId } },
+  });
 }
 
 export async function listUserLikes(

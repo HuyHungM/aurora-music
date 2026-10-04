@@ -67,7 +67,7 @@ describe("PlaylistActions", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Xóa playlist")).toBeTruthy();
-      expect(screen.getByText(/Bạn có chắc muốn xóa/)).toBeTruthy();
+      expect(screen.getByText(/Xóa “.+\”?/)).toBeTruthy();
     });
   });
 

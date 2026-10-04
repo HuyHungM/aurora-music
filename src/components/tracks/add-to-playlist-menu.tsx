@@ -5,7 +5,9 @@ import { createPortal } from "react-dom";
 import type { Track, Playlist } from "@/lib/domain";
 import { requestAuthPrompt } from "@/components/tracks/liked-tracks";
 import { useLocale } from "@/components/i18n/locale-provider";
+import { formatNumber } from "@/lib/i18n/translate";
 import { CheckIcon, PlusIcon, SearchIcon } from "@/components/ui/icons";
+import { notifyPlaylistAdded } from "@/components/ui/notify-events";
 
 // Lazy boundaries (same pattern as the like toggle): merely rendering
 // the picker never pulls the playlist server-action module graph, so
@@ -85,7 +87,7 @@ export function AddToPlaylistMenu({
   const pendingRef = useRef<string | null>(null);
   const [filter, setFilter] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const itemsRef = useRef<HTMLButtonElement[]>([]);
   // Owns the post-success auto-close timer so it can be cancelled on
   // unmount. Previously the handle was dropped, so unmounting inside the
@@ -158,6 +160,13 @@ export function AddToPlaylistMenu({
   // showed "Loading playlists…" forever - and because `loading` is tested
   // before `error`, the Retry button could never render, leaving the user no
   // escape without a full reload.
+  //
+  // `load` is a plain function (not a `useCallback` dep of the effect below)
+  // deliberately: the effect depends on `t` and re-runs on a locale switch,
+  // which is the correct refetch (labels and membership both re-resolve),
+  // while every other caller (Retry, conflict refresh, post-create refresh)
+  // calls the CURRENT `t` directly. Memoizing `load` on `t` would be the same
+  // fetch with an extra identity change per render.
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -233,6 +242,10 @@ export function AddToPlaylistMenu({
       if (!aliveRef.current) return;
       if (result.ok) {
         setSuccessId(playlistId);
+        // The picker already shows its own inline success state (check row +
+        // auto-close); the toast carries the confirmation past the menu.
+        const title = playlists.find((entry) => entry.id === playlistId)?.title ?? playlistId;
+        notifyPlaylistAdded(t, track.title, title, playlistId);
         scheduleClose();
       } else if (result.conflict) {
         // Authoritative duplicate: announce it once AND refresh
@@ -274,6 +287,7 @@ export function AddToPlaylistMenu({
       if (result.ok) {
         await load();
         setSuccessId(playlistId);
+        notifyPlaylistAdded(t, track.title, "", playlistId);
         scheduleClose();
       } else {
         await load();
@@ -296,7 +310,6 @@ export function AddToPlaylistMenu({
 
   const handleCreateDialogClose = () => {
     setShowCreateDialog(false);
-    void load();
   };
 
   const query = filter.trim().toLowerCase();
@@ -314,7 +327,7 @@ export function AddToPlaylistMenu({
         role="menu"
         aria-label={t("playlist.addToPlaylistTitle")}
         {...presenceProps}
-        className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float absolute z-dropdown w-60 overflow-hidden rounded-lg border border-border-subtle ${
+        className={`${openUp ? "presence-menu-up" : "presence-menu"} aurora-glass-float absolute z-dropdown w-60 overflow-hidden rounded-xl border border-border-subtle ${
           // `right-0` is load-bearing and was lost from the no-`placement`
           // branch. This picker is 240px wide and every trigger that opens it
           // from a row sits at the RIGHT edge of that row, so the default
@@ -348,7 +361,7 @@ export function AddToPlaylistMenu({
               onChange={(e) => setFilter(e.target.value)}
               placeholder={t("playlist.searchPlaylists")}
               aria-label={t("playlist.searchPlaylistsLabel")}
-              className="h-10 w-full bg-transparent pl-9 pr-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
+              className="h-10 w-full bg-transparent pl-9 pr-3 text-sm text-text-primary placeholder:text-text-muted"
             />
           </div>
         ) : null}
@@ -359,7 +372,7 @@ export function AddToPlaylistMenu({
           </div>
         ) : error ? (
           <div className="flex flex-col gap-2 px-3 py-4 text-center">
-            <p role="alert" className="text-sm text-red-400">{error}</p>
+            <p role="alert" className="text-sm text-danger">{error}</p>
             <div className="flex justify-center gap-2">
               <button
                 type="button"
@@ -430,7 +443,7 @@ export function AddToPlaylistMenu({
                     ) : null}
                   </span>
                   <span className="ml-auto shrink-0 text-xs text-text-muted">
-                    {t("playlist.tracksCount", { count: playlist.items.length })}
+                    {t("playlist.tracksCount", { count: formatNumber(locale, playlist.items.length) })}
                   </span>
                 </button>
               );
@@ -470,7 +483,26 @@ export function AddToPlaylistMenu({
                 navigateOnCreate={false}
               />
             </Suspense>,
-            document.body,
+            // The SHELL ROOT, not `document.body`. The dialog has to leave this
+            // menu — which is `overflow-hidden`, so it would clip it — and
+            // `document.body` is the traditional answer. It is the wrong one
+            // here: `body` is a SIBLING of the shell root, and the user's
+            // appearance is an inline style ON the shell root. A portalled
+            // dialog therefore inherited nothing and rendered with the
+            // stylesheet's default glass while the rest of the application
+            // wore the user's — measured 2026-10-04 at `glassAlpha: 0.15`, the
+            // dialog resolved to `.6`.
+            //
+            // Portal into the shell root instead and the dialog inherits every
+            // appearance value by the ordinary DOM rule, with no second writer
+            // and no token duplication. `z-dialog` still wins: the shell root
+            // is an `isolate` stacking context, and every chrome surface the
+            // dialog has to cover — header, sidebar, navigation, player,
+            // notifications — is inside it too, so their z-order is unchanged.
+            //
+            // The `??` is the isolated-test case: rendered without a shell, the
+            // dialog still mounts rather than throwing.
+            document.querySelector("[data-aurora-glass]") ?? document.body,
           )
         : null}
     </>

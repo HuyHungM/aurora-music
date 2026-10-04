@@ -44,6 +44,39 @@ only lockfile; there is no `package-lock.json`.
   `next dev`) generates. On a clean clone run `bun run build` **first**. This is
   Next.js 16 behaviour, not a Bun limitation.
 
+## How UI/UX work is done
+
+Standing order for any task that changes what a person sees or touches. Repo
+rules still win where they conflict.
+
+1. **`ui-ux-pro-max`** is the design authority. Query it before editing —
+   `--domain ux` for one interaction, `--stack` for implementation detail, and
+   `--design-system` only for a genuinely new surface. **Adapt** the result to
+   `globals.css`; never paste a generic system in. The bundled CLI is
+   `python .opencode/skills/ui-ux-pro-max/scripts/search.py …` (use `python`,
+   not `python3`, on Windows). If Python is absent, ask — do not install it.
+2. **Superpowers** for the workflow: decompose, inspect, implement the smallest
+   coherent change, then verify.
+3. **Subagents** for independent work — UI audit, UX analysis, responsive
+   analysis, a11y review, isolated implementation, visual-consistency review.
+   Never let two subagents edit the same file. Do not trust output blindly.
+   The main agent keeps architecture, UI decisions, integration and final
+   verification. Non-trivial UI work ends with an independent review subagent,
+   and completion is not claimed until implementation and review agree.
+4. **`ponytail`** rides along on every task, not only UI ones: the first rung of
+   the ladder wins, reuse beats new abstraction, and a deliberate shortcut gets a
+   `ponytail:` comment naming its ceiling.
+
+Visual bar: modern, premium, minimal, readable, music-product. Subtle over
+flashy. No shadcn/Radix/lucide/`cva`/`clsx`/`tailwind-merge`; Tailwind v4 as
+is; SVG icons from `ui/icons.tsx`; never emoji as structure. Extend an existing
+primitive before creating a competing one.
+
+Every interactive change is checked at desktop, tablet, mobile and narrow
+mobile for keyboard, focus, screen-reader semantics, touch size, contrast,
+reduced motion, overflow, long labels, and disabled/error states — during
+implementation, not after.
+
 ## Verification
 
 Three separate suites with three configs — pick by suffix, not by guessing.

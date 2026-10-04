@@ -143,6 +143,25 @@ export interface PlaybackControllerDeps {
    * poison. Fire-and-forget: it must never throw into the controller.
    */
   reportDeadSource?: (ref: { source: string; id: string }) => void;
+  /**
+   * Called ONCE per cycle when the recovery budget is exhausted, i.e. when the
+   * track has already been retried and is judged unplayable rather than
+   * transiently broken. The implementation advances to the next queue entry.
+   *
+   * WHY IT IS A DEP AND NOT A QUEUE CALL. The controller drives ONE track; the
+   * queue, its cursor and its repeat semantics live in the store. Injecting the
+   * decision keeps the controller free of queue knowledge and keeps the store
+   * free of failure classification — the same split as `reportDeadSource`.
+   *
+   * Fires once per cycle, AFTER the user-facing error is reported, so the
+   * banner and the skip never race. Omitting it is supported and means the
+   * pre-existing behaviour: playback stops on the failed track.
+   */
+  onUnavailableTrack?: (info: {
+    trackKey: string | null;
+    attemptsUsed: number;
+    category: FailureCategory;
+  }) => void;
 }
 
 export interface LoadTrackOptions {
@@ -275,6 +294,7 @@ export function createPlaybackController(
   const schedule = deps.schedule ?? defaultSchedule;
   const clearError = deps.clearError ?? (() => undefined);
   const reportDeadSource = deps.reportDeadSource;
+  const onUnavailableTrack = deps.onUnavailableTrack;
   const guard = createResolutionGuard();
 
   /**
@@ -677,6 +697,19 @@ export function createPlaybackController(
         message: finalError.message,
       });
       reportError(finalError);
+      // The budget for THIS cycle is gone. Everything above is the existing
+      // retry policy; only now is the track treated as unplayable and stepped
+      // over. Reported first so the banner and the skip never race, and fired
+      // exactly once because this terminal path runs once per cycle.
+      try {
+        onUnavailableTrack?.({
+          trackKey: finished?.trackKey ?? null,
+          attemptsUsed: finished?.attemptsUsed ?? 0,
+          category: finished?.lastFailureCategory ?? "unknown",
+        });
+      } catch {
+        // Advancing the queue must never break the terminal path it annotates.
+      }
     }
   }
 

@@ -286,7 +286,7 @@ describe("PlaylistShareControl: enabling sharing", () => {
     // happening - and it does NOT replace the option's own label, so the
     // control still shows which direction was asked for.
     await waitFor(() => {
-      expect(screen.getByText("Generating link...")).toBeTruthy();
+      expect(screen.getByText("Generating link…")).toBeTruthy();
     });
     expect(publicOption().getAttribute("aria-pressed")).toBe("false");
     // A second click cannot double-submit and mint two tokens.

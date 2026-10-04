@@ -23,7 +23,7 @@ export function PlaylistCard({ playlist, locale = DEFAULT_LOCALE }: { playlist: 
         />
         <span
           aria-hidden="true"
-          className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-2.5 pb-2 pt-6 text-left text-[11px] font-medium text-white"
+          className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-2.5 pb-2 pt-6 text-left t-utility font-medium text-white"
         >
           {plural(locale, count, {
             one: t("playlistCard.tracksCountOne", { count }),

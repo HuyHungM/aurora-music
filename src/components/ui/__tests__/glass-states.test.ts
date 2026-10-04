@@ -160,9 +160,23 @@ describe("glass control states", () => {
     // Focus over wallpaper, dark glass, light glass and gradients alike:
     // the accent outline is the one focus treatment, and it survives every
     // surface because it is drawn around the control, never as its fill.
+    //
+    // The selector is a bare `:focus-visible`, and it must stay that way: what
+    // matters is that this rule declares the OUTLINE and nothing else. It used
+    // to also set `border-radius`, and because an unlayered author rule beats
+    // every `@layer utilities` declaration regardless of specificity, that
+    // silently made `focus:rounded-full` inert on the page search field.
     expect(css).toMatch(
       /:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--accent\)/,
     );
+    // The negative half, which is the half that actually regressed. A radius
+    // here cannot be fixed by specificity — it has to not be here.
+    const rule = /:focus-visible\s*\{([^}]*)\}/.exec(css);
+    expect(rule, "no :focus-visible rule found").toBeTruthy();
+    expect(
+      rule![1],
+      "the global focus rule must not declare border-radius, or it overrides every component's focus shape",
+    ).not.toContain("border-radius");
   });
 
   it("applies no component-level backdrop blur", () => {
@@ -181,6 +195,38 @@ describe("glass control states", () => {
     }
     expect(offenders).toHaveLength(1);
     expect(offenders[0]).toContain("dialog.tsx");
+  });
+
+  it("uses the danger token for errors, never a hardcoded red", () => {
+    // `text-danger` resolves to the same status hue through the semantic
+    // layer; a literal `text-red-400` is a second error color that Glass
+    // Mode, themes and contrast work cannot reach.
+    const offenders: string[] = [];
+    for (const file of walk(SRC)) {
+      const source = readFileSync(file, "utf8");
+      for (const literal of classLiterals(source)) {
+        for (const hit of literal.match(/(?:text|bg)-red-[a-z0-9]+/g) ?? []) {
+          offenders.push(`${file.slice(ROOT.length + 1)}: ${hit}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("uses the design-system radius scale, never a dead class", () => {
+    // `rounded-card` never existed as a utility — the three call sites that
+    // used it rendered square. Menus and inputs sit on `rounded-xl`; artwork
+    // frames keep `rounded-lg`; cards and dialogs sit on `rounded-2xl`.
+    const offenders: string[] = [];
+    for (const file of walk(SRC)) {
+      const source = readFileSync(file, "utf8");
+      for (const literal of classLiterals(source)) {
+        if (/(?:^|\s)rounded-card(?:\s|$)/.test(literal)) {
+          offenders.push(file.slice(ROOT.length + 1));
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   it("paints no opaque black or white outside scrims and artwork", () => {

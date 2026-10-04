@@ -74,6 +74,11 @@ const CSS_DEFAULT_OF: Record<AppearanceControlName, string> = {
   backgroundDim: "--p-appearance-dim",
   backgroundSaturation: "--p-appearance-bg-saturation",
   backgroundBlur: "--p-appearance-bg-blur",
+  ambientBlur: "--p-appearance-ambient-blur",
+  ambientSpread: "--p-appearance-ambient-spread",
+  ambientFade: "--p-appearance-ambient-fade",
+  ambientEdgeGlow: "--p-appearance-ambient-edge",
+  ambientPlayerGlow: "--p-appearance-ambient-player",
 };
 
 /** The stylesheet's own spelling of a control's default, normalised to a number. */

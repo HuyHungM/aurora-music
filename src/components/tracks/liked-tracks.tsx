@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -13,9 +14,10 @@ import {
 import type { Track } from "@/lib/domain";
 import { identityToTrack } from "@/lib/music/identity-track";
 import { useMusicEngineState } from "@/lib/music/use-music-engine";
-import { HeartIcon } from "@/components/ui/icons";
+import { HeartIcon, LockIcon } from "@/components/ui/icons";
+import { Button } from "@/components/ui/button";
 import { useLocale } from "@/components/i18n/locale-provider";
-import { Dialog, DialogTitle, DialogClose } from "@/components/ui/dialog";
+import { Dialog, DialogActions, DialogTitle } from "@/components/ui/dialog";
 
 /** Canonical client key mirroring the DAL Like identity. */
 export function likedTrackKey(
@@ -58,6 +60,11 @@ export function LikedTracksProvider({
   isAuthenticated: boolean;
   children: ReactNode;
 }) {
+  const { t } = useLocale();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [liked, setLiked] = useState<Set<string>>(() => new Set(initialLiked));
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   // Render-mirrors live in an effect (never assigned during render).
@@ -66,6 +73,10 @@ export function LikedTracksProvider({
     likedRef.current = liked;
   }, [liked]);
   const inFlightRef = useRef<Set<string>>(new Set());
+  const isAuthenticatedRef = useRef(isAuthenticated);
+  useEffect(() => {
+    isAuthenticatedRef.current = isAuthenticated;
+  }, [isAuthenticated]);
 
   const toggle = useCallback(
     (track: Track) => {
@@ -75,6 +86,8 @@ export function LikedTracksProvider({
       }
       inFlightRef.current.add(key);
       const nextLiked = !likedRef.current.has(key);
+      const tNow = tRef.current;
+      const authenticatedNow = isAuthenticatedRef.current;
       setPending((prev) => new Set(prev).add(key));
       setLiked((prev) => {
         const next = new Set(prev);
@@ -102,18 +115,28 @@ export function LikedTracksProvider({
         try {
           // Imported lazily so merely rendering a Like affordance never
           // pulls the server-action module graph (keeps player and row
-          // suites hermetic); the mutation path is unchanged.
+          // suites hermetic); the mutation path is unchanged. The
+          // notification poster is imported AFTER the action resolves, so a
+          // suite that mocks the actions asserts on the mutation and not on
+          // which module graph happened to resolve first.
           const { likeTrackAction, unlikeTrackAction } = await import(
             "@/app/actions/track"
           );
           const result = nextLiked
             ? await likeTrackAction(track)
             : await unlikeTrackAction(track);
+          const { notifyLikeResult } = await import(
+            "@/components/ui/notify-events"
+          );
           if (!result.ok) {
             rollback();
-            if (!isAuthenticated) {
+            if (!authenticatedNow) {
               requestAuthPrompt();
+            } else {
+              notifyLikeResult(false, nextLiked, track, tNow);
             }
+          } else {
+            notifyLikeResult(true, nextLiked, track, tNow);
           }
         } catch {
           // Phase 49. A transport rejection used to skip every statement
@@ -133,7 +156,7 @@ export function LikedTracksProvider({
         }
       })();
     },
-    [isAuthenticated],
+    [],
   );
 
   const value = useMemo(
@@ -180,6 +203,7 @@ export function PlayerLikeButton({ className }: { className?: string }) {
   const currentTrack = useMusicEngineState((s) => s.currentTrack);
   const likeTrack = currentTrack ? identityToTrack(currentTrack) : null;
   const shared = useLikedTrack(likeTrack);
+  const { t } = useLocale();
   if (!currentTrack || !shared) {
     return null;
   }
@@ -189,7 +213,14 @@ export function PlayerLikeButton({ className }: { className?: string }) {
       onClick={shared.toggle}
       disabled={shared.pending}
       aria-pressed={shared.liked}
-      aria-label={shared.liked ? `Unlike ${currentTrack.title}` : `Like ${currentTrack.title}`}
+      // The shared `track.likeLabel`/`track.unlikeLabel` keys, not a template
+      // literal. This was the one accessible name in a production component
+      // built in English, so a Vietnamese listener heard "Like <title>" from
+      // the player while every sibling like control spoke the active locale.
+      aria-label={t(
+        shared.liked ? "track.unlikeLabel" : "track.likeLabel",
+        { title: currentTrack.title },
+      )}
       className={`grid h-11 w-11 shrink-0 place-items-center rounded-full transition-colors disabled:opacity-50 ${
         shared.liked
           ? "text-accent hover:bg-surface-hover"
@@ -205,10 +236,29 @@ export function PlayerLikeButton({ className }: { className?: string }) {
  * Shared anonymous-mutation prompt. Listens for auth-required events and
  * shows the existing Auth.js sign-in flow (passed in from the server
  * shell) — no second login modal.
+ *
+ * Rapid duplicate events (e.g. a double-clicked Like, or Like + Follow in the
+ * same tick) cannot stack a second dialog: `setOpen(true)` is idempotent,
+ * and `AuthPromptHost` is mounted exactly once in `AppShell`, so there is
+ * exactly one instance to open.
+ *
+ * NO `DialogClose` HERE, and that is the whole design. The shared `Dialog`
+ * primitive still owns its X, and every other dialog still renders one; this
+ * surface deliberately does not, because its two named actions — Cancel and
+ * the sign-in control — are the ways out, and a third identical-looking X in
+ * the corner only competed with them. Dismissal is therefore unchanged and
+ * complete: Cancel, the backdrop, Escape, and (on touch) the system back
+ * gesture all close it, because every one of those is `Dialog`'s own
+ * `onClose` path and none of them ever depended on the button.
+ *
+ * The wrapper also loses the `relative pr-12` pair that existed only to keep
+ * the title clear of that button. The panel is already `relative`, so nothing
+ * was depending on this element as a containing block.
  */
 export function AuthPromptHost({ signIn }: { signIn: ReactNode }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
+  const descriptionId = useId();
 
   useEffect(() => {
     const show = () => setOpen(true);
@@ -216,16 +266,36 @@ export function AuthPromptHost({ signIn }: { signIn: ReactNode }) {
     return () => window.removeEventListener(AUTH_REQUIRED_EVENT, show);
   }, []);
 
+  const close = useCallback(() => setOpen(false), []);
+
   return (
-    <Dialog open={open} onClose={() => setOpen(false)} label={t("auth.authRequiredTitle")}>
-      <div className="relative">
+    <Dialog
+      open={open}
+      onClose={close}
+      label={t("auth.authRequiredTitle")}
+      describedBy={descriptionId}
+    >
+      <div className="flex items-center gap-3">
+        <span
+          aria-hidden="true"
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-border-strong bg-surface-2 text-text-muted"
+        >
+          <LockIcon size={20} />
+        </span>
         <DialogTitle>{t("auth.authRequiredTitle")}</DialogTitle>
-        <DialogClose onClick={() => setOpen(false)} />
       </div>
-      <p className="mt-3 text-sm leading-relaxed text-text-muted">
+      <p
+        id={descriptionId}
+        className="mt-3 text-sm leading-relaxed text-text-muted"
+      >
         {t("auth.authRequiredDescription")}
       </p>
-      <div className="mt-5 flex justify-end gap-2">{signIn}</div>
+      <DialogActions>
+        <Button type="button" variant="ghost" onClick={close}>
+          {t("common.cancel")}
+        </Button>
+        {signIn}
+      </DialogActions>
     </Dialog>
   );
 }

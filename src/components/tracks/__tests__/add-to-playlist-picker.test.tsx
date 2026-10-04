@@ -78,6 +78,10 @@ describe("AddToPlaylistMenu membership + hardening (Phase 39)", () => {
   });
 
   it("refreshes membership on an authoritative conflict instead of erroring", async () => {
+    // The second list() response now carries the membership the server just
+    // confirmed: the row flips to its honest "already added" state from the
+    // refetched list. Asserted on the notice + refreshed row rather than on
+    // the call count, because the refetch is the behavior.
     vi.mocked(listUserPlaylistsAction)
       .mockResolvedValueOnce({
         ok: true,
@@ -100,6 +104,7 @@ describe("AddToPlaylistMenu membership + hardening (Phase 39)", () => {
     ).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("Đã có trong playlist");
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(listUserPlaylistsAction).toHaveBeenCalledTimes(2);
   });
 
   it("disables the row while an add is pending (no double-submit)", async () => {

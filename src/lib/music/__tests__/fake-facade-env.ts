@@ -72,6 +72,9 @@ export function fakeEnv(initial: Partial<EngineStoreState> = {}): FakeEnv {
     error: null,
     ...initial,
   };
+  // NOTE: this fake mutates one state object in place, whereas a real Zustand
+  // `create()` store produces a NEW object per `set`. Anything that caches on
+  // state-object identity must not rely on this fake to prove it.
   const actions: FakeActions = {
     calls,
     playTrack(track: Track, options?: { autoplay?: boolean }): void {

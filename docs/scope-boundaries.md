@@ -176,7 +176,7 @@ things on that origin are left unsolved on purpose:
   authorized here.
 - **TLS exists at the public origin but not at the origin the process listens
   on, and the two must never be treated as the same host.** The deployed
-  public origin (`https://app.auroramuzik.dpdns.org`) terminates TLS at the edge,
+  public origin (`https://auroramuzik.dpdns.org`) terminates TLS at the edge,
   so it *is* a secure context; the origin Next.js is bound to
   (`http://127.0.0.1:24584`) is not. This was previously recorded the other way
   round — the claim that the deployed URL is reached over plain HTTP was
@@ -509,6 +509,122 @@ behavior and added no dependency. The following were considered and are
   such device or OS was available in this environment. Those paths are covered
   by capability gating and standards-compliant metadata, not by observation.
 
+## Select contrast: audited, no change made
+
+Recorded because an audited-and-rejected decision that lives only in a
+transcript is a decision that gets re-litigated. The Select's chevron
+(`text-text-muted`) and its hint (`.t-caption`, which is also `--fg-muted`) were
+flagged as failing contrast. Recomputed from the OKLCH tokens by two
+independent passes, both agreeing:
+
+| pair | ratio |
+| --- | --- |
+| `--fg-muted` (`--p-neutral-7`) on `--surface-base` (`--p-neutral-1`) | **5.87:1** |
+| `--fg-muted` on the Select trigger's glass fill | **5.87:1** |
+
+The second row is identical to the first **by construction**: `--glass-nested`,
+`--glass-chrome` and `--surface-base` are all `--p-neutral-1`, so compositing
+that colour over itself is a no-op at every `glassAlpha`. `--fg-muted` clears
+WCAG AA 4.5:1 for text and 1.4.11's 3:1 for the non-text chevron.
+
+The originally reported **2.24:1 and 2.26:1 are not reproducible** from any
+principled computation. The nearest legitimate value in that range, 2.505:1, is
+`--fg-disabled` rather than `--fg-muted` — the first pass appears to have used
+the wrong foreground token.
+
+**No colour change was made, and none should be.** `--fg-muted` is the
+muted-foreground role shared by 121 `text-text-muted` sites and 24 `.t-caption`
+sites; the Select's treatment is already identical to every sibling. Changing it
+for the Select alone would have been the "second competing UI system" failure.
+Caveat recorded for whoever next touches it: `--fg-muted` is safe on the dark
+ramp only. Over a light backdrop it falls to ~3.2:1 on white, which is fine for
+the 11px hint only because nothing light is behind it today.
+
+## Form-control focus indicator — what was wrong, and what the rule now is
+
+**THE RULE, restated because no section of `ARCHITECTURE.md` stated it and
+that is why it drifted.** A form control declares `focus:border-accent` and
+**nothing else**. It does not declare `focus:outline-none`, because that utility
+is `(0,2,0)` and outranks the blanket
+`:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }` in
+`globals.css` — which is what carries the focus indicator, correctly, on every
+interactive element in the product. `ui/dialog.tsx` had already reached that
+conclusion for its own close button, and records the reasoning in its docstring
+(around line 276-281); that the rest of the product had not is the drift.
+
+**What was wrong, fixed 2026-10-04.** Every text input, textarea and select in
+the product declared `focus:outline-none focus:ring-2 focus:ring-accent/25`,
+suppressing the outline and substituting a `box-shadow` at 25% alpha. That
+substitute measured **~1.9:1** against the canvas — effectively invisible —
+while the solid `focus:border-accent` (~4.5:1) was doing the real work. Two
+sites (`playlist/playlist-share-control.tsx`, the picker's search field in
+`tracks/add-to-playlist-menu.tsx`) suppressed the outline with **no ring at
+all**, i.e. no indicator of any kind on keyboard focus. `box-shadow` is also
+**dropped entirely** under `forced-colors: active`, and this repository has no
+`forced-colors` or `prefers-contrast` handling, so in Windows High Contrast
+those controls had nothing at all.
+
+The fix removed the trio from ten form-control sites across six files, and the
+bare `focus:outline-none` from the two that had nothing else. It also removed
+a bare `outline-none` from `shell/brand.tsx`, which was killing the outline on
+the home link in every state. Nothing
+was added to `globals.css` — the blanket rule was always correct; it was simply
+being outranked.
+
+**Still deliberately suppressed, and why.** `focus:outline-none` remains on
+three *container* surfaces — the dialog panel, the full-player sheet and the
+queue sheet — because they are programmatically focused scroll regions
+(`tabIndex`) and a keyboard user must not see a focus ring on the container
+itself. It also remains on menu rows (`track-action-menu`, `queue-panel`,
+`add-to-playlist-menu`, `locale-switcher`), which signal focus with
+`focus:bg-surface-2/60`: a filled row is a legitimate substitute for an outline
+on a full-bleed menu item, and a ring around each row would be noise. **A form
+control is neither of these things, and that distinction is the whole rule.**
+
+## Appearance scope — what the user's appearance does NOT reach
+
+The appearance preference is an inline style on ONE element, the shell root
+(`[data-aurora-glass]`, rendered by `AppearanceRoot`). Everything inside it
+inherits those values by the ordinary DOM rule. That single-element design is
+what makes the no-flash guarantee possible (§32.5: the values are computed during
+server render, so the first painted frame is already the user's theme), and it is
+also what bounds the reach. Two surfaces sit outside it, and both are
+deliberate.
+
+- **A surface portalled to `document.body` inherited nothing, and this was a
+  real defect rather than a design choice.** `CreatePlaylistDialog` is
+  portalled out of the playlist picker, which is `overflow-hidden`, so the dialog
+  has to leave it; it was portalled to `body`, which is a **sibling** of the
+  shell root and therefore inherits none of the user's values. Measured
+  2026-10-04 at `glassAlpha: 0.15`: the application wore `0.15` and the dialog
+  wore the stylesheet default `.6`. Fixed by portalling into the shell root
+  instead (`add-to-playlist-menu.tsx`), so the dialog inherits like everything
+  else — no second writer, no duplicated token, and `z-dialog` is unaffected
+  because the shell root is an `isolate` stacking context containing every
+  surface the dialog has to cover. Pinned by
+  `src/components/tracks/__tests__/add-to-playlist-portal.test.tsx`. The rule
+  this establishes: **a portal in this application targets
+  `[data-aurora-glass]`, not `document.body`.**
+- **The root 404, the root error boundary and `global-error` render the shipped
+  default theme.** These three live outside the `(app)` group, so no shell root
+  exists on them at all — verified in a browser:
+  `document.querySelector('[data-aurora-glass]')` is `null` on an unmatched URL.
+  They therefore show `:root` defaults and no background image or aurora wash.
+  This is a **theme discontinuity on three dead-end pages, not a broken
+  rendering**: none of them uses a glass class, so the default theme is legible
+  and internally consistent.
+
+  The obvious fix — moving the appearance onto `document.documentElement` — was
+  evaluated and **rejected**. `src/app/layout.tsx` is a server component and can
+  read the appearance, so there is no flash on first paint. But the live draft
+  lives in `AppearanceRoot`'s React state, so moving the element means every
+  slider tick has to be published to `documentElement.style` from an effect —
+  which converts "no flash" into "a flash on every appearance change" for
+  everybody, in exchange for a wallpaper on a 404. It would also entangle the
+  layout box (`isolate` is what lets the backdrop sit at `z-index: -1`) and
+  break the text-matched selector gates. Recorded here rather than left as an
+  unstated gap.
+
 ## Phase 53 — Aurora Glass: what is deliberately absent
 
 Phase 53 added an optional glass presentation mode, background images, and
@@ -596,8 +712,8 @@ patch individual instances when the primitive is responsible.
   decision, not a bugfix. The repair is one compact entry in Button's size map
   plus a change at those four call sites.
 - **AutoplayButton carries the same latent colour conflict shuffle had.** It
-  puts 	ext-accent on a Button variant="ghost", so the accent loses to the
-  primitive's 	ext-text-secondary exactly as described in ARCHITECTURE.md
+  puts `text-accent` on a Button variant="ghost", so the accent loses to the
+  primitive's `text-text-secondary` exactly as described in ARCHITECTURE.md
   §20.1. Its *ring* is real and its on-state is visible, so this is cosmetic
   rather than a state that fails to report. It is left alone here because fixing
   it changes another feature's appearance; the measurement is recorded so the
@@ -734,3 +850,30 @@ than omissions:
   user actions, exactly as they are for a text search.
 - **No new provider selector, no second search input, no "search URL"
   button.** One field, one submit path, one history.
+## Music-reactive Ambient Light - what is deliberately absent
+
+The music-reactivity layer (`off` / `subtle` / `full`) is implemented,
+tested and wired, but it is **inert for Aurora's real provider streams**, and
+that is a deliberate stopping point rather than an oversight.
+
+- **No same-origin media proxy.** Chromium refuses
+  `HTMLMediaElement.captureStream()` on a cross-origin media element, so
+  every provider stream is unreadable to the page. Making the effect work would
+  mean proxying playback through our own origin: a new subsystem that decrypts
+  and re-serves provider media, adding latency, a bandwidth bill and a new
+  failure mode to the one thing that must never break. Not worth it for a
+  decorative glow, and not decided here.
+- **No `createMediaElementSource`.** The obvious alternative routes the media
+  element through Web Audio, which makes the element **silent** whenever the
+  resource is not CORS-readable. A feature that can mute playback has no place
+  in this codebase, so it is rejected on safety rather than on effort.
+- **No beat tracking, no onset detection, no tempo estimate.** The first version
+  responds to smoothed band energy. Onset detection is real DSP and would need
+  its own section and its own failure story.
+- **No FFT, band, attack or release controls in the UI.** One
+  `off/subtle/full` choice. A user is not asked to understand signal
+  processing to decide whether the light should breathe.
+- **No hue rotation, no per-band colour, no visualizer.** Audio is a
+  multiplier on artwork-derived alpha and radius, never an input to a hue.
+- **No audio upload, no precomputed envelope.** Analysis is live or absent; it
+  is never persisted and never requires a decode pass on our side.

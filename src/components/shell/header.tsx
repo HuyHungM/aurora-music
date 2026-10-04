@@ -97,22 +97,22 @@ export function Header({
       >
         <SearchIcon size={20} />
       </Link>
-      {/* `lg:hidden` (Phase 54). The sidebar footer already renders the full
-          language switcher from `lg` up, so this compact copy was a second,
-          competing control in the busiest region of the shell - visible at
-          the same time, doing the same thing, in two different sizes. It
-          matches the `md:hidden` reasoning already applied to the Settings
-          link one line below. */}
-      <div className="shrink-0 lg:hidden">
+      {/* One shared header slot, two owners by band. Below `md` — every
+          phone — this compact switcher is the only in-header language
+          control. From `md` to `lg` — every tablet — the slot carries the
+          compact Settings link (next sibling) instead: a tablet has room for
+          the real search field, and Settings is the route that already hosts
+          the full language switcher, so no preference becomes unreachable
+          when the header control yields. From `lg` up the sidebar footer
+          carries the full switcher, so this copy is gone entirely. One slot,
+          never two controls at once. */}
+      <div className="shrink-0 md:hidden">
         <LocaleSwitcher compact />
       </div>
-      {/* The mobile route to Settings (Phase 53). The sidebar that hosts the
-          desktop copy is `hidden lg:flex`, so without this there is no way to
-          reach Appearance on a phone. Placed beside the language switcher for
-          the same reason that is here: both are account-level, not
-          navigation-level, controls. `md:hidden` because from `md` up the
-          sidebar exists and a second copy would be redundant. */}
-      <div className="shrink-0 md:hidden">
+      {/* The tablet route to Settings (Phase 53, re-owned to `md`–`lg`). The
+          sidebar that hosts the desktop copy is `hidden lg:flex`, so below
+          `lg` a header copy is the only way to reach Appearance. */}
+      <div className="hidden shrink-0 md:block lg:hidden">
         <SettingsLink compact />
       </div>
       {user ? (

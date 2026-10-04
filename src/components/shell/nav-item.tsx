@@ -52,7 +52,7 @@ export function NavList({
               onClick={onNavigate}
               className={
                 isBottom
-                  ? `relative flex min-h-12 select-none flex-col items-center justify-center gap-1 px-2 text-[11px] font-medium transition-colors ${
+                  ? `relative flex min-h-12 select-none flex-col items-center justify-center gap-1 px-2 t-utility font-medium transition-colors ${
                       active ? "text-text-primary" : "text-text-muted hover:text-text-secondary"
                     }`
                   // `aurora-touch` on the sidebar branch only (Phase 54).

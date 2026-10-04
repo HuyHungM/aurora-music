@@ -74,7 +74,7 @@ function RenameForm({
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t("playlist.namePlaceholder")}
           maxLength={200}
-          className="h-10 rounded-lg border border-border-subtle bg-surface-2 px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+          className="h-10 rounded-xl border border-border-subtle bg-surface-2 px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent"
           aria-describedby={error ? "rename-error" : undefined}
           aria-invalid={error ? true : undefined}
         />
@@ -94,12 +94,12 @@ function RenameForm({
           placeholder={t("playlist.descriptionPlaceholder")}
           rows={3}
           maxLength={500}
-          className="rounded-lg border border-border-subtle bg-surface-2 px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent resize-none"
+          className="rounded-xl border border-border-subtle bg-surface-2 px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent resize-none"
         />
       </div>
 
       {error ? (
-        <p id="rename-error" role="alert" className="text-sm text-red-400">
+        <p id="rename-error" role="alert" className="text-sm text-danger">
           {error}
         </p>
       ) : null}
@@ -157,7 +157,7 @@ function DeleteConfirmDialog({
         </p>
 
         {error ? (
-          <p role="alert" className="mt-3 text-sm text-red-400">
+          <p role="alert" className="mt-3 text-sm text-danger">
             {error}
           </p>
         ) : null}
@@ -171,7 +171,7 @@ function DeleteConfirmDialog({
             variant="primary"
             onClick={handleDelete}
             disabled={isSubmitting}
-            className="bg-red-600 hover:bg-red-700 text-white"
+            className="bg-danger hover:bg-danger/85 text-white"
           >
             {isSubmitting ? t("common.deleting") : t("common.delete")}
           </Button>
@@ -231,7 +231,7 @@ export function PlaylistActions({
           size="sm"
           onClick={() => setShowDelete(true)}
           aria-label={t("playlist.deletePlaylist")}
-          className="gap-1.5 text-red-400 hover:text-red-300 hover:bg-red-400/10"
+          className="gap-1.5 text-danger hover:text-danger hover:bg-danger/10"
         >
           <TrashIcon size={16} />
           <span className="hidden sm:inline">{t("common.delete")}</span>

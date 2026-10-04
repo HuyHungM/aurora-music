@@ -56,10 +56,10 @@ export function Sidebar({
             <span className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5 py-1">
               <Avatar name={user.name} image={user.image} size={32} />
               <span className="flex min-w-0 flex-col leading-tight">
-                <span className="truncate text-[13px] font-semibold text-text-primary">
+                <span className="truncate text-sm font-semibold text-text-primary">
                   {user.name ?? user.email ?? t("header.account")}
                 </span>
-                <span className="truncate text-[11px] text-text-muted">{t("sidebar.yourLibrary")}</span>
+                <span className="t-utility truncate text-text-muted">{t("sidebar.yourLibrary")}</span>
               </span>
             </span>
             <SignOutControl name={user.name} locale={locale} />

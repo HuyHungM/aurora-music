@@ -10,6 +10,7 @@ import { PauseIcon, PlayIcon } from "@/components/ui/icons";
 import { TrashIcon } from "@/components/ui/icons";
 import { formatTrackDuration } from "@/lib/player/format";
 import { trackCapabilities } from "@/lib/player/track-capabilities";
+import { providerScopedId } from "@/lib/domain/scoped-id";
 import { useLikedTrack } from "./liked-tracks";
 import { useLocale } from "@/components/i18n/locale-provider";
 
@@ -58,7 +59,7 @@ export function TrackRow({
       : "";
   // Same destination construction as the search top-result card: the track
   // page resolves by provider id, falling back to the domain id.
-  const href = `/track/${encodeURIComponent(track.providerTrackId ?? track.id)}`;
+  const href = `/track/${providerScopedId(track.provider, track.providerTrackId ?? track.id)}`;
   const { t } = useLocale();
   const engine = useMusicEngine();
   const currentTrack = useMusicEngineState((s) => s.currentTrack);

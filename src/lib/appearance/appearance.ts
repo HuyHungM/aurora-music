@@ -221,6 +221,40 @@ export const APPEARANCE_RANGES = {
   backgroundSaturation: { min: 0, max: 1.5, step: 0.05 },
   /** Background image blur radius, px. Off by default; see the note in `apply.ts`. */
   backgroundBlur: { min: 0, max: 24, step: 2 },
+  /**
+   * Ambient Light softness, normalized 0-1. NOT px: the CSS maps it to a
+   * bounded radius, and a raw pixel value would let the preference ask for a
+   * blur the compositor cannot afford. Same reasoning as `backgroundBlur`
+   * being bounded at 24 rather than open-ended.
+   */
+  ambientBlur: { min: 0, max: 1, step: 0.05 },
+  /**
+   * How far the ambient field extends, normalized 0-1, mapped to gradient
+   * extent. Wider means more painted area, so the CSS ceiling is deliberately
+   * modest - this is a full-viewport wash, not a local glow.
+   */
+  ambientSpread: { min: 0, max: 1, step: 0.05 },
+  /**
+   * How quickly the field falls off, normalized 0-1, mapped to gradient stop
+   * positions. Low fade keeps the colour present further out.
+   */
+  ambientFade: { min: 0, max: 1, step: 0.05 },
+  /**
+   * How bright the four viewport-edge glows are, 0-1. A MULTIPLIER on what the
+   * stylesheet already computes, not a second intensity: Intensity decides how
+   * present the whole field is, and this decides how much of that light sits on
+   * the screen edges rather than on the Player. At 0 the edges paint nothing at
+   * all and only the Player's own glow remains, which is the one thing the edge
+   * gradients cannot express today.
+   */
+  ambientEdgeGlow: { min: 0, max: 1, step: 0.05 },
+  /**
+   * How brightly the Player's own surface glows, 0-1, as a multiplier on the
+   * emitter's two box-shadows. Separate from Intensity because the emitter is
+   * what makes the Player look LIT, and a field can be wide and faint around a
+   * player that is clearly the source — or the reverse.
+   */
+  ambientPlayerGlow: { min: 0, max: 1, step: 0.05 },
 } as const satisfies Record<string, AppearanceControl>;
 
 export type AppearanceControlName = keyof typeof APPEARANCE_RANGES;
@@ -329,6 +363,187 @@ export const GLASS_PRESETS: Record<
    THE PREFERENCE
    ========================================================================== */
 
+/* ==========================================================================
+   AMBIENT LIGHT DEPTH (the configuration layer)
+   ==========================================================================
+   Four ENUMERATED preferences, alongside the numeric controls above. They are
+   enums rather than numbers because each is a small closed set of named
+   choices, and a named choice is what the settings UI, the stylesheet and the
+   tests can all agree on. They deliberately do NOT live in
+   `APPEARANCE_RANGES`, which is the numeric-only grid `quantize` walks and
+   which the stylesheet's `--p-appearance-*` defaults are pinned to.
+
+   THE PALETTE IS NOT TOUCHED BY ANY OF THIS. `artwork-palette.ts` still owns
+   colours; these fields own presentation only, and the renderer is where the
+   two meet.
+*/
+
+/** Named Ambient Light configurations. `custom` is the user's own values. */
+export const AMBIENT_PRESET_IDS = [
+  "subtle",
+  "balanced",
+  "immersive",
+  "custom",
+] as const;
+
+export type AmbientPresetId = (typeof AMBIENT_PRESET_IDS)[number];
+
+export function isAmbientPresetId(value: unknown): value is AmbientPresetId {
+  return (
+    typeof value === "string" &&
+    (AMBIENT_PRESET_IDS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Which edge the field is anchored to.
+ *
+ * `all` is the four-edge field the feature shipped with. The other four keep a
+ * single edge strong and drop the rest, which is both a look the reference
+ * systems offer and a real saving: three fewer full-viewport gradient paints.
+ */
+export const AMBIENT_DIRECTION_IDS = [
+  "all",
+  "top",
+  "right",
+  "bottom",
+  "left",
+] as const;
+
+export type AmbientDirectionId = (typeof AMBIENT_DIRECTION_IDS)[number];
+
+export function isAmbientDirectionId(
+  value: unknown,
+): value is AmbientDirectionId {
+  return (
+    typeof value === "string" &&
+    (AMBIENT_DIRECTION_IDS as readonly string[]).includes(value)
+  );
+}
+
+/** How quickly the palette swaps between tracks. Never a JS animation loop. */
+export const AMBIENT_TRANSITION_IDS = ["smooth", "fast", "none"] as const;
+
+export type AmbientTransitionId = (typeof AMBIENT_TRANSITION_IDS)[number];
+
+export function isAmbientTransitionId(
+  value: unknown,
+): value is AmbientTransitionId {
+  return (
+    typeof value === "string" &&
+    (AMBIENT_TRANSITION_IDS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * How much ambient MOVEMENT there is.
+ *
+ * The artwork is a still image, so this is not the reference system's
+ * per-frame video treatment and must never become one. It scales a slow CSS
+ * drift of the field, and `prefers-reduced-motion` overrides it entirely.
+ */
+export const AMBIENT_MOTION_IDS = ["off", "subtle", "full"] as const;
+
+// Music reactivity has ONE definition, beside the analysis maths that consumes
+// it. Re-exported rather than redeclared so the persisted enum and the code that
+// interprets it can never disagree. `appearance.ts` remains free of browser APIs —
+// a type and two pure predicates do not change that.
+import {
+  isMusicReactiveId,
+  type MusicReactiveId,
+} from "./music-reactive";
+
+export {
+  MUSIC_REACTIVE_IDS,
+  isMusicReactiveId,
+  type MusicReactiveId,
+} from "./music-reactive";
+
+export type AmbientMotionId = (typeof AMBIENT_MOTION_IDS)[number];
+
+export function isAmbientMotionId(value: unknown): value is AmbientMotionId {
+  return (
+    typeof value === "string" &&
+    (AMBIENT_MOTION_IDS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Everything an Ambient Light preset is allowed to set.
+ *
+ * THE FOUR NUMERIC CONTROLS ONLY. `ambientDirection`, `ambientTransition` and
+ * `ambientMotion` are deliberately absent, and the reason is that a preset has
+ * no opinion worth overriding: every look can be directional, every look can
+ * cross-fade or not, and every look can drift or not. Those three are choices
+ * about the USER's machine and their motion sensitivity, not about how present
+ * the effect is, so naming them in a preset table would silently reset them —
+ * turning someone's "Left only" back to "All" because they picked Subtle.
+ */
+export type AmbientPresetControl = AppearanceControlName;
+
+export type AmbientPresetValues = Partial<
+  Record<AmbientPresetControl, number>
+>;
+
+/**
+ * The three named Ambient Light looks, in ONE place.
+ *
+ * Only the six controls a preset owns are listed, exactly as `GLASS_PRESETS`
+ * does. Nothing outside Ambient Light is touched, and `direction`, `transition`
+ * and `motion` are carried through when a preset does not name them, so
+ * choosing a preset is never a silent reset of those choices.
+ *
+ * Read the table along three axes rather than assuming "bigger number, more":
+ *
+ *   - INTENSITY AND SPREAD RISE TOGETHER, because a strong light that does
+ *     not travel is a flat wash, and a wide one at low intensity is a haze with
+ *     no source.
+ *   - FADE FALLS AS THE EFFECT STRENGTHENS. Fade is how fast the field dies
+ *     away; a long fade on a strong, wide field never resolves, which is the
+ *     muddy look every ambient implementation has.
+ *   - BLUR IS HIGHEST ON SUBTLE. Subtle's job is to go unnoticed, and an
+ *     unnoticeable field is a soft one; Immersive wants a defined core, so it
+ *     sharpens.
+ *
+ * Every numeric value is on its own control's grid and is a fixed point of
+ * `quantize`, so a decoded preset renders exactly as this table says.
+ */
+export const AMBIENT_PRESETS: Record<
+  Exclude<AmbientPresetId, "custom">,
+  AmbientPresetValues
+> = {
+  /** Almost subliminal: soft, small, and slow to disappear. */
+  subtle: {
+    // 0.2, not 0.25: `auroraIntensity` is SHARED with the general aurora wash
+    // and its shipped default is 0.4, so every value here has to read as a
+    // deliberate move away from it on the control's 0.05 grid.
+    auroraIntensity: 0.2,
+    ambientBlur: 0.8,
+    ambientSpread: 0.35,
+    ambientFade: 0.75,
+  },
+  /**
+   * The everyday choice, and what enabling the feature gives by default.
+   *
+   * `auroraIntensity` is EXACTLY the shipped 0.4, deliberately. Choosing
+   * Balanced must not move a control the user never touched, and 0.4 is what
+   * the stylesheet's `--p-appearance-aurora` already declares.
+   */
+  balanced: {
+    auroraIntensity: 0.4,
+    ambientBlur: 0.6,
+    ambientSpread: 0.5,
+    ambientFade: 0.6,
+  },
+  /** Stronger and wider, for the full player. Deliberately not the default. */
+  immersive: {
+    auroraIntensity: 0.7,
+    ambientBlur: 0.45,
+    ambientSpread: 0.7,
+    ambientFade: 0.4,
+  },
+};
+
 /**
  * The resolved preference. Always complete: every field is present, in
  * range, and quantised. A partial, unvalidated version of this never exists
@@ -346,6 +561,30 @@ export interface Appearance {
    * choose, so it is opt-in.
    */
   artworkAmbient: boolean;
+  /**
+   * Which named Ambient Light look the controls were last set from. `custom`
+   * once the user has touched a control directly — the preset is a record of
+   * where the values came from, never a recomputed guess.
+   */
+  ambientPreset: AmbientPresetId;
+  /** Which edge the ambient field is anchored to. */
+  ambientDirection: AmbientDirectionId;
+  /** Palette swap pacing between tracks. */
+  ambientTransition: AmbientTransitionId;
+  /** Ambient drift. Overridden by `prefers-reduced-motion`. */
+  ambientMotion: AmbientMotionId;
+  /** How strongly the ambient light reacts to the audio itself. */
+  ambientMusicReactive: MusicReactiveId;
+  /** Ambient softness, normalized. The CSS maps it to a bounded radius. */
+  ambientBlur: number;
+  /** How far the ambient field extends, normalized. */
+  ambientSpread: number;
+  /** How quickly the field falls off, normalized. */
+  ambientFade: number;
+  /** How much of the light sits on the viewport edges, 0-1. */
+  ambientEdgeGlow: number;
+  /** How brightly the Player's own surface glows, 0-1. */
+  ambientPlayerGlow: number;
   glassAlpha: number;
   glassBlur: number;
   glassSaturation: number;
@@ -376,6 +615,27 @@ export const DEFAULT_APPEARANCE: Appearance = {
   preset: "aurora",
   background: { kind: "none" },
   artworkAmbient: false,
+  // The depth layer is populated even though the feature is off: a default
+  // preset does NOT mean enabled. These are the values the feature will have
+  // the moment it is switched on, which is why they are Balanced.
+  ambientPreset: "balanced",
+  ambientDirection: "all",
+  ambientTransition: "smooth",
+  ambientMotion: "subtle",
+  // Music reactivity defaults to `subtle`, NOT `off`: a user who has already
+  // opted into Ambient Light has opted into it reacting to the music, and
+  // `subtle` is the restrained end of that. It still costs nothing while
+  // paused, hidden or off.
+  ambientMusicReactive: "subtle",
+  ambientBlur: 0.6,
+  ambientSpread: 0.5,
+  ambientFade: 0.6,
+  // Both glow multipliers default to 1, which is the shipped appearance: the
+  // stylesheet's own alpha percentages with nothing scaled away. A default below
+  // 1 would silently dim edges or the Player on upgrade, which is exactly the
+  // kind of change a preference update must never make unasked.
+  ambientEdgeGlow: 1,
+  ambientPlayerGlow: 1,
   glassAlpha: 0.6,
   glassBlur: 18,
   glassSaturation: 1.1,
@@ -543,6 +803,29 @@ export function decodeAppearance(input: unknown): Appearance {
     background: readBackground(record.background),
     artworkAmbient:
       readBoolean(record.artworkAmbient) ?? DEFAULT_APPEARANCE.artworkAmbient,
+    // Missing fields are absence, not corruption: a preference stored by an
+    // earlier build simply resolves to today's default, which is exactly the
+    // forward-compatibility promise `decodeAppearance` makes. No migration.
+    ambientPreset: isAmbientPresetId(record.ambientPreset)
+      ? record.ambientPreset
+      : DEFAULT_APPEARANCE.ambientPreset,
+    ambientDirection: isAmbientDirectionId(record.ambientDirection)
+      ? record.ambientDirection
+      : DEFAULT_APPEARANCE.ambientDirection,
+    ambientTransition: isAmbientTransitionId(record.ambientTransition)
+      ? record.ambientTransition
+      : DEFAULT_APPEARANCE.ambientTransition,
+    ambientMotion: isAmbientMotionId(record.ambientMotion)
+      ? record.ambientMotion
+      : DEFAULT_APPEARANCE.ambientMotion,
+    ambientMusicReactive: isMusicReactiveId(record.ambientMusicReactive)
+      ? record.ambientMusicReactive
+      : DEFAULT_APPEARANCE.ambientMusicReactive,
+    ambientBlur: quantize("ambientBlur", record.ambientBlur),
+    ambientSpread: quantize("ambientSpread", record.ambientSpread),
+    ambientFade: quantize("ambientFade", record.ambientFade),
+    ambientEdgeGlow: quantize("ambientEdgeGlow", record.ambientEdgeGlow),
+    ambientPlayerGlow: quantize("ambientPlayerGlow", record.ambientPlayerGlow),
     glassAlpha: quantize("glassAlpha", record.glassAlpha),
     glassBlur: quantize("glassBlur", record.glassBlur),
     glassSaturation: quantize("glassSaturation", record.glassSaturation),
@@ -632,6 +915,26 @@ export function encodeAppearance(appearance: Appearance): AppearanceWire {
   if (appearance.artworkAmbient !== DEFAULT_APPEARANCE.artworkAmbient) {
     wire.artworkAmbient = appearance.artworkAmbient;
   }
+  // The same "only what differs" discipline for the depth layer. Most users
+  // never open Ambient Light, so its seven fields are absent from their cookie
+  // entirely; that is the whole reason the cookie stays small.
+  if (appearance.ambientPreset !== DEFAULT_APPEARANCE.ambientPreset) {
+    wire.ambientPreset = appearance.ambientPreset;
+  }
+  if (appearance.ambientDirection !== DEFAULT_APPEARANCE.ambientDirection) {
+    wire.ambientDirection = appearance.ambientDirection;
+  }
+  if (appearance.ambientTransition !== DEFAULT_APPEARANCE.ambientTransition) {
+    wire.ambientTransition = appearance.ambientTransition;
+  }
+  if (appearance.ambientMotion !== DEFAULT_APPEARANCE.ambientMotion) {
+    wire.ambientMotion = appearance.ambientMotion;
+  }
+  if (
+    appearance.ambientMusicReactive !== DEFAULT_APPEARANCE.ambientMusicReactive
+  ) {
+    wire.ambientMusicReactive = appearance.ambientMusicReactive;
+  }
   for (const name of APPEARANCE_CONTROL_NAMES) {
     if (appearance[name] !== DEFAULT_APPEARANCE[name]) {
       wire[name] = appearance[name];
@@ -675,6 +978,106 @@ export function applyPreset(
   for (const [name, value] of Object.entries(values)) {
     const key = name as AppearanceControlName;
     next[key] = quantize(key, value);
+  }
+  return next;
+}
+
+/**
+ * Applies an Ambient Light preset, returning a NEW object.
+ *
+ * `custom` IS NOT A PRESET. Choosing it is how a user says "these are my
+ * values" — it has no values to apply, so it only relabels. Relabelling is the
+ * whole of it, and that is deliberate: a `custom` row with invented numbers
+ * would be a fourth look nobody designed.
+ *
+ * Controls the chosen preset does not name are carried through untouched, so
+ * applying "Subtle" never silently resets Direction, Transition or Motion,
+ * and never touches glass, background or anything outside Ambient Light.
+ */
+export function applyAmbientPreset(
+  appearance: Appearance,
+  preset: AmbientPresetId,
+): Appearance {
+  if (preset === "custom") {
+    return { ...appearance, ambientPreset: "custom" };
+  }
+  const values = AMBIENT_PRESETS[preset];
+  const next: Appearance = { ...appearance, ambientPreset: preset };
+  for (const [name, value] of Object.entries(values)) {
+    if (typeof value === "number") {
+      next[name as AppearanceControlName] = quantize(
+        name as AppearanceControlName,
+        value,
+      );
+    }
+  }
+  return next;
+}
+
+/**
+ * Every Ambient Light control that counts as "the user has their own values".
+ *
+ * `direction`, `transition` and `motion` are included: they are presented as
+ * segmented choices in the same block as the sliders, and a user who picked
+ * "Top" has as much of a hand in the result as one who dragged a slider. What
+ * is NOT here is `artworkAmbient` itself, because turning the feature off is
+ * not a customisation of it.
+ */
+export const AMBIENT_CUSTOM_CONTROLS = [
+  "auroraIntensity",
+  "ambientBlur",
+  "ambientSpread",
+  "ambientFade",
+  "ambientEdgeGlow",
+  "ambientPlayerGlow",
+  "ambientDirection",
+  "ambientTransition",
+  "ambientMotion",
+] as const satisfies readonly (
+  | AppearanceControlName
+  | "ambientDirection"
+  | "ambientTransition"
+  | "ambientMotion"
+)[];
+
+/**
+ * Records a direct edit to one Ambient Light control, switching the preset to
+ * `custom`.
+ *
+ * EXPLICIT MODIFICATION IS THE ONLY TRIGGER. The alternative — recomputing the
+ * preset by comparing the current values against each table row — was rejected:
+ * it makes the label flicker the moment a value lands near a preset's, and it
+ * cannot tell "the user chose Balanced and nudged one slider" from "the user
+ * chose Subtle". A label that lies is worse than one that is merely stale.
+ */
+export function withAmbientControl(
+  appearance: Appearance,
+  name:
+    | AppearanceControlName
+    | "ambientDirection"
+    | "ambientTransition"
+    | "ambientMotion",
+  value: number | AmbientDirectionId | AmbientTransitionId | AmbientMotionId,
+): Appearance {
+  const next: Appearance = { ...appearance, ambientPreset: "custom" };
+  // Numeric control or enumerated one — decided by MEMBERSHIP of the range
+  // table, not by the type of the value. Checking `typeof value === "number"`
+  // instead would send an enum name into `quantize`, where there is no range
+  // for it, and the whole preference would fail on an unrelated field.
+  if (name in APPEARANCE_RANGES) {
+    const numeric = typeof value === "number" ? value : Number.NaN;
+    next[name as AppearanceControlName] = quantize(
+      name as AppearanceControlName,
+      numeric,
+    );
+    return next;
+  }
+  if (name === "ambientDirection" && isAmbientDirectionId(value)) {
+    next.ambientDirection = value;
+  } else if (name === "ambientTransition" && isAmbientTransitionId(value)) {
+    next.ambientTransition = value;
+  } else if (name === "ambientMotion" && isAmbientMotionId(value)) {
+    next.ambientMotion = value;
   }
   return next;
 }

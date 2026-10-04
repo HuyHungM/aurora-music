@@ -73,3 +73,10 @@ next-env.d.ts
 *.db
 *.db-journal
 *.sqlite
+
+# agent-local checkouts (reproducible via skills-lock.json / worktree metadata;
+# machine-local state, not shared configuration)
+/.agents/
+/.kilo/
+/.opencode/
+tmp-*

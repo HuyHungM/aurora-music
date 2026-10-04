@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback, type ReactNode } from "react";
 import { usePresence } from "@/components/ui/presence";
 import { useFocusTrap } from "@/components/ui/focus";
+import { useLocale } from "@/components/i18n/locale-provider";
 import { XIcon } from "@/components/ui/icons";
 
 /**
@@ -45,6 +46,12 @@ export interface DialogProps {
   children: ReactNode;
   /** Accessible name for the dialog (announced on open). */
   label?: string;
+  /**
+   * ID of the element that describes the dialog (announced with the name).
+   * The caller owns the described element and its ID; when omitted the
+   * attribute is absent rather than dangling.
+   */
+  describedBy?: string;
 }
 
 /**
@@ -73,7 +80,25 @@ function releaseScrollLock() {
   }
 }
 
-export function Dialog({ open, onClose, children, label }: DialogProps) {
+/**
+ * The counted lock, for surfaces that are modal but are not `Dialog`.
+ *
+ * `FullPlayer` declares `aria-modal="true"` and covers the viewport, and the
+ * queue sheet is modal below `lg` — neither is a `Dialog`, and each had rolled
+ * its own `document.body.style.overflow` capture/restore. A per-instance
+ * capture is not nesting-safe: closing the queue while the create-playlist
+ * dialog it opened is still on screen restored `overflow` to `""` and let the
+ * page scroll behind a live modal, which is the exact bug the counter above
+ * exists to prevent. Reused rather than reimplemented.
+ *
+ * Returns the release function so it composes with any other effect cleanup.
+ */
+export function lockBodyScroll(): () => void {
+  acquireScrollLock();
+  return releaseScrollLock;
+}
+
+export function Dialog({ open, onClose, children, label, describedBy }: DialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -180,6 +205,7 @@ export function Dialog({ open, onClose, children, label }: DialogProps) {
         role="dialog"
         aria-modal="true"
         aria-label={label}
+        aria-describedby={describedBy}
         tabIndex={-1}
         {...presenceProps}
         // `aurora-glass-float` replaces `bg-surface-1 shadow-2xl` (Phase 53,
@@ -227,17 +253,25 @@ export function DialogTitle({ children }: DialogTitleProps) {
 
 export interface DialogCloseProps {
   onClick: () => void;
+  /**
+   * Overrides the accessible name. Omit it: the default resolves from the
+   * active locale (`dialog.closeDialog`), which is what every call site should
+   * want. The previous default was the hardcoded English literal `"Close
+   * dialog"`, and all six production call sites pass no label — so every
+   * dialog's dismiss button was announced in English on a Vietnamese UI.
+   */
   "aria-label"?: string;
 }
 
 export function DialogClose({
   onClick,
-  "aria-label": ariaLabel = "Close dialog",
+  "aria-label": ariaLabel,
 }: DialogCloseProps) {
+  const { t } = useLocale();
   return (
     <button
       type="button"
-      aria-label={ariaLabel}
+      aria-label={ariaLabel ?? t("dialog.closeDialog")}
       onClick={onClick}
       /* No local focus styling. The blanket `:focus-visible` outline in
          `globals.css` is the app-wide convention — every other control,

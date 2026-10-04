@@ -66,12 +66,24 @@ describe("SearchLoading skeleton", () => {
 /**
  * Skeleton fidelity: a placeholder that does not match the content it stands in
  * for is worse than none, because it promises a layout and then breaks it.
+ *
+ * The search skeleton is deliberately TWO files — `loading.tsx` (header + field,
+ * which only the route boundary can show) and `search-result-skeleton.tsx` (the
+ * result area, shared with the client-driven pending state). Every source-level
+ * assertion below reads their concatenation, because the property under test is
+ * about the whole skeleton, not about which file a class name happens to sit in.
  */
 describe("SearchLoading fidelity to the result layout", () => {
-  const loading = readFileSync(
-    resolve(process.cwd(), "src/app/(app)/search/loading.tsx"),
-    "utf8",
-  );
+  const loading = [
+    readFileSync(
+      resolve(process.cwd(), "src/app/(app)/search/loading.tsx"),
+      "utf8",
+    ),
+    readFileSync(
+      resolve(process.cwd(), "src/app/(app)/search/search-result-skeleton.tsx"),
+      "utf8",
+    ),
+  ].join("\n");
   const page = readFileSync(
     resolve(process.cwd(), "src/app/(app)/search/page.tsx"),
     "utf8",
@@ -125,12 +137,20 @@ describe("SearchLoading fidelity to the result layout", () => {
       resolve(process.cwd(), "src/components/search/search-field.tsx"),
       "utf8",
     );
-    expect(loading).toContain("h-13 w-full max-w-2xl rounded-2xl");
-    expect(field).toContain("h-13");
-    expect(field).toContain("w-full max-w-2xl");
+    expect(loading).toContain(
+      "aurora-glass h-13 w-full overflow-hidden rounded-2xl",
+    );
+    expect(loading).toContain("md:max-w-4xl");
+    expect(field).toContain("aurora-glass h-13 w-full");
+    expect(field).toContain("rounded-2xl border border-border-strong");
+    expect(field).toContain("md:max-w-4xl");
     // `h-13` is the page field's real height; a placeholder of a different
     // height is the single most visible jump on the page.
     expect(loading).toContain("h-13");
+    // The skeleton's wrapper and the field must carry the same glass surface:
+    // a mismatch here is the border/surface "lệch" the two sides are checked
+    // against each other to prevent.
+    expect(loading).toContain("border border-border-strong");
   });
 
   it("stays synchronous so the skeleton paints before anything is awaited", () => {
@@ -158,7 +178,24 @@ describe("SearchLoading fidelity to the result layout", () => {
     // page jump upward when the results land.
     const { container } = render(<SearchLoading />);
     expect(container.querySelectorAll(".h-11.w-11").length).toBeGreaterThanOrEqual(5);
-    expect(container.querySelectorAll(".h-20.w-20")).toHaveLength(1);
+    // The top-result art matches the card's 88px `pixelSize`, not the 80px
+    // `h-20 w-20` the skeleton previously guessed.
+    expect(container.querySelectorAll(".h-22.w-22")).toHaveLength(1);
+    expect(container.querySelectorAll(".h-20.w-20")).toHaveLength(0);
+  });
+
+  it("ends each track row in the row's own trailing circle", () => {
+    // `TrackRow` ends in an `h-11 w-11 rounded-full` Play control; a skeleton
+    // row that ends in a bare gap (or a duration-width bar) grows by ~44px
+    // when content lands. Each of the 5 rows carries the circle.
+    const { container } = render(<SearchLoading />);
+    const rows = container.querySelectorAll(
+      ".rounded-2xl.border.border-border-subtle.bg-surface-1\\/60 > div",
+    );
+    expect(rows).toHaveLength(5);
+    for (const row of Array.from(rows)) {
+      expect(row.querySelector(".h-11.w-11.rounded-full")).toBeTruthy();
+    }
   });
 
   it("uses the shared glass skeleton rather than an opaque block", () => {

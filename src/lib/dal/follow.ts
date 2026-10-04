@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import type { Artist } from "@/lib/domain";
 import { prisma } from "@/lib/db";
-import { upsertArtist, findArtistInternalId } from "@/lib/dal/catalog";
+import { upsertArtist } from "@/lib/dal/catalog";
 import { mapFollow } from "@/lib/dal/mappers";
 import type { Follow } from "@/lib/domain";
 
@@ -31,11 +31,14 @@ export async function unfollowArtist(
   ref: ArtistRef,
   db: PrismaClient = prisma,
 ): Promise<void> {
-  const artistId = await findArtistInternalId(db, ref);
-  if (!artistId) {
-    return;
-  }
-  await db.follow.deleteMany({ where: { userId, artistId } });
+  // ONE round trip, not two — the same shape `isFollowing` and `isTrackLiked`
+  // already use in this file: put the relation predicate in the `where` instead
+  // of resolving the ref to an internal id first. The return type is `void`, so
+  // the old "unknown artist → early return" branch was unobservable; a
+  // `deleteMany` matching nothing deletes nothing.
+  await db.follow.deleteMany({
+    where: { userId, artist: { provider: ref.provider, providerArtistId: ref.providerArtistId } },
+  });
 }
 
 export async function listUserFollows(
@@ -108,15 +111,18 @@ export async function isFollowing(
   ref: ArtistRef,
   db: PrismaClient = prisma,
 ): Promise<boolean> {
-  const artistId = await findArtistInternalId(db, ref);
-  if (!artistId) {
-    return false;
-  }
-  // `findFirst` on the `@@unique([userId, artistId])` index answers the
-  // boolean in one round trip; the COUNT it replaces computed a number nobody
-  // read and cost a second query to compute it.
+  // ONE round trip. This resolved the ref to an internal `Artist.id` and then
+  // asked the question — two sequential statements, on a path the artist page
+  // hits on every render. `isTrackLiked` in the sibling module answers the
+  // identical question in one query with exactly this shape, and its comment
+  // already explains why the relation predicate belongs in the `where`: it lets
+  // Postgres use the `@@unique([userId, artistId])` index without a join to
+  // resolve the provider ref first.
   const row = await db.follow.findFirst({
-    where: { userId, artistId },
+    where: {
+      userId,
+      artist: { provider: ref.provider, providerArtistId: ref.providerArtistId },
+    },
     select: { id: true },
   });
   return row !== null;

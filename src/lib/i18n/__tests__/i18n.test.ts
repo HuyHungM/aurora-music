@@ -87,6 +87,57 @@ describe("translation coverage", () => {
       dicts.en.common.cancel = backup;
     }
   });
+
+  it("keeps placeholder sets identical across locales for every key", () => {
+    // A placeholder present in one locale and missing in the other renders
+    // either a raw `{name}` or a silently dropped value — a mixed-language
+    // sentence either way. Compared as sets, so reordering placeholders is
+    // free (Vietnamese word order differs) but adding/dropping one fails.
+    const dicts = getDictionaries();
+    const names = (template: string): string[] => {
+      const out = new Set<string>();
+      for (const m of template.matchAll(/\{(\w+)\}/g)) out.add(m[1]);
+      return [...out].sort();
+    };
+    const viKeys = dictionaryKeys(dicts.vi);
+    const offenders: string[] = [];
+    for (const key of viKeys) {
+      const parts = key.split(".");
+      let viNode: unknown = dicts.vi;
+      let enNode: unknown = dicts.en;
+      for (const part of parts) {
+        viNode = (viNode as Record<string, unknown>)[part];
+        enNode = (enNode as Record<string, unknown>)[part];
+      }
+      if (typeof viNode === "string" && typeof enNode === "string") {
+        const viNames = JSON.stringify(names(viNode));
+        const enNames = JSON.stringify(names(enNode));
+        if (viNames !== enNames) offenders.push(`${key}: vi=${viNames} en=${enNames}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("uses the typographic ellipsis in pending states, never three dots", () => {
+    // ASCII "..." beside "…" is a second way to write the same pause, and
+    // the two render at different widths. Pending states (loading, saving,
+    // generating) are the only strings allowed to trail off at all, and
+    // every one of them uses U+2026.
+    const dicts = getDictionaries();
+    const offenders: string[] = [];
+    for (const key of dictionaryKeys(dicts.vi)) {
+      for (const dict of [dicts.vi, dicts.en] as const) {
+        let node: unknown = dict;
+        for (const part of key.split(".")) {
+          node = (node as Record<string, unknown>)[part];
+        }
+        if (typeof node === "string" && node.includes("...")) {
+          offenders.push(key);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe("pluralization", () => {

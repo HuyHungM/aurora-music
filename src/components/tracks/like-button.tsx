@@ -9,6 +9,7 @@ import {
 } from "@/app/actions/track";
 import { useLikedTrack, requestAuthPrompt } from "./liked-tracks";
 import { useLocale } from "@/components/i18n/locale-provider";
+import { likeNotifications } from "@/components/ui/notify-events";
 
 export function LikeButton({
   track,
@@ -39,6 +40,7 @@ export function LikeButton({
   // rendered standalone (unit tests, isolated surfaces).
   const shared = useLikedTrack(track);
   const { t } = useLocale();
+  const like = likeNotifications(t);
   const [localLiked, setLocalLiked] = useState(initialLiked);
   const [isPending, startTransition] = useTransition();
 
@@ -50,28 +52,44 @@ export function LikeButton({
       shared.toggle();
       return;
     }
-    const nextLiked = !localLiked;
+    // The PREVIOUS value, captured at submit, so the rollback restores what was
+    // actually on screen rather than assuming the two branches pair up.
+    const previousLiked = localLiked;
+    const nextLiked = !previousLiked;
     setLocalLiked(nextLiked);
     startTransition(async () => {
-      if (nextLiked) {
-        const result = await likeTrackAction(track);
-        if (!result.ok) {
-          setLocalLiked(false);
-          // The shared path prompts through the provider's own auth flag; the
-          // standalone path has only this prop. Without it an anonymous tap
-          // fails and rolls back with no explanation.
-          if (isAuthenticated === false) {
-            requestAuthPrompt();
-          }
+      // ONE failure path, covering both `{ ok: false }` and a REJECTED action.
+      // The sibling shared path (`liked-tracks.tsx`) has always had this
+      // `catch`; the standalone branch did not, so a transport drop or a
+      // navigation abort left the optimistic flip permanent — the button
+      // pressed in, no row moved, no toast, no explanation.
+      const fail = () => {
+        setLocalLiked(previousLiked);
+        // The shared path prompts through the provider's own auth flag; the
+        // standalone path has only this prop. Without it an anonymous tap
+        // fails and rolls back with no explanation.
+        if (isAuthenticated === false) {
+          requestAuthPrompt();
+        } else {
+          like.failed();
         }
-      } else {
-        const result = await unlikeTrackAction(track);
+      };
+
+      try {
+        const result = nextLiked
+          ? await likeTrackAction(track)
+          : await unlikeTrackAction(track);
         if (!result.ok) {
-          setLocalLiked(true);
-          if (isAuthenticated === false) {
-            requestAuthPrompt();
-          }
+          fail();
+          return;
         }
+        if (nextLiked) {
+          like.liked(track);
+        } else {
+          like.unliked(track);
+        }
+      } catch {
+        fail();
       }
     });
   };

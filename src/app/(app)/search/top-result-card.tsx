@@ -9,6 +9,7 @@ import { Artwork } from "@/components/ui/artwork";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { PlayIcon, PauseIcon } from "@/components/ui/icons";
 import { trackCapabilities } from "@/lib/player/track-capabilities";
+import { providerScopedId } from "@/lib/domain/scoped-id";
 import { formatTrackDuration } from "@/lib/player/format";
 
 /**
@@ -37,7 +38,7 @@ export function TopResultCard({
   const isCurrent = isIdentityOfTrack(currentTrack, track);
   const isCurrentPlaying = isCurrent && isPlaying;
   const canPlay = isCurrent || trackCapabilities(track).canPlay;
-  const href = `/track/${encodeURIComponent(track.providerTrackId ?? track.id)}`;
+  const href = `/track/${providerScopedId(track.provider, track.providerTrackId ?? track.id)}`;
   // Same convention as TrackRow: durations of 0 or less mean "unknown" and
   // stay hidden rather than printing a fake "00:00".
   const duration =
@@ -77,7 +78,12 @@ export function TopResultCard({
         </p>
       </div>
       <div className="relative flex shrink-0 items-center gap-2">
-        {actions}
+        {/* PLAY FIRST, THEN THE OVERFLOW MENU.
+            The play control is the reason anyone is on this card; it was
+            rendered second, behind the actions trigger, which made the primary
+            action read as a secondary one and pushed it to the far edge. The
+            menu keeps `relative` positioning because its layer anchors to this
+            container, so only the order changed. */}
         {canPlay ? (
           <button
             type="button"
@@ -102,6 +108,7 @@ export function TopResultCard({
             <PlayIcon size={20} />
           </button>
         )}
+        {actions}
       </div>
     </div>
   );

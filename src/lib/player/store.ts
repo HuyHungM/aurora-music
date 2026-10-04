@@ -107,6 +107,13 @@ interface PlayerState {
   /** Controller error sink: mirrors engine error state shape. Additive. */
   reportPlaybackError: (kind: PlayerErrorKind, message: string) => void;
   next: () => void;
+  /**
+   * Advances past a track whose recovery budget is exhausted. NOT a user
+   * action: it does not count toward the "user did something" signal that
+   * suppresses Continue Listening, because from the listener's point of view
+   * playback simply continued.
+   */
+  skipUnavailableTrack: () => void;
   prev: () => void;
   clearQueue: () => void;
   toggleShuffle: () => void;
@@ -320,6 +327,26 @@ let queueDuplicateCache: {
   index: CanonicalDuplicateIndex;
 } | null = null;
 
+/**
+ * Consecutive tracks skipped because they could not be played at all.
+ *
+ * The guard that makes "skip the unavailable track" safe. Without it, a queue
+ * whose every entry is unplayable is an infinite loop: each skip starts a load,
+ * each load exhausts its recovery budget, each exhaustion asks for another skip.
+ * `repeat: "all"` makes it worse, because `nextQueueIndex` wraps.
+ *
+ * The bound is ONE PASS over the queue, which is the minimum that lets a bad
+ * track anywhere in the queue be stepped over while still guaranteeing
+ * termination. Reset by the engine's `play` event, so it counts
+ * "skips since something last actually played" rather than "skips ever".
+ */
+let consecutiveUnavailable = 0;
+
+/** Test-only: the guard is module state, so a suite must be able to reset it. */
+export function resetUnavailableSkipGuardForTests(): void {
+  consecutiveUnavailable = 0;
+}
+
 function queueDuplicateIndexOf(queue: readonly Track[]): CanonicalDuplicateIndex {
   if (queueDuplicateCache && queueDuplicateCache.queueRef === queue) {
     return queueDuplicateCache.index;
@@ -486,7 +513,14 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
     });
     on("waiting", () => set({ isLoading: true }));
     on("canplay", () => set({ isLoading: false }));
-    on("play", () => set({ isPlaying: true, isLoading: false, error: null }));
+    on("play", () => {
+      // A track actually STARTED, so the skip guard is satisfied and the run of
+      // consecutive unavailable tracks is over. Resetting here rather than in
+      // `skipUnavailableTrack` is what makes the bound mean "no more than one
+      // pass without progress" instead of "no more than N skips ever".
+      consecutiveUnavailable = 0;
+      set({ isPlaying: true, isLoading: false, error: null });
+    });
     on("playing", () => {
       set({ isPlaying: true, isLoading: false, error: null });
       // The current track is producing audio: the earliest knowable moment
@@ -885,6 +919,47 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
       }
       const queueIndex = nextQueueIndex(state);
       if (queueIndex === null) {
+        set({ isPlaying: false, isLoading: false, currentTime: 0 });
+        return;
+      }
+      loadAt(queueIndex, true, set, get);
+    },
+
+    /**
+     * Advances past a track that could not be played at all.
+     *
+     * Called by the playback controller when a recovery cycle is EXHAUSTED, so
+     * it deliberately runs after the existing retry policy rather than instead
+     * of it: a transient failure is still retried on the policy's own budget,
+     * and only then is the track treated as unavailable. Without this, one dead
+     * video ended the session and left the listener looking at a Retry button
+     * for a track that will never resolve.
+     *
+     * Not a user action: `countUserAction()` is deliberately NOT called, so this
+     * does not suppress the "Continue listening" signal for what was, from the
+     * listener's point of view, playback that simply continued.
+     *
+     * Cursor, order, shuffle and repeat are untouched — `nextQueueIndex` is the
+     * same primitive `next()` uses, so repeat-one stops at the end exactly as
+     // Next does rather than silently looping.
+     */
+    skipUnavailableTrack: () => {
+      const state = get();
+      if (state.queue.length === 0 || state.playOrder.length === 0) {
+        return;
+      }
+      consecutiveUnavailable += 1;
+      // One pass is the bound. Exceeding it means nothing in the queue is
+      // playable, so stop cleanly instead of cycling.
+      if (consecutiveUnavailable > state.playOrder.length) {
+        consecutiveUnavailable = 0;
+        playbackController?.stop();
+        set({ isPlaying: false, isLoading: false, currentTime: 0 });
+        return;
+      }
+      const queueIndex = nextQueueIndex(state);
+      if (queueIndex === null) {
+        consecutiveUnavailable = 0;
         set({ isPlaying: false, isLoading: false, currentTime: 0 });
         return;
       }

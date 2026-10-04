@@ -5,6 +5,7 @@ import {
   addTrackSchema,
   createPlaylistSchema,
   deletePlaylistSchema,
+  followArtistSchema,
   idSchema,
   paginationSchema,
   playlistArtworkSchema,
@@ -374,6 +375,86 @@ describe("addTrackSchema", () => {
     });
     expect(result.track.artworkUrl).toBe("https://img/x.jpg");
     expect(result.track.duration).toBe(120);
+  });
+
+  /**
+   * Scheme enforcement on the catalog's media fields.
+   *
+   * `artworkUrl`/`providerUrl` were `z.string().trim().max(n)` — a LENGTH bound
+   * that read like validation but never checked the scheme. Both land in a
+   * shared, unowned row and are rendered by `components/ui/artwork.tsx` through
+   * `<Image unoptimized>`, which emits a plain `<img src>` and so bypasses the
+   * `images.remotePatterns` allowlist. A payload could persist a `data:` URI or
+   * a `javascript:`/`file:` path there. `playlistArtworkSchema` already refused
+   * every non-http(s) scheme; these two fields did not.
+   *
+   * WHAT THIS IS NOT: a host allowlist. `http:` is still accepted, because
+   * provider artwork is served from arbitrary per-provider CDNs and an allowlist
+   * would reject real metadata. So an attacker-chosen http(s) host remains
+   * reachable as an image source — that is a residual risk, recorded rather
+   * than silently widened here, and it is the reason the catalog's update
+   * branches are identity-only: a client cannot introduce a NEW hostile URL at
+   * all, only fail to introduce a legitimate one.
+   */
+  it("refuses a non-http(s) artwork or provider URL", () => {
+    const hostile = [
+      "data:image/gif;base64,R0lGODlhAQABAAAAACw=",
+      "javascript:alert(1)",
+      "file:///etc/passwd",
+      "blob:https://example.com/abc",
+      "not-a-url",
+      "//attacker.example/beacon.gif",
+      "",
+    ];
+    for (const artworkUrl of hostile) {
+      expect(
+        addTrackSchema.safeParse({ ...valid, track: { ...valid.track, artworkUrl } })
+          .success,
+        `artworkUrl should reject ${JSON.stringify(artworkUrl)}`,
+      ).toBe(false);
+      expect(
+        addTrackSchema.safeParse({
+          ...valid,
+          track: { ...valid.track, providerUrl: artworkUrl },
+        }).success,
+        `providerUrl should reject ${JSON.stringify(artworkUrl)}`,
+      ).toBe(false);
+    }
+  });
+
+  it("refuses a non-http(s) artist image", () => {
+    // The artist side had no scheme rule either, and `upsertArtist` writes the
+    // same shared-row column.
+    const base = { id: "a1", provider: "youtube", name: "Artist" };
+    for (const image of [
+      "data:image/gif;base64,R0lGODlhAQABAAAAACw=",
+      "javascript:alert(1)",
+      "not-a-url",
+    ]) {
+      expect(
+        followArtistSchema.safeParse({ artist: { ...base, image } }).success,
+        `artist.image should reject ${image}`,
+      ).toBe(false);
+    }
+    expect(
+      followArtistSchema.safeParse({
+        artist: { ...base, image: "https://lh3.googleusercontent.com/x=w544" },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("still accepts ordinary provider http(s) media URLs", () => {
+    // The rule is a scheme check, not an allowlist: providers legitimately
+    // serve artwork over both schemes and from arbitrary hosts.
+    for (const artworkUrl of [
+      "https://lh3.googleusercontent.com/abc=w544",
+      "http://i.ytimg.com/vi/abc/hqdefault.jpg",
+    ]) {
+      expect(
+        addTrackSchema.safeParse({ ...valid, track: { ...valid.track, artworkUrl } })
+          .success,
+      ).toBe(true);
+    }
   });
 
   it("strips streamUrl, previewUrl and metadata from the client payload", () => {

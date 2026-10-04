@@ -138,6 +138,42 @@ export const TRACK_URL_MAX_LENGTH = 2048;
 export const TRACK_GENRES_MAX_COUNT = 20;
 export const TRACK_DURATION_MAX_MS = 86_400_000;
 
+/**
+ * An http(s) URL a client may store as a MEDIA reference.
+ *
+ * Length alone was never a scheme check. `artworkUrl` and `artist.image` are
+ * rendered by `components/ui/artwork.tsx` through `<Image unoptimized>`, which
+ * emits a plain `<img src>` and therefore bypasses the `images.remotePatterns`
+ * allowlist in `next.config.ts`; CSP `img-src` permits `http:` and `data:`. A
+ * payload could therefore persist `http://attacker.example/beacon.gif` into a
+ * shared catalog row and have every listener's browser — and every anonymous
+ * visitor of a shared playlist — issue a plaintext cross-origin request to the
+ * attacker's host, leaking IP, user agent and visit time. `data:` URIs were
+ * accepted for the same reason.
+ *
+ * `playlistArtworkSchema` already refused those; this is the same rule applied
+ * to the catalog's two media fields. Rejecting at the edge means the value never
+ * reaches the shared row, which is where the trust boundary is documented to be.
+ */
+function httpUrlSchema(maxLength: number) {
+  return z
+    .string()
+    .trim()
+    .max(maxLength)
+    .refine((value) => {
+      let parsed: URL;
+      try {
+        parsed = new URL(value);
+      } catch {
+        return false;
+      }
+      return (
+        (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+        parsed.hostname.length > 0
+      );
+    }, { message: "Must be an http(s) URL" });
+}
+
 export const trackInputSchema = z.object({
   /** The provider's own id, and the catalog upsert key. */
   id: idSchema,
@@ -148,7 +184,7 @@ export const trackInputSchema = z.object({
   artistName: z.string().trim().min(1).max(TRACK_TEXT_MAX_LENGTH),
   albumId: idSchema.optional(),
   albumName: z.string().trim().max(TRACK_TEXT_MAX_LENGTH).optional(),
-  artworkUrl: z.string().trim().max(TRACK_URL_MAX_LENGTH).optional(),
+  artworkUrl: httpUrlSchema(TRACK_URL_MAX_LENGTH).optional(),
   // Upper bound only: `duration` is a provider-reported number and its unit is
   // the provider's, so this bounds magnitude without asserting a unit.
   duration: z
@@ -162,7 +198,7 @@ export const trackInputSchema = z.object({
     .max(TRACK_GENRES_MAX_COUNT)
     .optional(),
   releaseDate: z.string().trim().max(64).optional(),
-  providerUrl: z.string().trim().max(TRACK_URL_MAX_LENGTH).optional(),
+  providerUrl: httpUrlSchema(TRACK_URL_MAX_LENGTH).optional(),
   explicit: z.boolean().optional(),
   // `streamUrl`, `previewUrl` and `metadata` are deliberately absent, so
   // zod strips them from the parsed payload before it can reach the DAL.
@@ -222,7 +258,9 @@ export const artistInputSchema = z.object({
   provider: providerIdSchema,
   providerArtistId: idSchema.optional(),
   name: z.string().trim().min(1).max(ARTIST_TEXT_MAX_LENGTH),
-  image: z.string().trim().max(ARTIST_URL_MAX_LENGTH).optional(),
+  // Same rule as `trackInputSchema.artworkUrl`, and the same reason: this lands
+  // in a shared row and is rendered as a raw `<img src>`.
+  image: httpUrlSchema(ARTIST_URL_MAX_LENGTH).optional(),
   bio: z.string().trim().max(ARTIST_BIO_MAX_LENGTH).optional(),
   genres: z
     .array(z.string().trim().max(100))

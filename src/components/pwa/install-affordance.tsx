@@ -63,10 +63,10 @@ export function InstallPrompt({ className }: { className?: string }) {
         .filter(Boolean)
         .join(" ")}
     >
-      <p className="text-[13px] font-semibold text-text-primary">
+      <p className="text-sm font-semibold text-text-primary">
         {kind === "prompt" ? t("install.title") : t("install.manualTitle")}
       </p>
-      <p className="mt-1 text-[12px] leading-snug text-text-muted">
+      <p className="t-caption mt-1 leading-snug text-text-muted">
         {kind === "prompt" ? t("install.description") : t("install.manualSteps")}
       </p>
       <div className="mt-2.5 flex items-center gap-1.5">

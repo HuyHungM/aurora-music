@@ -269,7 +269,7 @@ describe("the autoplay row: reflects coordinator activity", () => {
       fakeCoordinator({ enabled: true, generating: true }),
     );
     renderToggle();
-    expect(screen.getByText("Finding more music...")).toBeTruthy();
+    expect(screen.getByText("Finding more music…")).toBeTruthy();
   });
 
   it("stays interactive while generating", () => {

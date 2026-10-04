@@ -61,7 +61,7 @@ export function SignOutControl({
 export function LibrarySignedOutCta({ locale = DEFAULT_LOCALE }: { locale?: Locale }) {
   const t = getT(locale);
   return (
-    <div className="flex flex-col items-center gap-4 rounded-card border border-border-subtle bg-surface-1 px-6 py-12 text-center">
+    <div className="flex flex-col items-center gap-4 rounded-2xl border border-border-subtle bg-surface-1 px-6 py-12 text-center">
       <h2 className="text-lg font-semibold text-text-primary">{t("library.signedOutTitle")}</h2>
       <p className="max-w-md text-sm leading-relaxed text-text-muted">
         {t("library.signedOutDescription")}

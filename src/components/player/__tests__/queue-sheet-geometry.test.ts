@@ -89,9 +89,26 @@ describe("queue sheet geometry", () => {
     expect(panel).toContain("bottom-[calc(4.5rem+env(safe-area-inset-bottom))]");
   });
 
-  it("preserves the desktop side panel anchor untouched", () => {
-    expect(panel).toContain("lg:bottom-[calc(6rem+1.5rem)]");
-    expect(panel).toContain("lg:right-6");
+  it("derives the desktop side panel anchor from the player bar's own token", () => {
+    // The desktop panel used to sit at a hand-written `calc(6rem + 1.5rem)`,
+    // which spelled out the player bar's height as a literal. `--p-layout-player`
+    // is that height, so the panel derives from it and the two cannot drift
+    // apart; the gap under the bar is the only thing stated here.
+    expect(panel).toContain("lg:bottom-[calc(var(--p-layout-player)+0.75rem)]");
+    expect(css).toContain("--p-layout-player: 6rem;");
+  });
+
+  it("lines the desktop panel's right edge up with the player bar's content edge", () => {
+    // `right-6` put the panel 1.5rem from the viewport edge while the bar's own
+    // content is inset by `px-5` (1.25rem), so nothing lined up. The panel now
+    // uses that same inset, still inside the safe area.
+    expect(panel).toContain(
+      "lg:right-[max(1.25rem,env(safe-area-inset-right))]",
+    );
+    expect(panel).not.toContain("lg:right-6");
+  });
+
+  it("keeps the desktop panel's own anchoring properties", () => {
     expect(panel).toContain("lg:left-auto");
     expect(panel).toContain("lg:mx-0");
     expect(panel).toContain("lg:w-96");
@@ -119,5 +136,47 @@ describe("queue sheet geometry", () => {
     // translate-based centering would be overridden mid-animation and snap
     // after it — insets are the only centering that survives the lifecycle.
     expect(panel).not.toMatch(/-translate-x-/);
+  });
+});
+
+describe("queue outside-pointer dismissal", () => {
+  it("registers exactly one pointerdown listener per open lifecycle", () => {
+    // One listener, added while open and removed on close: never a second one
+    // for touch, never a pair for pointer+mouse (a mouse click also fires
+    // pointerdown, so a second mouse listener would double-handle).
+    const listeners = panel.match(/addEventListener\("pointerdown"/g) ?? [];
+    expect(listeners).toHaveLength(1);
+    expect(panel).toContain('removeEventListener("pointerdown"');
+  });
+
+  it("treats the panel, the trigger and other overlays as inside", () => {
+    expect(panel).toContain("dialogRef.current?.contains(target)");
+    expect(panel).toContain("[data-queue-trigger]");
+    expect(panel).toContain('[role="dialog"], [role="alertdialog"], [role="menu"]');
+  });
+
+  it("marks every queue trigger it can be opened from", () => {
+    // The bar, the mini player and the full player each own an "Up next"
+    // control. Missing one would make that trigger dismiss the panel on the
+    // same press that opens it.
+    const triggers = [
+      join(SRC, "components", "player", "player-bar.tsx"),
+      join(SRC, "components", "player", "mini-player.tsx"),
+      join(SRC, "components", "player", "full-player.tsx"),
+    ];
+    for (const file of triggers) {
+      expect(readFileSync(file, "utf8")).toContain("data-queue-trigger");
+    }
+  });
+
+  it("does not reach for broad default suppression", () => {
+    // Tapping outside must not be a way to cancel a native scroll or a click
+    // elsewhere; dismissal observes the event, it never prevents it.
+    const effect = panel.slice(
+      panel.indexOf("const onPointerDown"),
+      panel.indexOf("}, [isQueueOpen, closeAndRestoreFocus]);"),
+    );
+    expect(effect).not.toContain("preventDefault");
+    expect(effect).not.toContain("stopPropagation");
   });
 });

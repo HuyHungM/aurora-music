@@ -1,15 +1,34 @@
+"use client";
+
 import Link from "next/link";
-import { SparkleIcon } from "@/components/ui/icons";
+import { AuroraMark } from "@/components/brand/aurora-mark";
+import { useLocale } from "@/components/i18n/locale-provider";
 
 export function Brand({ compact = false }: { compact?: boolean }) {
+  // Localized home label: the one hand-written accessible name in the app
+  // resolves through the dictionary like every other string, so the header
+  // and sidebar brand never render a mixed-language label.
+  const { t } = useLocale();
   return (
     <Link
       href="/"
-      aria-label="Aurora Music home"
-      className="aurora-press aurora-touch inline-flex items-center gap-2.5 rounded-xl outline-none"
+      aria-label={t("common.home")}
+      className="aurora-press aurora-touch inline-flex items-center gap-2.5 rounded-xl"
     >
-      <span className="aurora-fill relative grid h-9 w-9 place-items-center overflow-hidden rounded-xl text-background shadow-md">
-        <SparkleIcon size={18} />
+      {/*
+        Tile colour. The mark's own gradient is mid-lightness aurora colour,
+        so the tile must be the APP canvas (#08070d, APP_THEME_COLOR — the same
+        colour as the launcher icons' baked background and the OS splash), not
+        a raised surface: `--surface-sunken` resolves one step LIGHTER than the
+        canvas and would wash the gradient out. A literal is correct here for
+        the same reason the theme colour is a literal in app-metadata: the
+        value is an OS/asset-level identity colour, not a theme token.
+      */}
+      <span
+        className="relative grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-xl shadow-md"
+        style={{ backgroundColor: "#08070d" }}
+      >
+        <AuroraMark width={25} height={25} />
       </span>
       {!compact ? (
         // THE WORDMARK YIELDS, AND THE THRESHOLD IS MEASURED.

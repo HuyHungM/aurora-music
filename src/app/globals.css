@@ -55,9 +55,27 @@
    The legacy alias block near the bottom is a MIGRATION SHIM, not a
    second system: it is a set of pure aliases with no literal values, and
    it is deleted in 44d. See "LEGACY ALIASES" for the removal contract.
+
+   WHY THIS BLOCK NAMES THE SHELL ROOT AS WELL AS `:root`. A custom
+   property substitutes its `var()` references at the element that DECLARES
+   it, not the element that USES it. `AppearanceRoot` writes the user's
+   `--p-appearance-*` values as an inline style on the shell root, so every
+   token DERIVED from them has to be declared there too — a derivation
+   declared only at `:root` resolves against the defaults below, is
+   inherited down already computed, and silently ignores the user. That is
+   not a subtle loss of effect: it froze the entire appearance runtime, with
+   every Glass and Ambient control inert while still looking correct in
+   tests that only checked the wiring.
+
+   `:root` is kept in the list, and is still the block that matters most: it
+   is the default palette for the document, and it is the only thing that
+   reaches a surface portalled outside the shell (`CreatePlaylistDialog`
+   mounts on `document.body`, which is a sibling of the shell root and
+   therefore cannot inherit the user's inline values).
    ========================================================================== */
 
-:root {
+:root,
+[data-aurora-glass] {
   /* ======================================================================
      LAYER 1 — PRIMITIVES
      ====================================================================== */
@@ -372,6 +390,67 @@
   --p-appearance-bg-saturation: 0.85;
   --p-appearance-bg-blur: 0px;
 
+  /* --- Ambient Light depth ------------------------------------------------
+     Three normalized 0-1 values, and normalized on purpose. They are mapped
+     to bounded CSS lengths and stops below, so the compositing budget lives in
+     the stylesheet where it can be reviewed, not in a preference a user could
+     otherwise ask for an unbounded blur.
+
+     The defaults here MUST equal `DEFAULT_APPEARANCE.ambientBlur` /
+     `.ambientSpread` / `.ambientFade` and sit on each control's 0.05 grid;
+     `appearance.test.ts` reads this file and asserts both, because a default
+     that disagrees with the stylesheet is a setting nobody chose. These are the
+     Balanced values, and a default preset does NOT enable the feature. */
+  --p-appearance-ambient-blur: 0.6;
+  --p-appearance-ambient-spread: 0.5;
+  --p-appearance-ambient-fade: 0.6;
+  /* Two glow MULTIPLIERS, and the default is 1 for both: with the shipped values
+     set to 1 every alpha below is exactly what it has always been, so a user who
+     has never touched these renders byte-identically. Anything else would dim
+     the edges or the Player on upgrade, which a preference change must never do
+     unasked. `ambientEdgeGlow` scales the four viewport-edge gradients;
+     `ambientPlayerGlow` scales the emitter's two box-shadows on the Player.
+     Intensity stays the single "how present is this" dial — these two say where
+     the light sits, not how much of it there is. */
+  --p-appearance-ambient-edge: 1;
+  --p-appearance-ambient-player: 1;
+
+  /* The bounded ranges those three map into.
+
+     BLUR tops out at 24px, the same ceiling `backgroundBlur` uses, because
+     both are large blurred areas and the cost is in the area rather than the
+     radius. SPREAD is a percentage of the viewport and stops at 80%: past
+     that the field stops being an edge glow and becomes a flat tint. FADE
+     becomes the gradient's outer stop position, so a HIGHER fade pulls that
+     stop inward and the colour dies sooner — which is why "more fade" reads as
+     "shorter, softer falloff" and not as "more of everything". */
+  --p-ambient-blur-max: 24px;
+  --p-ambient-spread-max: 80%;
+  --p-ambient-spread-min: 55%;
+  --p-ambient-fade-far: 85%;
+  --p-ambient-fade-inner: 20%;
+
+  /* Direction: one gradient per edge, each switched off unless chosen, so a
+     single-edge direction really does paint one gradient rather than four with
+     three at zero alpha. */
+  --p-ambient-edge-top: 1;
+  --p-ambient-edge-right: 1;
+  --p-ambient-edge-bottom: 1;
+  --p-ambient-edge-left: 1;
+
+  /* Transition: the CSS duration for the palette swap between tracks. `none`
+     is 0s rather than `transition: none`, so the property still transitions
+     and no code has to remove and restore it. */
+  --p-ambient-transition-smooth: 1200ms;
+  --p-ambient-transition-fast: 260ms;
+  --p-ambient-transition-none: 0ms;
+
+  /* Motion: a slow drift of the field, not per-frame artwork work. `full` is
+     still one long, compositor-only transform on a gradient layer. */
+  --p-ambient-motion-subtle-duration: 24s;
+  --p-ambient-motion-subtle-distance: 2%;
+  --p-ambient-motion-full-duration: 16s;
+  --p-ambient-motion-full-distance: 4%;
   /* How much MORE opaque than the user's own alpha each depth level is.
      The ladder, and the reason it is a ladder: a small, dense, high-contrast
      surface needs a firmer backdrop than a large, sparse one, so the dialog
@@ -815,60 +894,129 @@
   --aurora-artwork-glow: var(--aurora-violet);
   --aurora-artwork-tint: var(--p-neutral-2);
   --aurora-artwork-strength: 0;
-  --aurora-artwork-layer:
-    radial-gradient(
-      68% 52% at 50% 36%,
-      color-mix(
-          in oklab,
-          var(--aurora-artwork-glow)
-            calc(
-              var(--p-appearance-aurora) * 22% * var(--aurora-artwork-strength)
-            ),
-          transparent
-        )
-        0%,
-      transparent 70%
-    ),
-    radial-gradient(
-      130% 95% at 50% 42%,
-      color-mix(
-          in oklab,
-          var(--aurora-artwork-primary)
-            calc(
-              var(--p-appearance-aurora) * 15% * var(--aurora-artwork-strength)
-            ),
-          transparent
-        )
-        0%,
-      transparent 72%
-    ),
-    radial-gradient(
-      90% 70% at 92% 96%,
-      color-mix(
-          in oklab,
-          var(--aurora-artwork-secondary)
-            calc(
-              var(--p-appearance-aurora) * 11% * var(--aurora-artwork-strength)
-            ),
-          transparent
-        )
-        0%,
-      transparent 64%
-    ),
-    radial-gradient(
-      140% 110% at 50% 50%,
-      color-mix(
-          in oklab,
-          var(--aurora-artwork-tint)
-            calc(
-              var(--p-appearance-aurora) * 9% * var(--aurora-artwork-strength)
-            ),
-          transparent
-        )
-        0%,
-      transparent 76%
-    );
 
+  /* The player's measured bounds, published by `ArtworkAmbient` from a
+     ResizeObserver. Declared here with a PARKED default rather than left
+     undeclared: before the player mounts (or on a page with no player) the field
+     has nothing to emanate from, and a zero-size origin keeps it invisible
+     instead of letting it fall back to a viewport-centred wash. The unit is px
+     because these are real layout measurements, not percentages of anything. */
+  --aurora-artwork-source-x: 0px;
+  --aurora-artwork-source-y: 0px;
+  --aurora-artwork-source-w: 0px;
+  --aurora-artwork-source-h: 0px;
+
+  /* --- The depth layer, derived from the normalized controls --------------
+     Every mapping from a preference to a length or a stop position happens
+     HERE, in `calc()`, not in JavaScript. The renderer writes colours and the
+     raw values; the stylesheet decides what 0.6 blur means. That is the whole
+     reason there is no "build the gradient string in JS" path here.
+
+       BLUR   0 -> 0px, 1 -> 24px (the same ceiling as backgroundBlur: the
+              cost is in the AREA, not the radius).
+       SPREAD 0 -> 55%, 1 -> 85% of the extent. Past ~85% the field stops
+              reading as an edge glow and becomes a flat tint.
+       FADE   0 -> 85%, 1 -> 20% stop position. INVERTED on purpose, and the
+              label is written to match: a HIGHER fade pulls the stop inward
+              so the colour dies sooner, which is what "more fade" has to mean
+              for the slider to be intuitive rather than inverted-feeling. */
+  --aurora-artwork-blur: calc(
+    var(--p-appearance-ambient-blur) * var(--p-ambient-blur-max)
+  );
+  --aurora-artwork-spread: calc(
+    var(--p-ambient-spread-min) +
+      var(--p-appearance-ambient-spread) *
+        (var(--p-ambient-spread-max) - var(--p-ambient-spread-min))
+  );
+  --aurora-artwork-fade: calc(
+    var(--p-ambient-fade-far) -
+      var(--p-appearance-ambient-fade) *
+        (var(--p-ambient-fade-far) - var(--p-ambient-fade-inner))
+  );
+
+  /* Per-edge layers. Kept as SEPARATE custom properties, each of which can be
+     `none`, because `none` is a real entry in a `background-image` list: a
+     single-edge direction then genuinely paints one gradient rather than four
+     with three at zero alpha. The direction rules further down assign `none`.
+  */
+  --aurora-artwork-edge-top: radial-gradient(
+    120% 70% at 50% 0%,
+    color-mix(
+        in oklab,
+        var(--aurora-artwork-glow)
+          calc(
+            var(--p-appearance-aurora) * 22% * var(--aurora-artwork-strength) *
+              var(--p-ambient-edge-top) * var(--p-appearance-ambient-edge)
+          ),
+        transparent
+      )
+      0%,
+    transparent var(--aurora-artwork-fade)
+  );
+  --aurora-artwork-edge-bottom: radial-gradient(
+    120% 70% at 50% 100%,
+    color-mix(
+        in oklab,
+        var(--aurora-artwork-primary)
+          calc(
+            var(--p-appearance-aurora) * 17% * var(--aurora-artwork-strength) *
+              var(--p-ambient-edge-bottom) * var(--p-appearance-ambient-edge)
+          ),
+        transparent
+      )
+      0%,
+    transparent var(--aurora-artwork-fade)
+  );
+  --aurora-artwork-edge-left: radial-gradient(
+    80% 120% at 0% 50%,
+    color-mix(
+        in oklab,
+        var(--aurora-artwork-secondary)
+          calc(
+            var(--p-appearance-aurora) * 12% * var(--aurora-artwork-strength) *
+              var(--p-ambient-edge-left) * var(--p-appearance-ambient-edge)
+          ),
+        transparent
+      )
+      0%,
+    transparent var(--aurora-artwork-fade)
+  );
+  --aurora-artwork-edge-right: radial-gradient(
+    80% 120% at 100% 50%,
+    color-mix(
+        in oklab,
+        var(--aurora-artwork-tint)
+          calc(
+            var(--p-appearance-aurora) * 10% * var(--aurora-artwork-strength) *
+              var(--p-ambient-edge-right) * var(--p-appearance-ambient-edge)
+          ),
+        transparent
+      )
+      0%,
+    transparent var(--aurora-artwork-fade)
+  );
+
+  /* A wide, soft centre wash that ties the edges together. The one layer whose
+     extent comes from SPREAD rather than being fixed, because spread is
+     precisely "how far does the light travel". */
+  --aurora-artwork-core: radial-gradient(
+    var(--aurora-artwork-spread) 62% at 50% 42%,
+    color-mix(
+        in oklab,
+        var(--aurora-artwork-primary)
+          calc(
+            var(--p-appearance-aurora) * 14% * var(--aurora-artwork-strength)
+          ),
+        transparent
+      )
+      0%,
+    transparent calc(var(--aurora-artwork-fade) + 8%)
+  );
+
+  --aurora-artwork-layer:
+    var(--aurora-artwork-edge-top), var(--aurora-artwork-edge-right),
+    var(--aurora-artwork-edge-bottom), var(--aurora-artwork-edge-left),
+    var(--aurora-artwork-core);
   /* The slow drift (§41). Transform-only, and declared inside the
      `prefers-reduced-motion: no-preference` block further down, so it is
      never even parsed into the cascade for someone who asked for less
@@ -1100,10 +1248,25 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* The one focus treatment, and it declares the OUTLINE ONLY.
+
+   It used to also set `border-radius: var(--p-radius-xs)`, which is what made
+   `focus:rounded-full` inert on the page search field. The reason is a
+   cascade-layer fact that specificity does not rescue: an UNLAYERED author
+   rule beats every `@layer utilities` declaration regardless of how specific
+   it is, because layers are resolved BEFORE specificity is ever consulted.
+   Measured 2026-10-04 at 1440px and 390px: the focused field kept its 28px
+   idle radius and never took the full pill the component asks for. Wrapping the
+   selector in `:where()` does NOT fix it either — that zeroes specificity but
+   leaves the rule unlayered, and it was still beaten. The only correct fix is
+   to stop declaring the property here: the outline is this rule's job, and a
+   component that asks for a focus shape is entitled to one.
+
+   Elements with no radius of their own keep whatever they already had, which
+   is what they looked like unfocused — so nothing gains a square outline. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: var(--p-radius-xs);
 }
 
 ::selection {
@@ -1378,6 +1541,338 @@ body {
    gradients at all - `none` instead of two fully transparent ones. */
 [data-aurora-artwork="off"] {
   --aurora-artwork-layer: none;
+}
+
+/* The player is the source, so DIRECTION biases which way the light leaves it
+   rather than switching off whole viewport edges — the old four-edge model has
+   been superseded by the player-anchored field below. `top` pushes the origin
+   above the player (light travelling up into the content), `bottom` pushes it
+   below, and the left/right pair biases horizontally. Implemented by nudging the
+   gradient centre, which is one `calc()` and needs no extra layer.
+
+   THE NUDGE IS A RATIO, NOT A PERCENTAGE, and that is load-bearing. It is
+   multiplied by the player's measured box inside the gradient's centre
+   position, and CSS calc cannot multiply a length by a percentage — `64px *
+   -70%` is an invalid expression, not a scaled length. An invalid expression
+   invalidates the whole gradient, which invalidates `--aurora-artwork-core`,
+   which invalidates `--aurora-artwork-layer`, which invalidates the entire
+   `background-image` on `.aurora-backdrop-ambient` — so the ambient field
+   painted nothing at all, and it took the aurora wash down with it. Written as
+   `-0.7` the same maths is `64px * -0.7` and stays valid at any player size.
+
+   THE HORIZONTAL NUDGE WAS DECLARED FOUR TIMES AND READ ZERO, which made Left
+   and Right a menu that only ever turned three edges off. It now multiplies the
+   player's WIDTH (the vertical nudge keeps multiplying its HEIGHT), so a
+   horizontal direction actually moves the field sideways — a wide player shifts
+   further than a narrow one, which is what the same rule does vertically. */
+[data-aurora-artwork-direction="top"] {
+  --aurora-artwork-source-nudge-y: -0.7;
+}
+[data-aurora-artwork-direction="bottom"] {
+  --aurora-artwork-source-nudge-y: 0;
+}
+[data-aurora-artwork-direction="left"] {
+  --aurora-artwork-source-nudge-x: -0.55;
+}
+[data-aurora-artwork-direction="right"] {
+  --aurora-artwork-source-nudge-x: 0.55;
+}
+[data-aurora-artwork-direction="all"] {
+  --aurora-artwork-source-nudge-x: 0;
+  --aurora-artwork-source-nudge-y: 0;
+}
+:root {
+  --aurora-artwork-source-nudge-x: 0;
+  --aurora-artwork-source-nudge-y: 0;
+}
+
+/* --- The ambient field is emitted BY the player, not by the page -----------
+   Every layer below is positioned from the player's own measured rectangle
+   (`--aurora-artwork-source-*`, written by `ArtworkAmbient` from a
+   ResizeObserver). Nothing here is hardcoded to the viewport, so the same rules
+   produce a bottom-anchored pool of light under the desktop bar, a tighter one
+   under the mini player, and a full-room wash inside the full-screen takeover,
+   without a single layout assumption.
+
+   THE FALLOFF IS THE POINT. Three layers, each larger and fainter than the last,
+   all centred on the player's midpoint:
+
+     core  tight and bright — the player is visibly LIT
+     near  wide, the spill that reaches content
+     far   very wide and very faint, the page atmosphere
+
+   An earlier version anchored all of this to the middle of the viewport, which is
+   what made it read as a page tint: the strongest colour appeared in the middle
+   of the content area with no visible source. Anchoring it to the player is the
+   difference between "the background was recoloured" and "something down there is
+   glowing".
+
+   Named on the shell root as well as `:root` for the reason at the top of the
+   stylesheet: this gradient multiplies `--p-appearance-aurora`, so declared at
+   `:root` alone it would resolve against the default intensity and the player's
+   light would never respond to the control.
+
+   The direction nudge below multiplies a measured height, which is why it is a
+   ratio and not a percentage — see the note by its declaration. */
+:root,
+[data-aurora-glass] {
+  --aurora-artwork-core:
+    radial-gradient(
+      ellipse calc(var(--aurora-artwork-source-w) * 0.9)
+        calc(var(--aurora-artwork-source-h) * 3.2) at
+        calc(
+          var(--aurora-artwork-source-x) + var(--aurora-artwork-source-w) / 2 +
+            var(--aurora-artwork-source-w) *
+              var(--aurora-artwork-source-nudge-x)
+        )
+        calc(
+          var(--aurora-artwork-source-y) + var(--aurora-artwork-source-h) / 2 +
+            var(--aurora-artwork-source-h) * var(--aurora-artwork-source-nudge-y)
+        ),
+      color-mix(
+          in oklab,
+          var(--aurora-artwork-glow)
+            calc(
+              var(--p-appearance-aurora) * 26% * var(--aurora-artwork-strength)
+            ),
+          transparent
+        )
+        0%,
+      transparent 72%
+    ),
+    radial-gradient(
+      ellipse calc(var(--aurora-artwork-source-w) * 1.1 * var(--aurora-ambient-reach))
+        calc(var(--aurora-artwork-source-h) * 4.5 * var(--aurora-ambient-reach)) at
+        calc(var(--aurora-artwork-source-x) + var(--aurora-artwork-source-w) / 2)
+        calc(var(--aurora-artwork-source-y) + var(--aurora-artwork-source-h) / 2),
+      color-mix(
+          in oklab,
+          var(--aurora-artwork-primary)
+            calc(
+              var(--p-appearance-aurora) * 16% * var(--aurora-artwork-strength)
+            ),
+          transparent
+        )
+        0%,
+      transparent 78%
+    ),
+    radial-gradient(
+      ellipse calc(var(--aurora-artwork-source-w) * 2.2)
+        calc(var(--aurora-artwork-source-h) * 9) at
+        calc(var(--aurora-artwork-source-x) + var(--aurora-artwork-source-w) / 2)
+        calc(var(--aurora-artwork-source-y) + var(--aurora-artwork-source-h) / 2),
+      color-mix(
+          in oklab,
+          var(--aurora-artwork-tint)
+            calc(
+              var(--p-appearance-aurora) * 11% * var(--aurora-artwork-strength)
+            ),
+          transparent
+        )
+        0%,
+      transparent 85%
+    );
+}
+
+/* --- Music reactivity inputs ------------------------------------------------
+   Written per frame, imperatively, by `music-reactive-ambient.tsx`. Declared
+   here at 0 so that any consumer resolves even when the loop is not running —
+   Ambient off, playback paused, tab hidden, or a browser with no
+   `captureStream`. A declaration rather than a `var(x, 0)` fallback at each use
+   site, because these are a genuine part of the stylesheet's contract with the
+   controller and must be overridable by the inline style it writes. */
+:root {
+  --aurora-music-bass: 0;
+  --aurora-music-mid: 0;
+  --aurora-music-treble: 0;
+  --aurora-music-energy: 0;
+}
+
+/* How far the player's light currently REACHES. Baseline 1, so with music
+   reactivity off — or paused, or hidden, or unsupported by the browser — this is
+   exactly the spread the artwork alone produced. The feature is additive; it
+   never replaces the artwork field, and a quiet passage never collapses it. */
+:root {
+  --aurora-ambient-reach: calc(
+    1 + var(--aurora-music-bass) * 0.5 + var(--aurora-music-energy) * 0.2
+  );
+}
+
+/* --- The player itself emits -------------------------------------------------
+   Two stacked box-shadows on the player's own root. Box-shadow was chosen over a
+   pseudo-element or an extra child deliberately:
+
+     - it paints OUTSIDE the border box, so the light genuinely bleeds past the
+       player edge into the page rather than being clipped to it;
+     - it does not touch `background`, so `aurora-glass`, the border, the
+       backdrop blur and every existing contrast relationship survive untouched;
+     - it needs no extra DOM node and therefore no stacking-context work, which
+       is where a z-index mistake would have put a wash over the controls.
+
+   The alphas are multiplied by the same `--p-appearance-aurora` the field uses,
+   so Intensity moves the emitter and the spill together — one dial, one meaning.
+
+   The selector below carries BOTH shell-root attributes so it outranks the glass
+   surfaces' own `box-shadow`: with only `[data-aurora-artwork="on"]` this rule
+   tied with `[data-aurora-glass="on"]` and lost to whichever came later, which
+   is why an earlier attempt measured as "the emitter does not respond".
+   The four `--aurora-music-*` variables are written per frame by
+   `music-reactive-ambient.tsx` and are ALWAYS multiplied into an existing
+   artwork colour. Audio can therefore change how far the light reaches, how
+   bright it burns and how quickly it settles — and can never change its hue,
+   because no frequency value appears in a colour function anywhere below. That
+   is the line between "alive" and "RGB light show", and it is enforced by the
+   shape of the maths rather than by restraint. */
+[data-aurora-glass][data-aurora-artwork="on"] [data-aurora-player] {
+  /* Bass is the largest-scale response: it pushes the emitter outward, which is
+     what reads as the player breathing rather than a light flickering. */
+  --aurora-ambient-pulse: calc(1 + var(--aurora-music-bass) * 0.22);
+  box-shadow:
+    0 0 calc(var(--aurora-artwork-blur) * 2.2 * var(--aurora-ambient-pulse))
+      color-mix(
+        in oklab,
+        var(--aurora-artwork-glow)
+          calc(
+            var(--p-appearance-aurora) * 30% * var(--aurora-artwork-strength) *
+              var(--p-appearance-ambient-player)
+          ),
+        transparent
+      ),
+    0 0 calc(var(--aurora-artwork-blur) * 5 * var(--aurora-ambient-pulse))
+      color-mix(
+        in oklab,
+        var(--aurora-artwork-primary)
+          calc(
+            /* Energy lifts overall brightness; treble adds only a whisper, kept
+               small on purpose so hi-hats cannot strobe the whole surface. */
+            (
+              var(--p-appearance-aurora) * 16% +
+              var(--aurora-music-energy) * 5% +
+              var(--aurora-music-treble) * 2%
+            ) * var(--aurora-artwork-strength) *
+              var(--p-appearance-ambient-player)
+          ),
+        transparent
+      );
+}
+
+/* --- Ambient Light: the depth controls, expressed as data attributes ------
+   The renderer writes only colours and the three normalized values; every
+   combination below is a stylesheet rule, so adding a control is a token and a
+   rule rather than a JavaScript branch. */
+
+[data-aurora-artwork-direction="top"] {
+  --aurora-artwork-edge-right: none;
+  --aurora-artwork-edge-bottom: none;
+  --aurora-artwork-edge-left: none;
+}
+[data-aurora-artwork-direction="right"] {
+  --aurora-artwork-edge-top: none;
+  --aurora-artwork-edge-bottom: none;
+  --aurora-artwork-edge-left: none;
+}
+[data-aurora-artwork-direction="bottom"] {
+  --aurora-artwork-edge-top: none;
+  --aurora-artwork-edge-right: none;
+  --aurora-artwork-edge-left: none;
+}
+[data-aurora-artwork-direction="left"] {
+  --aurora-artwork-edge-top: none;
+  --aurora-artwork-edge-right: none;
+  --aurora-artwork-edge-bottom: none;
+}
+
+[data-aurora-artwork-transition="smooth"] {
+  --p-ambient-transition-ms: var(--p-ambient-transition-smooth);
+}
+[data-aurora-artwork-transition="fast"] {
+  --p-ambient-transition-ms: var(--p-ambient-transition-fast);
+}
+[data-aurora-artwork-transition="none"] {
+  --p-ambient-transition-ms: var(--p-ambient-transition-none);
+}
+
+[data-aurora-artwork-motion="off"] {
+  --p-ambient-motion-duration: 0s;
+  --p-ambient-motion-distance: 0%;
+}
+[data-aurora-artwork-motion="subtle"] {
+  --p-ambient-motion-duration: var(--p-ambient-motion-subtle-duration);
+  --p-ambient-motion-distance: var(--p-ambient-motion-subtle-distance);
+}
+[data-aurora-artwork-motion="full"] {
+  --p-ambient-motion-duration: var(--p-ambient-motion-full-duration);
+  --p-ambient-motion-distance: var(--p-ambient-motion-full-distance);
+}
+
+/* Defaults for the two derived switches, so an un-attributed element still
+   resolves rather than inheriting nothing. */
+:root {
+  --p-ambient-transition-ms: var(--p-ambient-transition-smooth);
+  --p-ambient-motion-duration: var(--p-ambient-motion-subtle-duration);
+  --p-ambient-motion-distance: var(--p-ambient-motion-subtle-distance);
+}
+
+/* The palette colours are REGISTERED so they can transition.
+   `background-image` itself is not animatable — a gradient cannot interpolate —
+   so the only way to cross-fade between two palettes in pure CSS is to
+   transition the COLOURS the gradients are built from. An unregistered custom
+   property is an untyped token and snaps instead of interpolating; declaring
+   them with `syntax: "<color>"` is what makes the transition real. It also
+   gives them a type, so a malformed value is ignored at parse time rather than
+   invalidating the whole declaration.
+
+   `initial-value` MUST BE A LITERAL. An `@property` descriptor is parsed when
+   the stylesheet is parsed, not resolved against the cascade, so `var()` there
+   is a hard parse error — "Unexpected token Function(var)" — and it takes the
+   whole build down rather than degrading. That is why these four repeat the
+   primitive's value instead of referencing it.
+
+   The duplication is the cost of the registration, so it is pinned:
+   `appearance.test.ts` reads this file and asserts each `initial-value` equals
+   the `--p-*` primitive it mirrors, the same way it pins every numeric default
+   to its stylesheet twin. If a primitive moves and these do not, that test
+   fails rather than the palette silently shifting. */
+@property --aurora-artwork-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.63 0.16 275);
+}
+@property --aurora-artwork-secondary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.78 0.12 210);
+}
+@property --aurora-artwork-glow {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.66 0.2 300);
+}
+@property --aurora-artwork-tint {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: oklch(0.225 0.016 285);
+}
+
+/* The transition lives on the element that PAINTS the colours, so it is scoped
+   to the backdrop and cannot slow down any other property. Blur is applied to
+   the same element and is bounded by `--p-ambient-blur-max`, because a
+   full-viewport blur is the single most expensive thing this feature can ask
+   for. */
+.aurora-backdrop-ambient {
+  transition:
+    --aurora-artwork-primary var(--p-ambient-transition-ms) linear,
+    --aurora-artwork-secondary var(--p-ambient-transition-ms) linear,
+    --aurora-artwork-glow var(--p-ambient-transition-ms) linear,
+    --aurora-artwork-tint var(--p-ambient-transition-ms) linear;
+}
+
+/* `motion: off` and `transition: none` both collapse to no animation, and the
+   reduced-motion net further below overrides the drift entirely. The filter is
+   only applied while the feature is on, so an opted-out application never
+   pays for a `blur()` on a full-viewport element. */
+[data-aurora-artwork="on"] .aurora-backdrop-ambient {
+  filter: blur(var(--aurora-artwork-blur));
 }
 
 /* The one combination in which the whole backdrop is a no-op: no image and
@@ -1852,6 +2347,25 @@ body {
     to {
       transform: translate3d(0, var(--aurora-drift-distance), 0);
     }
+  }
+  /* The Ambient Light variant of the same drift. Same shape, same reasons —
+     transform-only, alternating, inside the no-preference block — but scaled by
+     the user's Motion choice rather than fixed, so `off` collapses the
+     animation to a zero-distance keyframe that still costs nothing to skip and
+     `full` travels further. It is NOT per-frame artwork processing: the artwork
+     was sampled once per track, long before this runs. */
+  @keyframes aurora-artwork-drift {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      transform: translate3d(0, var(--p-ambient-motion-distance), 0);
+    }
+  }
+  [data-aurora-artwork="on"]:not([data-aurora-artwork-motion="off"])
+    .aurora-backdrop-ambient {
+    animation: aurora-artwork-drift var(--p-ambient-motion-duration)
+      var(--p-ease-standard) infinite alternate;
   }
   [data-aurora-background]:not([data-aurora-background="none"])
     .aurora-backdrop-ambient {
