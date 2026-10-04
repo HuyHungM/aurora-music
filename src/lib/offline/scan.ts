@@ -26,7 +26,7 @@ import type {
   OfflineHandle,
   OfflineTrackFile,
 } from "./types";
-import { isAudioFile } from "./tracks";
+import { compareOfflineTracks, isAudioFile } from "./tracks";
 
 /** How deep the walk descends. Bounds cycles and pathological trees. */
 export const MAX_SCAN_DEPTH = 6;
@@ -149,14 +149,9 @@ export async function scanOfflineFolder(
   const collected: OfflineTrackFile[] = [];
   const limits = { truncated: false };
   await walk(directory, "", 0, collected, registry, limits);
-  collected.sort((a, b) => {
-    const folderA = a.folder ?? "";
-    const folderB = b.folder ?? "";
-    if (folderA !== folderB) {
-      return folderA.localeCompare(folderB);
-    }
-    return a.name.localeCompare(b.name, undefined, { numeric: true });
-  });
+  // The ONE definition of a local folder's order, shared with `playlistForFolder`
+  // so a scan and a Play Folder can never disagree about what track 3 is.
+  collected.sort(compareOfflineTracks);
   return { files: collected, truncated: limits.truncated };
 }
 

@@ -121,9 +121,16 @@ export function searchCacheKey(
 ): string {
   const providers = [...(options.providers ?? [])].sort().join(",");
   const limit = options.limit === undefined ? "d" : String(options.limit);
+  // Market is part of the key because a market-aware result set is no longer
+  // the same answer for everyone: the provider request is region-scoped and the
+  // ranking applies region affinity, so serving a `VN` entry to a `GLOBAL`
+  // caller would hand them the wrong ranking AND the wrong candidate set.
+  // Only two markets exist, so this adds exactly one axis and one entry per
+  // query at worst — not a cardinality explosion.
+  const market = options.market ?? "GLOBAL";
   // `folded` is the key: it collapses case, punctuation, and diacritics, so
   // one entry serves every spelling of the same question.
-  return `${query.folded}\u0000${providers}\u0000${limit}`;
+  return `${query.folded}\u0000${providers}\u0000${limit}\u0000${market}`;
 }
 
 export class SearchResultCache {

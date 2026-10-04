@@ -22,7 +22,16 @@ export class FakeAudioSurface implements AudioSurface {
 
   playImplementation: (surface: FakeAudioSurface) => Promise<void> = async (surface) => {
     surface.paused = false;
-    queueMicrotask(() => surface.dispatch(EventEnum.playing));
+    // A real element fires `play` when playback is requested and `playing` once
+    // it is actually producing audio. The fake used to fire only `playing`, which
+    // is not a state any element reaches — and it hid the fact that a suite
+    // simulating a whole listening session never once told the engine WHICH track
+    // was playing, so a completion could not be attributed to one. Emitting both
+    // is the fidelity fix, not a loosening of anything.
+    queueMicrotask(() => {
+      surface.dispatch(EventEnum.play);
+      surface.dispatch(EventEnum.playing);
+    });
   };
 
   readonly #handlers = new Map<string, Set<Handler>>();

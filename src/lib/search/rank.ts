@@ -43,6 +43,11 @@
 import type { TrackIdentity } from "@/lib/domain";
 import type { NormalizedField, NormalizedQuery } from "./normalize";
 import { normalizeSearchField } from "./normalize";
+import {
+  REGION_POINTS_MAX,
+  regionPointsFor,
+  type Market,
+} from "@/lib/region/affinity";
 
 /**
  * Match kinds, in descending strength. The VALUE is the band: score is
@@ -104,12 +109,29 @@ export interface RankSearchOptions {
    * gated behind having already reached the phrase tier.
    */
   fuzzyCandidateLimit?: number;
+  /**
+   * Listener market for region affinity. Omitted means neutral, so every
+   * existing caller keeps its current ordering.
+   */
+  market?: Market;
 }
 
 export const DEFAULT_FUZZY_CANDIDATE_LIMIT = 40;
 
-/** Max detail points a band can contribute; keeps bands from overlapping. */
-const DETAIL_MAX = 99;
+/**
+ * Detail budget inside ONE band, and the share of it reserved for the market
+ * boost. They sum to 100 - 1, so `band * 100 + detail + region` can never
+ * reach the next band. That sum is the whole protection for exact-match search:
+ * a Vietnamese result can out-rank another result of the SAME match strength,
+ * and no boost of any size can lift one above a stronger band.
+ *
+ * `detail` was previously allowed the full 0..99, so the coverage/fit/title
+ * mix was rescaled to fit the smaller budget rather than clamped — clamping
+ * would have flattened every result with high coverage into an identical
+ * score and thrown away the ordering the old numbers produced.
+ */
+const DETAIL_MAX = 100 - REGION_POINTS_MAX - 1;
+
 
 // ---------------------------------------------------------------------------
 // Bounded edit distance
@@ -318,8 +340,10 @@ function detailPoints(
   fit: number,
   target: "title" | "artist" | "album" | "any",
 ): number {
-  // Coverage dominates the remainder: 0..60 of the 0..99 budget.
-  const coveragePoints = Math.round(coverage * 60);
+  // Coverage dominates the remainder: 0..48 of the budget left after the
+  // market reserve. 48 + 20 (fit) + 9 (title preference) = 77, one point under
+  // `DETAIL_MAX`, so no combination of inputs is ever clipped.
+  const coveragePoints = Math.round(coverage * 48);
   const fitPoints = fit;
   // A small, explicit title preference. Only 9 points, so it can order
   // within a band and can never promote a weaker field over a stronger one.
@@ -553,6 +577,7 @@ export function rankSearchResults(
 ): SearchRanked[] {
   const fuzzyLimit = options.fuzzyCandidateLimit ?? DEFAULT_FUZZY_CANDIDATE_LIMIT;
   const allowFuzzy = query.fuzzyEligible;
+  const market = options.market;
   // Spend the fuzzy budget on the candidates most likely to benefit: the
   // provider's own order, capped. Everything past the cap is ranked without
   // it, which can only cost a few points inside the fuzzy band.
@@ -565,23 +590,49 @@ export function rankSearchResults(
       fuzzyBudget -= 1;
     }
     const band = classify(query, view, useFuzzy);
+    return { identity, band, order } satisfies {
+      identity: TrackIdentity;
+      band: Band;
+      order: number;
+    };
+  });
+
+  // Region affinity is a DISCOVERY signal, so it is withheld from a query that
+  // names a specific thing.
+  //
+  // If any result reached an exact band, the user asked for that entity by name
+  // and relevance is the whole job: `Taylor Swift` must return Taylor Swift,
+  // `V-pop` must return Vietnamese. This is measured from the results rather
+  // than guessed from the query text, so it needs no artist list, no
+  // capitalization heuristics, and no language detection to stay correct.
+  const entityQuery =
+    ranked.some(
+      (entry) => SEARCH_RANK_BANDS[entry.band.band] >= SEARCH_RANK_BANDS.exactAlbum,
+    );
+
+  const scored = ranked.map(({ identity, band, order }) => {
+    const region =
+      market === "VN" && !entityQuery ? regionPointsFor(identity, market) : 0;
     return {
       identity,
-      score: SEARCH_RANK_BANDS[band.band] * 100 + band.detail,
+      score: SEARCH_RANK_BANDS[band.band] * 100 + band.detail + region,
       band: band.band,
       reasons: [{ band: band.band, detail: band.reason }],
       order,
     } satisfies SearchRanked;
   });
 
-  return ranked.sort((a, b) => b.score - a.score || a.order - b.order);
+  return scored.sort((a, b) => b.score - a.score || a.order - b.order);
 }
 
 /** Score only, for callers that need a number without the reasons. */
 export function scoreSearchResult(
   query: NormalizedQuery,
   identity: TrackIdentity,
+  options: { market?: Market } = {},
 ): number {
   const band = classify(query, viewOf(identity), query.fuzzyEligible);
-  return SEARCH_RANK_BANDS[band.band] * 100 + band.detail;
+  const region =
+    options.market === "VN" ? regionPointsFor(identity, options.market) : 0;
+  return SEARCH_RANK_BANDS[band.band] * 100 + band.detail + region;
 }

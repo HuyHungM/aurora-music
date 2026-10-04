@@ -2,6 +2,7 @@ import type { Track } from "@/lib/domain";
 import { identityToTrack } from "@/lib/music/identity-track";
 import { getSessionUserId } from "@/lib/dal/session";
 import { getRadioBackend } from "@/lib/radio/backend";
+import type { Market } from "@/lib/region/affinity";
 import {
   RECOMMENDATION_SET_SIZE,
   generateRecommendations,
@@ -33,6 +34,11 @@ export interface RecommendationSectionInput {
   limit?: number;
   /** Cap for the exclusion set, so a long page cannot build a huge query. */
   maxExcludeKeys?: number;
+  /**
+   * Listener market. Pages pass `marketForLocale(locale)`; omitted means
+   * neutral, so the pipeline's ordering is unchanged until a surface opts in.
+   */
+  market?: Market;
 }
 
 export interface RecommendationSectionResult {
@@ -61,6 +67,7 @@ export async function buildRecommendationSection(
       ...signals,
       currentTrack: input.seed ?? null,
       excludeKeys,
+      ...(input.market ? { market: input.market } : {}),
     };
     const set = await generateRecommendations(
       getRadioBackend(),

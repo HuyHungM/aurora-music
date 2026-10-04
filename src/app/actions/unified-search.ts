@@ -9,6 +9,8 @@ import { searchQuerySchema } from "@/lib/validation/schemas";
 import { guardServerAction, type GuardFailure } from "@/lib/api/action-guard";
 import { logger } from "@/lib/diagnostics/logger";
 import { normalizeSearchQuery } from "@/lib/search/normalize";
+import { getRequestLocale } from "@/lib/i18n/server";
+import { marketForLocale } from "@/lib/region/affinity";
 import {
   runCachedSearch,
   searchCacheKey,
@@ -76,13 +78,21 @@ export async function searchUnifiedTracksAction(
     // result, and caching it would turn one bad minute into a sticky error
     // page. Such a key instead gets a 5s cooldown so an impatient retry loop
     // cannot storm the provider, and a partial success caches normally.
+    // The listener's market, from the app's own locale resolution — the same
+    // explicit-preference-then-cookie-then-default chain every surface uses.
+    // It is read from the REQUEST, so a signed-in listener's saved preference
+    // travels with them; nothing extra is stored and no IP lookup is involved.
+    const market = marketForLocale(await getRequestLocale());
     const cache = sharedSearchCache();
-    const key = searchCacheKey(normalizeSearchQuery(parsed.data.query), { limit: SEARCH_LIMIT });
+    const key = searchCacheKey(normalizeSearchQuery(parsed.data.query), {
+      limit: SEARCH_LIMIT,
+      market,
+    });
     const result = await runCachedSearch({
       cache,
       key,
       isCacheable: (value) => value.succeeded,
-      run: () => search.search(parsed.data.query, { limit: SEARCH_LIMIT }),
+      run: () => search.search(parsed.data.query, { limit: SEARCH_LIMIT, market }),
     });
 
     // Development/diagnostic timing. Deliberately never logs the query text:

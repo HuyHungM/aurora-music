@@ -452,6 +452,11 @@ import {
   isMusicReactiveId,
   type MusicReactiveId,
 } from "./music-reactive";
+import {
+  DEFAULT_LOCAL_AMBIENT,
+  isLocalAmbientId,
+  type LocalAmbientId,
+} from "./local-ambient";
 
 export {
   MUSIC_REACTIVE_IDS,
@@ -575,6 +580,21 @@ export interface Appearance {
   ambientMotion: AmbientMotionId;
   /** How strongly the ambient light reacts to the audio itself. */
   ambientMusicReactive: MusicReactiveId;
+  /**
+   * What the ambient scene does while a LOCAL file plays (§24).
+   *
+   * This is the user's PREFERENCE and it is persisted like any other. It is
+   * deliberately distinct from the Aurora scene it selects, which is a runtime
+   * override that is never written anywhere: choosing `aurora` here says "yes,
+   * use that scene for my own music", and the scene itself still leaves the saved
+   * appearance untouched.
+   *
+   * Not an ambient-preset control: a preset describes the look of the ambient
+   * layer for EVERY source, whereas this decides whether local playback borrows
+   * a different one at all. So it is absent from `AMBIENT_PRESET_VALUES` and
+   * survives every preset change.
+   */
+  localAmbient: LocalAmbientId;
   /** Ambient softness, normalized. The CSS maps it to a bounded radius. */
   ambientBlur: number;
   /** How far the ambient field extends, normalized. */
@@ -627,6 +647,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   // `subtle` is the restrained end of that. It still costs nothing while
   // paused, hidden or off.
   ambientMusicReactive: "subtle",
+  localAmbient: DEFAULT_LOCAL_AMBIENT,
   ambientBlur: 0.6,
   ambientSpread: 0.5,
   ambientFade: 0.6,
@@ -818,6 +839,9 @@ export function decodeAppearance(input: unknown): Appearance {
     ambientMotion: isAmbientMotionId(record.ambientMotion)
       ? record.ambientMotion
       : DEFAULT_APPEARANCE.ambientMotion,
+    localAmbient: isLocalAmbientId(record.localAmbient)
+      ? record.localAmbient
+      : DEFAULT_APPEARANCE.localAmbient,
     ambientMusicReactive: isMusicReactiveId(record.ambientMusicReactive)
       ? record.ambientMusicReactive
       : DEFAULT_APPEARANCE.ambientMusicReactive,
@@ -929,6 +953,9 @@ export function encodeAppearance(appearance: Appearance): AppearanceWire {
   }
   if (appearance.ambientMotion !== DEFAULT_APPEARANCE.ambientMotion) {
     wire.ambientMotion = appearance.ambientMotion;
+  }
+  if (appearance.localAmbient !== DEFAULT_APPEARANCE.localAmbient) {
+    wire.localAmbient = appearance.localAmbient;
   }
   if (
     appearance.ambientMusicReactive !== DEFAULT_APPEARANCE.ambientMusicReactive

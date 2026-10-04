@@ -101,7 +101,12 @@ export function createYouTubeProvider(
 
     async searchTracks(query: ProviderSearchQuery): Promise<ProviderListResult<Track>> {
       const text = requireQuery(query, "searchTracks");
-      const response = await transport.searchVideos(text, { limit: query.limit });
+      const response = await transport.searchVideos(text, {
+        limit: query.limit,
+        // `undefined` when the market is unknown, which is the same request the
+        // provider made before market existed.
+        ...(query.market ? { regionCode: query.market } : {}),
+      });
       const items = Array.isArray(response.items) ? response.items : [];
       const tracks: Track[] = [];
       for (const item of items) {
@@ -123,7 +128,10 @@ export function createYouTubeProvider(
 
     async searchArtists(query: ProviderSearchQuery): Promise<ProviderListResult<Artist>> {
       const text = requireQuery(query, "searchArtists");
-      const response = await transport.searchChannels(text, { limit: query.limit });
+      const response = await transport.searchChannels(text, {
+        limit: query.limit,
+        ...(query.market ? { regionCode: query.market } : {}),
+      });
       const items = Array.isArray(response.items) ? response.items : [];
       const channelIds: string[] = [];
       for (const item of items) {

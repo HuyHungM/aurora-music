@@ -42,6 +42,14 @@ export interface EngineEventPayload {
   currentTime?: number;
   duration?: number;
   error?: PlayerError;
+  /**
+   * On `ended`: the track whose playback actually finished.
+   *
+   * `null` means the element finished something that is not the source it was
+   * told to play — the `load()` for a replacement track already happened, so the
+   * report belongs to a track the store has moved past. See `playingKey`.
+   */
+  completedKey?: string | null;
 }
 
 export type EngineListener = (payload: EngineEventPayload) => void;
@@ -197,6 +205,22 @@ export class PlayerEngine {
   private lastTimeupdateAt = 0;
   private attached = false;
   private loadedKey: string | null = null;
+  /**
+   * The track whose playback the element is actually producing, or null when it
+   * is producing nothing it was told to.
+   *
+   * WHY THIS IS NOT `loadedKey`. A media element's `ended` event carries no
+   * identity, and by the time it is dispatched a replacement `load()` may
+   * already have run — so reading `loadedKey` in the handler attributes the
+   * completion to the NEW track. That is what let a stale completion consume a
+   * track the store had already moved past.
+   *
+   * `playingKey` is captured when the element STARTS playing a source and
+   * cleared by the next `load()`, so an `ended` can always be traced to the
+   * playback it actually ended — including `null`, which is the honest answer
+   * for a report that raced a `load()` and must be dropped.
+   */
+  private playingKey: string | null = null;
 
   constructor(surface: AudioSurface) {
     this.surface = surface;
@@ -204,16 +228,52 @@ export class PlayerEngine {
       timeupdate: () => this.handleTimeupdate(),
       loadedmetadata: () => this.handleLoadedMetadata(),
       durationchange: () => this.handleDurationChange(),
-      play: () => this.emit("play"),
-      playing: () => this.emit("playing"),
+      play: () => this.handlePlay(),
+      playing: () => this.handlePlaying(),
       pause: () => this.emit("pause"),
       waiting: () => this.emit("waiting"),
       stalled: () => this.emit("stalled"),
       canplay: () => this.emit("canplay"),
-      ended: () => this.emit("ended"),
+      ended: () => this.handleEnded(),
       error: () => this.handleError(),
     };
     this.attachMediaHandlers();
+  }
+
+  /**
+   * The element was asked to play the loaded source, so from here on an `ended`
+   * is attributable to that track.
+   */
+  private handlePlay(): void {
+    this.playingKey = this.loadedKey;
+    this.emit("play");
+  }
+
+  /**
+   * The element is actually producing audio.
+   *
+   * Captured here as well as on `play` because this is the stronger signal: it
+   * is the last event before `ended` and a real element always fires it. A suite
+   * (or a browser) that only reports `playing` still gets correct attribution.
+   */
+  private handlePlaying(): void {
+    if (this.loadedKey !== null) {
+      this.playingKey = this.loadedKey;
+    }
+    this.emit("playing");
+  }
+
+  /**
+   * A completion, attributed to the playback it actually ended.
+   *
+   * Nothing is dropped here: an unattributable report is still emitted, with a
+   * null key. Whether it may CONSUME a track is the store's decision, and it
+   * needs the evidence to make it — silently swallowing the event here would
+   * make "the queue did not advance" indistinguishable from "the element never
+   * finished", which is exactly the distinction an operator needs.
+   */
+  private handleEnded(): void {
+    this.emit("ended", { completedKey: this.playingKey });
   }
 
   get currentGeneration(): number {
@@ -231,6 +291,10 @@ export class PlayerEngine {
   /** Loads a track; no-op autoplay until [autoplay] is requested. */
   load(track: Track, autoplay = false): void {
     this.generation += 1;
+    // Nothing is playing the loaded source any more, so a completion already in
+    // flight can no longer be attributed to it. This is the single point where an
+    // `ended` loses its identity.
+    this.playingKey = null;
     const url = streamUrlOf(track);
 
     if (!url) {

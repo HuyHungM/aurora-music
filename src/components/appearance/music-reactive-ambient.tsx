@@ -6,6 +6,7 @@ import {
   MUSIC_FFT_SIZE,
   MUSIC_REACTIVE_GAIN,
   SILENT_ENERGY,
+  createBeatDetector,
   createSmoother,
   readBands,
   type MusicEnergy,
@@ -49,12 +50,13 @@ import { useMusicEngine } from "@/lib/music/use-music-engine";
  * cost playback.
  */
 
-/** Written every frame while the loop runs. All four are 0..1. */
+/** Written every frame while the loop runs. All are 0..1. */
 const MUSIC_PROPERTIES = [
   "--aurora-music-bass",
   "--aurora-music-mid",
   "--aurora-music-treble",
   "--aurora-music-energy",
+  "--aurora-music-beat",
 ] as const;
 
 /** Format once at module scope: this runs per frame. */
@@ -144,6 +146,7 @@ export function MusicReactiveAmbient() {
     let bins: Uint8Array<ArrayBuffer> | null = null;
     let stream: MediaStream | null = null;
     const smoother = createSmoother();
+    const beatDetector = createBeatDetector();
     let frame = 0;
     let last = 0;
     let failed = false;
@@ -191,7 +194,7 @@ export function MusicReactiveAmbient() {
       }
     };
 
-    const publish = (values: MusicEnergy) => {
+    const publish = (values: MusicEnergy, beat: number) => {
       // The user's setting scales the AUDIO contribution here, at the single
       // point where numbers become styles. Nothing else multiplies it, so
       // `subtle` is 45% of full response everywhere at once, and `off` is a
@@ -202,6 +205,7 @@ export function MusicReactiveAmbient() {
       root.style.setProperty("--aurora-music-mid", fmt(values.mid * k));
       root.style.setProperty("--aurora-music-treble", fmt(values.treble * k));
       root.style.setProperty("--aurora-music-energy", fmt(values.energy * k));
+      root.style.setProperty("--aurora-music-beat", fmt(beat * k));
     };
 
     /** One frame of loop bookkeeping. `frame === 0` means "not running". */
@@ -225,8 +229,15 @@ export function MusicReactiveAmbient() {
       // is a different layer and is entirely unaffected, so the surface stays
       // lit while the music is still. Resuming needs no new effect run — the
       // subscription below re-arms the loop.
+      //
+      // BOTH smoothers are reset here. Without it, pausing mid-gesture leaves a
+      // half-spent envelope and a lit beat impulse in the detector, and the
+      // first frame after resume publishes that stale state — which is the
+      // brightness spike on resume this is here to prevent.
       if (!playing) {
-        publish(SILENT_ENERGY);
+        smoother.reset();
+        beatDetector.reset();
+        publish(SILENT_ENERGY, 0);
         frame = 0;
         return;
       }
@@ -239,18 +250,19 @@ export function MusicReactiveAmbient() {
         // illuminates, and stop asking every frame.
         if (failed) {
           smoother.reset();
-          publish(SILENT_ENERGY);
+          beatDetector.reset();
+          publish(SILENT_ENERGY, 0);
           frame = 0;
           return;
         }
-        publish(SILENT_ENERGY);
+        publish(SILENT_ENERGY, 0);
         return;
       }
 
       node.getByteFrequencyData(bins);
       const raw = readBands(bins);
       const eased = smoother.step(raw, dt);
-      publish(eased);
+      publish(eased, beatDetector.step(raw.bass, dt));
     };
 
     // Playback state drives the loop from OUTSIDE React, so pause and resume
@@ -259,7 +271,7 @@ export function MusicReactiveAmbient() {
       if (playing) start();
       else {
         stop();
-        publish(SILENT_ENERGY);
+        publish(SILENT_ENERGY, 0);
       }
     };
     if (playing) start();

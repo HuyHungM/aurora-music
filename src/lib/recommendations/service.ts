@@ -1,5 +1,6 @@
 import type { TrackIdentity } from "@/lib/domain";
 import { foldAsciiComparison, toTrackIdentity } from "@/lib/domain";
+import { regionPointsFor, type Market } from "@/lib/region/affinity";
 import {
   generateRankedRadioBatch,
   identityKeys,
@@ -87,6 +88,13 @@ export interface RecommendationSignals {
    * client knows the queue; the server merges recent history).
    */
   excludeKeys?: Iterable<string>;
+  /**
+   * Listener market. Omitted means neutral: no region term is added to any
+   * score and the ordering is exactly what it was before region affinity
+   * existed. This is what every caller gets by default, so a deployment that
+   * has not opted in cannot change behaviour by accident.
+   */
+  market?: Market;
 }
 
 export interface Recommendation {
@@ -133,6 +141,20 @@ export const MAX_RECOMMENDATIONS_PER_ARTIST = 3;
 export const AFFINITY_FOLLOWED = 60;
 export const AFFINITY_LIKED = 40;
 export const AFFINITY_RECENT = 25;
+
+/**
+ * Region affinity weight.
+ *
+ * Deliberately far below `AFFINITY_FOLLOWED`. These scores are NOT banded, so
+ * the ceiling matters: the listener's own history is direct evidence of taste,
+ * while market is a prior about a population. A prior that outweighed
+ * first-hand evidence would replace "more like what you played" with "more
+ * like where you are" — which is the failure mode the brief warns about when it
+ * asks for a controlled boost rather than a sort. 30 sits above the gap between
+ * tiers (25 -> 40) so it can reorder within one tier, and below the tiers
+ * themselves so it never overturns them.
+ */
+export const RECOMMENDATION_REGION_AFFINITY = 30;
 
 function artistNameOf(identity: TrackIdentity): string {
   return identity.artists[0]?.name ?? "";
@@ -321,6 +343,29 @@ function affinityFor(artistName: string, affinity: Affinity): number {
   return score;
 }
 
+/**
+ * Region contribution for one candidate, in recommendation-score units.
+ *
+ * Withheld entirely when the recommendation is anchored to a specific track or
+ * artist (`similar-to-current`, `from-artists-you-follow`). Those categories
+ * answer "what else is like this?", and if the thing being followed is
+ * international then the honest answer is more international music — a market
+ * prior must not silently convert "more like this" into "more like Vietnam".
+ * A prior only belongs on the categories that are genuinely about discovery.
+ */
+function regionFor(
+  identity: TrackIdentity,
+  market: Market | undefined,
+  anchored: boolean,
+): number {
+  if (market === undefined || market === "GLOBAL" || anchored) {
+    return 0;
+  }
+  return regionPointsFor(identity, market) === 0
+    ? 0
+    : RECOMMENDATION_REGION_AFFINITY;
+}
+
 interface Candidate extends Recommendation {
   artistName: string;
   order: number;
@@ -396,6 +441,9 @@ export async function generateRecommendations(
         ...(seed ? { seed } : {}),
         ...(followedArtist ? { seedArtist: followedArtist } : {}),
         signals: textSignals,
+        // Region only reaches the localized discovery avenue, which is a
+        // discovery-only concern; the anchored categories ignore it downstream.
+        ...(signals.market ? { market: signals.market } : {}),
         // A copy of the caller's exclusions. The cross-category `used` set
         // is applied below, so a duplicate is dropped once, in one place.
         excludeKeys: new Set(excluded),
@@ -430,7 +478,10 @@ export async function generateRecommendations(
         identity: entry.identity,
         category: plan.category,
         reason: plan.reason,
-        score: entry.score + affinityFor(artistName, affinity),
+        score:
+          entry.score +
+          affinityFor(artistName, affinity) +
+          regionFor(entry.identity, signals.market, plan.mode !== "discovery"),
         reasons: entry.reasons,
         artistName,
         order: order++,

@@ -5,6 +5,7 @@ import { extractorManager } from "@/lib/providers/extractor-manager";
 import { getProvider } from "@/lib/providers/registry";
 import { getShellProviders } from "@/lib/providers/server";
 import type { ProviderCapability } from "@/lib/providers/types";
+import type { Market } from "@/lib/region/affinity";
 import { E2E_AUTH_FLAG } from "@/../e2e/auth/constants";
 import type {
   ArtistRef,
@@ -60,6 +61,29 @@ export function createProductionRadioBackend(): RadioDiscoveryBackend {
       const pages = await fanOut("search.tracks", async (providerId) => {
         const provider = getProvider(providerId);
         const result = await provider.searchTracks({ query, limit });
+        return result.items;
+      });
+      return pages.slice(0, limit * 3);
+    },
+
+    /**
+     * The market-scoped twin of `searchTracks`. Identical fan-out, identical
+     * per-provider isolation, identical slice — the ONLY difference is that
+     * `market` rides along on the provider request, so a provider with a
+     * native region parameter biases its own ranking toward the market.
+     *
+     * A provider without that parameter ignores it and returns exactly what it
+     * would have returned anyway, which is why this needs no capability check.
+     */
+    async searchTracksInMarket(
+      query: string,
+      limit: number,
+      market: Market,
+    ): Promise<Track[]> {
+      if (query.trim().length === 0) return [];
+      const pages = await fanOut("search.tracks", async (providerId) => {
+        const provider = getProvider(providerId);
+        const result = await provider.searchTracks({ query, limit, market });
         return result.items;
       });
       return pages.slice(0, limit * 3);

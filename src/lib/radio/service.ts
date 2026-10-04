@@ -6,6 +6,7 @@ import type {
   TrackIdentity,
   TrackMatcher,
 } from "@/lib/domain";
+import type { Market } from "@/lib/region/affinity";
 import {
   createTrackMatcher,
   foldAsciiComparison,
@@ -67,6 +68,21 @@ export interface AlbumRef {
  */
 export interface RadioDiscoveryBackend {
   searchTracks(query: string, limit: number): Promise<Track[]>;
+  /**
+   * Search for a market's local catalogue. Same contract as `searchTracks`,
+   * but the implementation may pass a region hint to the providers, so the
+   * result set differs by market even though the query text does not.
+   *
+   * Separate from `searchTracks` rather than an option on it because the two
+   * callers mean different things: a USER's query must never be region-scoped
+   * (that would corrupt exact artist search), while Aurora's own discovery
+   * seed is exactly the case where a region hint belongs.
+   */
+  searchTracksInMarket?(
+    query: string,
+    limit: number,
+    market: Market,
+  ): Promise<Track[]>;
   artistTracks(artist: ArtistRef, limit: number): Promise<Track[]>;
   albumTracks(album: AlbumRef, limit: number): Promise<Track[]>;
   artistAlbums(artist: ArtistRef, limit: number): Promise<Album[]>;
@@ -251,9 +267,26 @@ export interface RadioBatchRequest {
   seedArtist?: ArtistRef;
   /** Free-text discovery signals (liked/recent artists). */
   signals?: string[];
+  /** Listener market. Enables the localized discovery avenue; see below. */
+  market?: Market;
   excludeKeys: Set<string>;
   limit: number;
 }
+
+/**
+ * Aurora's own discovery seed per market.
+ *
+ * Deliberately NOT `"vietnam music"` / `"nhạc việt"` and deliberately not a
+ * country name: a language-and-genre term pulls in the whole local catalogue,
+ * whereas a country term pulls in one provider's chart for that country and
+ * re-imports exactly the problem this is fixing. `vpop` is the genre tag the
+ * local scene actually uses, and it is also a token the region classifier
+ * recognises, so the candidates this avenue brings in are classified on their
+ * own merits rather than because of the query that found them.
+ */
+const DISCOVERY_SEEDS: Partial<Record<Market, string>> = {
+  VN: "vpop",
+};
 
 export interface RadioBatch {
   groups: TrackIdentity[];
@@ -338,6 +371,28 @@ export async function generateRankedRadioBatch(
   if (request.mode === "discovery") {
     // Avenue 1: popular catalog (whatever provider offers it).
     raw.push(...(await safe(() => backend.popularTracks(AVENUE_LIMIT), [])));
+    // Avenue 1b: the market's OWN discovery seed.
+    //
+    // Why this exists. `popularTracks` is a provider's editorial chart and every
+    // provider ships the global one, so for an anonymous listener discovery was
+    // 100% international — no amount of local RE-RANKING can fix a candidate
+    // set with nothing local in it. This avenue supplies local candidates, and
+    // the ranker's region term then decides how much of the set they win.
+    //
+    // It is Aurora's own query, never a user query, so nothing here can corrupt
+    // exact artist search. It is a language-and-genre term rather than a
+    // country name, so it pulls in Vietnamese-language music generally instead
+    // of one chart. Region bias is additionally requested through
+    // `searchTracksInMarket`, and both are best-effort: a backend that does not
+    // implement it simply returns nothing and the avenue contributes no rows.
+    const marketSearch = backend.searchTracksInMarket;
+    const seed = request.market ? DISCOVERY_SEEDS[request.market] : undefined;
+    if (seed && marketSearch && request.market) {
+      const market = request.market;
+      raw.push(
+        ...(await safe(() => marketSearch.call(backend, seed, AVENUE_LIMIT, market), [])),
+      );
+    }
     // Avenue 2: bounded signal searches (liked/recent artists).
     for (const signal of (request.signals ?? []).slice(0, 3)) {
       raw.push(...(await safe(() => backend.searchTracks(signal, 5), [])));

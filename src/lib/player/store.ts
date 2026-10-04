@@ -5,7 +5,7 @@ import {
   dedupeCanonicalTracks,
 } from "@/lib/domain";
 import { PlayerEngine, PlayerError } from "./engine";
-import type { PlayerErrorKind } from "./engine";
+import type { EngineEventPayload, PlayerErrorKind } from "./engine";
 import { trackKey } from "./identity";
 import { isQualifiedPlay } from "./qualification";
 import type { PlaybackController } from "@/lib/playback/controller";
@@ -186,6 +186,75 @@ let engine: PlayerEngine | null = null;
 
 /** Pressing "previous" skips back only when the playhead is past this point. */
 export const PREV_RESTART_THRESHOLD_SECONDS = 3;
+
+/** The queue shape a derivation needs. Structural, so a caller may pass a slice. */
+export interface QueueOrderView<T> {
+  queue: readonly T[];
+  playOrder: readonly number[];
+  position: number;
+  /**
+   * Loop mode in the PRODUCT vocabulary (`track` / `queue`), because that is
+   * what a surface knows about its own controls. The store's own `RepeatMode`
+   * (`one` / `all`) is the implementation vocabulary; `queue-manager.ts` owns
+   * the mapping in both directions and this module never guesses at it.
+   */
+  repeat: "off" | "track" | "queue";
+}
+
+/** One entry of the remaining queue, carrying the identity every mutation uses. */
+export interface QueueEntry<T> {
+  /** Play-order position. The stable id for reorder and removal. */
+  position: number;
+  /** Slot in `queue`. Stable for the life of the entry. */
+  queueIndex: number;
+  track: T;
+}
+
+/**
+ * THE remaining queue — the one derivation of "what plays next".
+ *
+ * The invariant this enforces: **the queue is what remains, not playback
+ * history.** Every entry at or before the cursor has been consumed, so it is
+ * not in the queue and must not be rendered as though it were. Deriving that
+ * set anywhere else — by filtering out the current track, or by reading
+ * `queue` directly — is what put already-played songs back on screen and made
+ * a played track look like it was still upcoming.
+ *
+ * Under `repeat: "queue"` the consumed entries DO become playable again, because
+ * that is the loop the listener asked for. They are returned after the cursor
+ * rather than dropped, so the panel shows the wrap honestly instead of implying
+ * playback will stop.
+ *
+ * `position` is the play-order cursor, never a queue index and never an array
+ * offset into `queue` — those three disagree the moment shuffle or a reorder is
+ * involved, and confusing them is how entries get skipped.
+ *
+ * Generic over the track type because the store holds `Track` while the panel
+ * holds a `TrackIdentity`; the derivation is about ORDER and must not care.
+ */
+export function remainingQueue<T>(view: QueueOrderView<T>): QueueEntry<T>[] {
+  const entries: QueueEntry<T>[] = [];
+  for (let pos = 0; pos < view.playOrder.length; pos += 1) {
+    const queueIndex = view.playOrder[pos] as number;
+    const track = view.queue[queueIndex];
+    if (track) {
+      entries.push({ position: pos, queueIndex, track });
+    }
+  }
+  if (view.position < 0) {
+    // Nothing is loaded yet, so nothing has been consumed.
+    return entries;
+  }
+  const upcoming = entries.filter((entry) => entry.position > view.position);
+  if (view.repeat !== "queue") {
+    return upcoming;
+  }
+  // Strictly BEFORE the cursor: the cursor entry is what is playing now, not
+  // something that loops around to it, so including it would report the
+  // current track as both playing and pending.
+  const wrapping = entries.filter((entry) => entry.position < view.position);
+  return [...upcoming, ...wrapping];
+}
 
 /**
  * Fisher-Yates shuffle. When shuffle is enabled, the pinned track is placed at
@@ -475,11 +544,11 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
         | "pause"
         | "ended"
         | "error",
-      handler: (payload: {
-        currentTime?: number;
-        duration?: number;
-        error?: PlayerError;
-      }) => void,
+      // The engine's own payload type, not a local restatement of it. A
+      // restatement silently drops any field the engine adds — which is how
+      // `ended` lost the identity of the track that actually finished, and the
+      // completion handler ended up consuming completions it could not attribute.
+      handler: (payload: EngineEventPayload) => void,
     ) => {
       unsubscribers.push(target.on(event, handler));
     };
@@ -529,8 +598,37 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
       prefetchNextTrack(get());
     });
     on("pause", () => set({ isPlaying: false, isLoading: false }));
-    on("ended", () => {
+    on("ended", ({ completedKey }) => {
+      // ATTRIBUTE THE COMPLETION BEFORE CONSUMING IT.
+      //
+      // `ended` is a media-element event carrying no identity, and the store's
+      // completion handler ADVANCES the cursor. Consuming an unattributable
+      // report therefore skips a track, and a track the listener already heard
+      // reappears later in the order. Two ways that happens, both measured on
+      // this harness before the fix:
+      //
+      // - The same playback reported twice (a redundant `src` assignment, a
+      //   recovery reload landing on the same source). First report advanced
+      //   A -> B; the second advanced B -> D and C was never played.
+      // - `Next` pressed as a track finished. The advance had already happened,
+      //   then the replaced track reported its own completion and the queue
+      //   skipped the track `Next` had just selected.
+      //
+      // `completedKey` is the track whose playback actually ended, captured by
+      // the engine when the element started producing it and cleared by the next
+      // `load()`. `null` means the report raced a load and belongs to nothing the
+      // store still owns. Either way, only a report naming the CURRENT track may
+      // consume it — which is what makes one completion consume exactly one
+      // track, for every trigger: natural end, Next, the media session, a
+      // headset button.
+      if (completedKey === undefined || completedKey === null) {
+        return;
+      }
       const state = get();
+      const current = state.currentTrack;
+      if (current !== null && completedKey !== trackKey(current)) {
+        return;
+      }
       const queueIndex = afterEndQueueIndex(state);
       if (queueIndex === null) {
         set({ isPlaying: false, isLoading: false, currentTime: 0 });

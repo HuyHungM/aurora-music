@@ -188,6 +188,9 @@ export function createSpotifyApiTransport(
     if (paging.offset !== undefined) {
       params.offset = String(clampOffset(paging.offset));
     }
+    if (paging.market !== undefined) {
+      params.market = paging.market;
+    }
     return params;
   }
 

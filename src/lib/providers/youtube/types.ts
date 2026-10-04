@@ -155,20 +155,35 @@ export interface YouTubePlaylist {
   total?: number;
 }
 
+/**
+ * Paging options for a search call.
+ *
+ * `regionCode` is YouTube's own `regionCode` search parameter. It biases which
+ * results YouTube considers locally relevant — it does NOT restrict the
+ * catalogue, so a `VN` listener still gets international results when that is
+ * what YouTube ranks highest. That is why it is a bias and not a filter, and
+ * why it needs no fallback when a market is unknown.
+ */
+export interface YouTubeSearchOptions {
+  limit?: number;
+  pageToken?: string;
+  regionCode?: string;
+}
+
 /** Transport injected into the provider (real fetch client or test double). */
 export interface YouTubeApiTransport {
   searchVideos(
     query: string,
-    options?: { limit?: number; pageToken?: string },
+    options?: YouTubeSearchOptions,
   ): Promise<YouTubeSearchResponse>;
   searchChannels(
     query: string,
-    options?: { limit?: number; pageToken?: string },
+    options?: YouTubeSearchOptions,
   ): Promise<YouTubeSearchResponse>;
   getVideos(videoIds: string[]): Promise<YouTubeVideoListResponse>;
   searchChannelVideos(
     channelId: string,
-    options?: { limit?: number; pageToken?: string },
+    options?: YouTubeSearchOptions,
   ): Promise<YouTubeSearchResponse>;
   getChannels(channelIds: string[]): Promise<YouTubeChannelListResponse>;
   getPlaylist(playlistId: string): Promise<YouTubePlaylistResource | null>;

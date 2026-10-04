@@ -30,6 +30,10 @@ import {
   type GlassPresetId,
 } from "@/lib/appearance/appearance";
 import {
+  LOCAL_AMBIENT_IDS,
+  isLocalAmbientId,
+} from "@/lib/appearance/local-ambient";
+import {
   BACKGROUND_REJECTION_KEYS,
   validateBackgroundImage,
   type BackgroundImageEnvironment,
@@ -715,6 +719,24 @@ function AmbientLightSection() {
               onSelect={(id) => {
                 if (!isMusicReactiveId(id)) return;
                 update({ ambientMusicReactive: id });
+              }}
+            />
+
+            {/* Local Music Ambient. Deliberately placed next to music reactivity
+                rather than near the background controls: the reason it exists at
+                all is that a local file is the ONE source the audio analyser can
+                actually read, so these two settings are two halves of the same
+                idea and a listener reasoning about "why does my own music behave
+                differently" needs to see them together. */}
+            <AmbientSelect
+              label={t("settings.ambient.localAmbient")}
+              testId="ambient-localAmbient"
+              options={LOCAL_AMBIENT_IDS}
+              selected={appearance.localAmbient}
+              labelFor={(id) => `settings.ambient.localAmbient_${id}`}
+              onSelect={(id) => {
+                if (!isLocalAmbientId(id)) return;
+                update({ localAmbient: id });
               }}
             />
           </AmbientMoreControls>

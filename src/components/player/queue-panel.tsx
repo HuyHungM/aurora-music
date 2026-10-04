@@ -12,7 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import { usePresence } from "@/components/ui/presence";
 import { useMenuOpenUp, MENU_TRIGGER_GAP_PX } from "@/components/ui/menu-placement";
-import { usePlayerStore } from "@/lib/player/store";
+import { remainingQueue, usePlayerStore } from "@/lib/player/store";
 import { resolveArtworkUrl, type Track } from "@/lib/domain";
 import { useMusicEngine, useMusicEngineState } from "@/lib/music/use-music-engine";
 import { identityToTrack } from "@/lib/music/identity-track";
@@ -499,6 +499,9 @@ export function QueuePanel() {
   // shuffle toggle silently repainted nothing while the model had changed.
   const playOrder = useMusicEngineState((s) => s.playOrder);
   const position = useMusicEngineState((s) => s.currentIndex);
+  // The loop mode decides whether consumed entries come back around, so the
+  // remaining set cannot be derived without it.
+  const repeat = useMusicEngineState((s) => s.repeat);
   const isPlaying = useMusicEngineState((s) => s.isPlaying);
   // The mini player's own visibility condition (`MiniPlayer` returns null
   // without one), read from the same engine store so the two cannot disagree.
@@ -689,7 +692,18 @@ export function QueuePanel() {
   }));
 
   const currentItem = items.find(({ pos }) => pos === position) ?? null;
-  const upcoming = items.filter(({ pos }) => (currentItem ? pos !== position : true));
+
+  // The queue is what REMAINS, not history. `remainingQueue` is the single
+  // derivation of that set and it is deliberately not "everything except the
+  // current track": that put already-played songs back in the list, so a track
+  // the listener had finished still appeared to be upcoming and the panel grew
+  // behind the playhead instead of shrinking.
+  const upcoming = remainingQueue({
+    queue: identities,
+    playOrder,
+    position,
+    repeat,
+  }).map((entry) => ({ pos: entry.position, queueIndex: entry.queueIndex, track: entry.track }));
 
   // Row removal lives HERE, not in the row menu: the row knows its position
   // and title, but only the panel can name the removed track for the

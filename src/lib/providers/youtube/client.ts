@@ -222,6 +222,9 @@ export function createYouTubeApiTransport(
       if (searchOptions.pageToken) {
         params.pageToken = searchOptions.pageToken;
       }
+      if (searchOptions.regionCode) {
+        params.regionCode = searchOptions.regionCode;
+      }
       return (await request("search", "/search", params)) as unknown as YouTubeSearchResponse;
     },
 
@@ -234,6 +237,9 @@ export function createYouTubeApiTransport(
       };
       if (searchOptions.pageToken) {
         params.pageToken = searchOptions.pageToken;
+      }
+      if (searchOptions.regionCode) {
+        params.regionCode = searchOptions.regionCode;
       }
       return (await request("search", "/search", params)) as unknown as YouTubeSearchResponse;
     },

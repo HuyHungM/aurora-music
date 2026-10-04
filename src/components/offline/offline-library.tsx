@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Track } from "@/lib/domain";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { FolderIcon, MusicNoteIcon } from "@/components/ui/icons";
+import { FolderIcon, MusicNoteIcon, PlayIcon } from "@/components/ui/icons";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { queueNotifications } from "@/components/ui/notify-events";
 import { useMusicEngine } from "@/lib/music/use-music-engine";
@@ -42,7 +42,7 @@ import { scanOfflineFolder } from "@/lib/offline/scan";
 import { replaceFileRegistry, resetOfflineSession } from "@/lib/offline/session";
 import { defaultOfflineStore, type OfflineKeyValueStore } from "@/lib/offline/storage";
 import type { OfflineDirectoryHandle, OfflineTrackFile } from "@/lib/offline/types";
-import { localTrack } from "@/lib/offline/tracks";
+import { localTrack, playlistForFolder } from "@/lib/offline/tracks";
 import { OfflineTrackRow } from "./offline-track-row";
 
 type PanelState =
@@ -190,6 +190,32 @@ export function OfflineLibrary() {
     queue.added(track);
   };
 
+  /**
+   * Play Folder: the whole granted folder, in canonical order, as one queue.
+   *
+   * `playCollection` rather than a loop of `play` calls, and that is the entire
+   * implementation. It routes into the same `replaceQueue` every album, playlist
+   * and search result already uses, so the folder gets the canonical transition
+   * for free — one `next()`, one completion handler, the cursor model where the
+   * queue IS the remaining tracks, Loop Track that repeats without consuming,
+   * Loop Queue that wraps deliberately, and shuffle that permutes rather than
+   * duplicates.
+   *
+   * Building a parallel folder queue instead would have meant a second place for
+   * every one of those rules to be re-implemented, and therefore a second place
+   * for them to disagree.
+   */
+  const playFolder = useCallback(
+    (folderFiles: readonly OfflineTrackFile[]) => {
+      const tracks = playlistForFolder(folderFiles);
+      if (tracks.length === 0) {
+        return;
+      }
+      engine?.playCollection(tracks, 0);
+    },
+    [engine],
+  );
+
   const header = (
     <section className="flex flex-col items-start gap-3">
       <p className="t-eyebrow">{t("offline.navLabel")}</p>
@@ -299,6 +325,22 @@ export function OfflineLibrary() {
         </span>
         <span className="text-xs text-text-muted">{trackCountLabel}</span>
         <div className="ml-auto flex flex-wrap gap-2">
+          <Button
+            onClick={() => playFolder(files)}
+            variant="primary"
+            size="sm"
+            // Disabled rather than hidden while there is nothing to play, so the
+            // control does not appear and disappear as a scan lands. The label
+            // still reads, which is what tells a listener the feature exists.
+            disabled={files.length === 0}
+            aria-label={t("offline.playFolderLabel", {
+              name: folderNameOf(state.handle) ?? "",
+              count: files.length,
+            })}
+          >
+            <PlayIcon size={16} />
+            {t("offline.playFolder")}
+          </Button>
           <Button onClick={() => void scan(state.handle)} variant="ghost" size="sm">
             {t("offline.reScan")}
           </Button>

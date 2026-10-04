@@ -31,6 +31,7 @@ import {
 import { AuroraBackdrop } from "./aurora-backdrop";
 import { ArtworkAmbient } from "./artwork-ambient";
 import { MusicReactiveAmbient } from "./music-reactive-ambient";
+import { LocalMusicAmbient } from "./local-music-ambient";
 
 /**
  * How long a continuous control settles before it is written anywhere.
@@ -429,6 +430,13 @@ export function AppearanceRoot({
         className={className ? `relative isolate flex min-h-dvh ${className}` : "relative isolate flex min-h-dvh"}
       >
         <AuroraBackdrop />
+        {/* The Local Music scene is mounted UNCONDITIONALLY, and deliberately so.
+            It is not part of "Ambient Light": it is a runtime override of the
+            ambient layer, and it has to be able to turn that layer OFF for local
+            playback when the user asked for `off`. Gating it on the same flag
+            would make "off" unreachable exactly when it is needed. It renders
+            null and writes nothing until a local file is actually playing. */}
+        <LocalMusicAmbient />
         {appearance.artworkAmbient ? (
           <>
             <ArtworkAmbient />

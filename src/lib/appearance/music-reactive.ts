@@ -183,6 +183,170 @@ function coefficient(durationMs: number, dtMs: number): number {
   return 1 - Math.exp(-dt / durationMs);
 }
 
+/* ==========================================================================
+   BEAT / TRANSIENT DETECTION
+
+   WHY THIS IS SEPARATE FROM THE ENVELOPE. The bands already swell with the
+   music, and that swell is the BREATH. A beat is a different shape: a fast
+   rise and a quick decay, repeated on the transient rather than on the level.
+   Folding it into `Smoother` would force one release constant on two jobs —
+   slow enough to ease the breath back down, far too slow for a hit — and the
+   first attempt at doing so produced a light that heaved once per bar instead
+   of pulsing on the beat.
+
+   So the envelope keeps the breath and this keeps the pulse. They are summed
+   where they are published, and neither knows about the other.
+   ========================================================================== */
+
+/**
+ * Tuning, in one place because these four numbers ARE the feature.
+ *
+ * `attack` is short on purpose: a transient is over in well under a frame's
+ * worth of perceptible change, so the impulse is essentially instant. `release`
+ * is what makes it a soft thump rather than a flash — 260ms puts it in the same
+ * neighbourhood as a hi-hatted kick's decay, so it reads as the beat's tail
+ * instead of a separate event.
+ *
+ * `baselineMs` is slow enough (900ms) that a sustained loud passage walks the
+ * reference up behind the music rather than chasing it, so a chorus keeps
+ * producing beats instead of going permanently quiet because the reference
+ * caught up. `minIntervalMs` is the refractory period: at 150 BPM a beat is
+ * 400ms apart, so 180ms cannot merge two adjacent hits into one, while a
+ * 16th-note hi-hat roll still cannot machine-gun the light.
+ */
+export const BEAT = {
+  /** Impulse rise. Effectively instant. */
+  attack: 12,
+  /** Impulse fall. Long enough to read as a thump, short enough to stay percussive. */
+  release: 260,
+  /** How fast the reference level follows the music. */
+  baselineMs: 900,
+  /** Refractory period; also the shortest gap two impulses may have. */
+  minIntervalMs: 180,
+  /**
+   * How far above the reference a transient must rise to count, as a fraction
+   * of full scale. Low on purpose: a kick that lifts the bass band by 0.06 is
+   * musically obvious and visually should register, while spectral jitter never
+   * produces a jump that shape.
+   */
+  threshold: 0.055,
+  /** Impulse strength at a threshold-sized transient. */
+  strength: 0.55,
+  /**
+   * A transient larger than this is a DROP, not a beat. Scaling down past 1
+   * keeps the strongest possible hit inside the same visual budget as every
+   * other one, which is what stops a chorus from looking like a strobe.
+   */
+  overshoot: 0.22,
+} as const;
+
+/** A transient detector over an already-band-limited bass value. */
+export interface BeatDetector {
+  /** Feeds one frame of bass energy; returns the impulse to publish, 0..1. */
+  step(bass: number, dtMs: number): number;
+  /** The reference level the next transient is measured against. */
+  baseline(): number;
+  reset(): void;
+}
+
+/**
+ * Beat detection from the BASS band only.
+ *
+ * Bass rather than overall energy on purpose: a snare and a hi-hat lift the
+ * treble band hard and the total energy barely, so an energy-based detector
+ * fires on cymbals and reads as chatter. The bass band is where a kick and a
+ * bassline live, which is what "the beat" means to a listener.
+ *
+ * The bass value passed in should be the RAW band reading, not the smoothed
+ * one. Smoothing first would have already absorbed the transient this is trying
+ * to find — the envelope deliberately rounds the attack off over 45ms, which is
+ * correct for the breath and fatal for the pulse.
+ */
+export function createBeatDetector(): BeatDetector {
+  let reference = 0;
+  let impulse = 0;
+  let sinceBeat = Number.POSITIVE_INFINITY;
+  /**
+   * Whether the reference means anything yet.
+   *
+   * After a reset the reference is 0, so the FIRST real frame of any audio
+   * looks like an enormous transient — a pause, a resume or a track change
+   * would each manufacture one phantom beat, which is the brightness spike the
+   * pause path exists to prevent. So the first frame after a reset only
+   * SEEDS the reference and cannot fire.
+   */
+  let primed = false;
+
+  return {
+    step(bass, dtMs) {
+      const dt = Math.min(Math.max(dtMs, 0), 100);
+      const level = clamp01(bass);
+
+      // The reference walks toward the music slowly, and only ever RISES
+      // quickly. Letting it fall at the same slow rate is what stops a chorus
+      // from silencing itself; letting it rise fast is what stops a single
+      // transient from becoming the new normal and masking the next beat.
+      //
+      // `coefficient` takes (durationMs, dtMs). Getting that pair the other way
+      // round is not a subtle degradation — it evaluates to ~1 for any real dt,
+      // the reference snaps onto the music within one frame, `delta` is
+      // therefore always ~0, and NO BEAT EVER FIRES. Measured, before this was
+      // corrected: a 0.25 baseline followed by a 0.30 transient produced an
+      // impulse of exactly 0.
+      if (!primed) {
+        primed = true;
+        reference = level;
+        sinceBeat = 0;
+        return 0;
+      }
+
+      reference =
+        level > reference
+          ? reference +
+            (level - reference) * coefficient(BEAT.baselineMs * 0.25, dt)
+          : reference + (level - reference) * coefficient(BEAT.baselineMs, dt);
+
+      const delta = level - reference;
+      sinceBeat += dt;
+
+      const eligible = sinceBeat >= BEAT.minIntervalMs && delta >= BEAT.threshold;
+      if (eligible) {
+        sinceBeat = 0;
+        // Scale the hit, then CEILING it: `1 + overshoot` maps the threshold to
+        // `strength`, and everything louder than the overshoot saturates there
+        // instead of growing without bound.
+        const scale = delta / (BEAT.threshold + BEAT.overshoot);
+        const fired = Math.min(scale * BEAT.strength, BEAT.strength);
+        // Rise instantly rather than easing: the transient is already gone by
+        // the time an attack curve would have finished.
+        impulse = Math.max(impulse, fired);
+      } else {
+        // Decay ALWAYS uses the release time. There is no branch here: the
+        // attack is not an easing curve applied over time, it is the instant
+        // assignment in the `eligible` branch above, so by the time anything
+        // decays the rise is already over. Picking `attack` while the impulse is
+        // live — which is what this did first — gave the decay a 12ms constant
+        // and the "soft thump" vanished within a frame or two, leaving a blink.
+        impulse += (0 - impulse) * coefficient(BEAT.release, dt);
+        if (impulse < 0.001) {
+          impulse = 0;
+        }
+      }
+
+      return clamp01(impulse);
+    },
+    baseline() {
+      return reference;
+    },
+    reset() {
+      reference = 0;
+      impulse = 0;
+      sinceBeat = Number.POSITIVE_INFINITY;
+      primed = false;
+    },
+  };
+}
+
 export function createSmoother(initial: MusicEnergy = SILENT_ENERGY): Smoother {
   let value: MusicEnergy = { ...initial };
 
@@ -198,11 +362,17 @@ export function createSmoother(initial: MusicEnergy = SILENT_ENERGY): Smoother {
       // allowed to teleport the value; clamping it keeps the next frame
       // continuous instead of snapping.
       const dt = Math.min(Math.max(dtMs, 0), 100);
+      // The TARGET is clamped as well as the frame delta. `readBands` already
+      // clamps, so this is defence in depth — but the envelope interpolates
+      // TOWARD the target, so an out-of-range target does not stay out of range:
+      // it walks the value past 1 and keeps going. Measured with a target of 5,
+      // which settled at 1.76 — a light brighter than full scale, from a
+      // malformed input. Cheap to make impossible.
       value = {
-        bass: approach(value.bass, current.bass, "bass", dt),
-        mid: approach(value.mid, current.mid, "mid", dt),
-        treble: approach(value.treble, current.treble, "treble", dt),
-        energy: approach(value.energy, current.energy, "energy", dt),
+        bass: approach(value.bass, clamp01(current.bass), "bass", dt),
+        mid: approach(value.mid, clamp01(current.mid), "mid", dt),
+        treble: approach(value.treble, clamp01(current.treble), "treble", dt),
+        energy: approach(value.energy, clamp01(current.energy), "energy", dt),
       };
       return value;
     },
@@ -215,8 +385,24 @@ export function createSmoother(initial: MusicEnergy = SILENT_ENERGY): Smoother {
   };
 }
 
-/** How strongly music drives the light, per user setting. */
-export const MUSIC_REACTIVE_IDS = ["off", "subtle", "full"] as const;
+/**
+ * How strongly music drives the light, per user setting.
+ *
+ * Four levels, ordered. `off` / `subtle` / `full` are the ORIGINAL three and
+ * keep their exact ids and gains, because they are already persisted in users'
+ * appearance cookies and in the wire format — renaming or renumbering them
+ * would silently reinterpret a saved preference. `balanced` and `expressive`
+ * are inserted BETWEEN them, which is safe precisely because the scale is a
+ * gain table rather than an index: an existing `subtle` is still 0.45 and an
+ * existing `full` is still 1.
+ */
+export const MUSIC_REACTIVE_IDS = [
+  "off",
+  "subtle",
+  "balanced",
+  "expressive",
+  "full",
+] as const;
 export type MusicReactiveId = (typeof MUSIC_REACTIVE_IDS)[number];
 
 export function isMusicReactiveId(value: unknown): value is MusicReactiveId {
@@ -232,9 +418,16 @@ export function isMusicReactiveId(value: unknown): value is MusicReactiveId {
  * A `reactivity` of 0 is how "off" is honoured without removing any CSS: the
  * variables still update, they simply stop multiplying anything. That keeps one
  * code path for on and off, which is why there is no second renderer.
+ *
+ * The scale is MONOTONIC and `full` is still the ceiling at exactly 1, so the
+ * top of the range renders precisely what it always did and no saved
+ * preference is reinterpreted. The two new levels only add resolution between
+ * ends that previously had nothing between them.
  */
 export const MUSIC_REACTIVE_GAIN: Record<MusicReactiveId, number> = {
   off: 0,
   subtle: 0.45,
+  balanced: 0.72,
+  expressive: 0.88,
   full: 1,
 };

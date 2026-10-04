@@ -2892,6 +2892,195 @@ therefore out of scope until someone decides it is worth it
   luminance of 1.0309 and white is 1.0. Darkening `--accent` is a brand-colour
   decision, so it is recorded here rather than made in an audit pass.
 
+## 33. Market and region relevance
+
+Vietnam is where Aurora is used, and the measured default experience was
+Western: a `vi` listener's `pop` search returned 0 of 20 Vietnamese, and an
+anonymous listener's Home discovery returned an entirely international catalog.
+Two independent causes, fixed at two different layers.
+
+### 33.1 Market resolution
+
+`src/lib/region/affinity.ts` resolves one `Market` (`"VN"` | `"GLOBAL"`) from
+the app's own `Locale`. Precedence: app locale, then the browser region subtag,
+then neutral. There is **no** IP lookup, no GPS and no coordinate collection —
+ranking needs a market, not a place. `vi` is the shipped default locale, so a
+listener who chose nothing is already `VN`.
+
+`Market` is an explicit parameter everywhere: `FanoutSearchOptions.market`,
+`ProviderSearchQuery.market`, `UnifiedSearchOptions.market`,
+`RankSearchOptions.market`, `RecommendationSignals.market`. **Omitted means
+neutral**, so a caller that does not opt in cannot change behaviour by accident.
+
+### 33.2 Region affinity
+
+`regionAffinityOf(identity)` returns `"vietnam" | "international" | "unknown"`.
+Signals, in order of authority:
+
+1. A provider-reported `language` in `TrackIdentity.metadata`, which wins in
+   **both** directions — a reported `fr` outranks a Vietnamese-looking title.
+2. An explicit market genre tag (`v-pop`, `vietnamese`).
+3. Text: a Vietnamese-exclusive letter (`đ ă ơ ư`) or a precomposed tone vowel
+   (U+1EA0–U+1EF9) is worth two votes; a shared `â ê ô` or a bare combining
+   tone mark is worth one; a folded Vietnamese lexicon word (≥ 4 characters) is
+   worth one. Two votes classifies.
+
+`unknown` is a first-class answer and earns **zero** points. Absence of
+metadata is never treated as evidence of locality, and a single weak diacritic
+never classifies on its own — `â ê ô` exist in French, Portuguese and Romanian.
+
+There is deliberately **no** Southeast-Asian tier: no provider exposes metadata
+that could earn one, and a fabricated weight would be a guess dressed as a
+constant.
+
+### 33.3 Ranking: a bounded intra-band term, never a band
+
+`rankSearchResults` computes `band * 100 + detail + region`, so `detail` is
+capped at `79` and `region` at `20`, leaving the 100-point band step intact.
+This is the entire protection for exact-match search: **a region term can
+reorder results within a band and can never lift one into a higher band**, so
+`Taylor Swift` returns Taylor Swift because of where it scored, not despite it.
+
+The term is additionally withheld when the query names an entity, decided from
+the results rather than the query text: if any result reached an exact band, the
+query is a lookup and relevance alone decides. No artist list and no
+capitalization heuristic is involved, which is why it cannot rot.
+
+`RECOMMENDATION_REGION_AFFINITY` (30) is deliberately below `AFFINITY_FOLLOWED`
+(60) and above `AFFINITY_RECENT` (25). These scores are not banded, so the
+ceiling matters: the listener's own history is first-hand evidence of taste and
+a market is a prior about a population, so the prior may reorder one tier but
+never overturn it. The region term is withheld entirely from the track- and
+artist-anchored categories (`similar-to-current`, `from-artists-you-follow`),
+because "more like this" must not silently become "more like Vietnam".
+
+### 33.4 Candidate supply, not just re-ranking
+
+A boost cannot promote what the candidate set does not contain. `popularTracks`
+is a provider's editorial chart and every provider ships the global one, so
+discovery gained a **localized discovery avenue**: Aurora's own seed query
+(`vpop`), requested through `searchTracksInMarket`, which forwards the market
+as a provider region hint. It is Aurora's query and never a user's, so nothing
+in it can corrupt exact artist search, and it is a language-and-genre term
+rather than a country name so it pulls in the local catalogue instead of
+re-importing one national chart.
+
+### 33.5 Provider parameters
+
+Spotify takes `market`, YouTube's Data API takes `regionCode`. Both are **hints
+that bias provider ranking, not filters** — international results are still
+returned, so discovery stays open. Query text is never modified.
+
+YouTube's InnerTube path cannot honour this per listener: `gl` is session-scoped
+in `youtubei.js`, not a per-search filter, so applying it would mean a second
+session per market. That is not built. The Data API fallback does send
+`regionCode`, and §33.3's intra-band term applies to InnerTube results exactly
+as it does to any other.
+
+### 33.6 Cache
+
+A market-aware result set is a different answer, so `market` is part of
+`searchCacheKey`. Two markets means one extra axis and at most one extra entry
+per query — not a cardinality explosion. A marketless key still equals the
+neutral one, so callers that never opted in keep sharing one entry.
+
+## 34. Queue progression and completion attribution
+
+### 34.1 The queue model is a cursor, and that is deliberate
+
+`queue` holds the whole playlist and `position` is the playhead into
+`playOrder`, a permutation of queue indices. Nothing is spliced out of `queue`
+as a track plays, so an entry's queue index — and therefore its identity in
+reorder, removal and persistence — never shifts mid-session.
+
+What "remains" is therefore a DERIVATION, not a stored array. There is exactly
+one derivation, `remainingQueue` in `src/lib/player/store.ts`, and it is what a
+surface must read. Deriving it locally is a defect, and it was one: the queue
+panel filtered out only the CURRENT track, so after `A -> B -> C` it rendered
+the queue as `[A, B, D]` — two songs already finished, still looking upcoming,
+with the list growing behind the playhead instead of shrinking.
+
+`remainingQueue` returns entries strictly AFTER the cursor, and under
+`repeat: "queue"` appends the entries strictly BEFORE it, because a loop the
+listener asked for really does bring them round. The cursor entry is never
+included: it is playing, not pending.
+
+Three positions must never be confused — the play-order cursor, a queue index,
+and an array offset into `queue`. They disagree the moment shuffle or a reorder
+happens, and confusing them is how a track gets skipped.
+
+### 34.2 One completion consumes one track
+
+A media element's `ended` carries no identity, and the store's completion
+handler ADVANCES the cursor. So an `ended` that cannot be attributed to the
+track currently loaded must not be consumed at all.
+
+`PlayerEngine` therefore tracks `playingKey`: the track whose playback the
+element is actually producing. It is captured when the element reports `play` or
+`playing` and cleared by the next `load()`. `ended` is emitted with
+`completedKey: playingKey`, and `null` — not dropped — when the report raced a
+load. The store consumes a completion only when `completedKey` names the
+current track.
+
+This one rule closes three holes that were all live:
+
+- The same playback reported twice (redundant `src` assignment, a recovery
+  reload landing on the same source). Measured before the fix: one playback of
+  `A` plus two `ended` reports advanced twice, `A -> B -> D`, and `C` was never
+  played.
+- `Next` pressed as a track finished. The advance had already happened, then the
+  replaced track reported its own completion and the queue skipped the track
+  `Next` had just selected.
+- Any future emitter of `ended` that forgets to say which track finished.
+
+It also makes the guarantee uniform across every trigger — natural end, the
+Next button, keyboard, media session, headset — because they all converge on
+the same `next()` / `afterEndQueueIndex` primitive. There is no second
+"next track" implementation to drift.
+
+### 34.3 The engine's event payload is not restated
+
+The store subscribes to engine events with `EngineEventPayload`, the engine's
+own type. A local restatement of that shape silently drops any field the engine
+adds — which is exactly how `ended` lost `completedKey` in the first place, and
+why the guard could not be written until the type was shared.
+
+`FakeAudioSurface` fires `play` as well as `playing`, because a real element
+does. Firing only `playing` hid the fact that a suite simulating a whole
+listening session never once told the engine which track was playing.
+
+## 35. Local folder playback
+
+Play Folder is `engine.playCollection(tracks, 0)` and nothing else. It routes
+into the same `replaceQueue` an album, a playlist and a search result already
+use, so a local folder inherits the canonical transition rather than
+reimplementing it: one `next()`, one completion handler, §34's attribution
+guard, the cursor model where the queue IS the remaining tracks, Loop Track that
+repeats without consuming, Loop Queue that wraps deliberately, and shuffle that
+permutes rather than duplicates.
+
+A parallel folder queue was the alternative and was rejected: it would have meant
+a second place for every one of those rules, and therefore a second place for
+them to disagree.
+
+**Ordering has one definition.** `compareOfflineTracks` in `lib/offline/tracks.ts`
+is the folder-then-numeric-name comparator, and `scanOfflineFolder` sorts with it
+as well as `playlistForFolder`. A scan and a Play Folder therefore cannot
+disagree about what track 3 is. Numeric collation is load-bearing: `10 - Outro`
+must follow `02 - Song A`, and plain lexicographic ordering puts it second.
+
+**Embedded track numbers are not read.** There is no tag reader in this
+repository — `lib/offline/tracks.ts` states that as a deliberate boundary, since
+ID3/Vorbis/FLAC parsing is a real subsystem and a filename heuristic presented as
+a tag would misattribute tracks. Filename ordering with numeric collation
+covers the same ground honestly, so a leading `01 -` orders correctly without
+claiming to have read a tag.
+
+`playlistForFolder` filters to audio and sorts rather than trusting its input.
+For a scanned folder both are already done, which is the point: it makes the
+function correct for any list, so a caller holding a subset cannot build a queue
+containing a README.
+
 ## ARCHITECTURAL INVARIANTS
 
 1. Single `MusicEngine` — one mounted facade; orchestration only.

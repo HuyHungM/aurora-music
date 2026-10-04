@@ -117,7 +117,11 @@ describe("QueuePanel", () => {
     fireEvent.click(within(queueDialog()).getByRole("button", { name: "Phát Track C" }));
     await waitFor(() => expect(usePlayerStore.getState().currentTrack?.id).toBe("c"));
     expect(usePlayerStore.getState().position).toBe(2);
-    expect(rows()).toHaveLength(3);
+    // C was the LAST track, so nothing remains: A and B are history. This used
+    // to expect three rows, because the panel listed every entry EXCEPT the
+    // current one — which is how two songs the listener had already finished
+    // kept looking upcoming. The remaining queue is now the only thing rendered.
+    expect(rows()).toHaveLength(1);
   });
 
   it("also opens from the mobile mini player and shows the mini player controls", async () => {

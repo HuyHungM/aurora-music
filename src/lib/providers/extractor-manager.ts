@@ -9,6 +9,7 @@ import {
   UnsupportedProviderCapabilityError,
 } from "@/lib/errors";
 import type { MusicProvider, ProviderSearchQuery } from "./types";
+import type { Market } from "@/lib/region/affinity";
 import {
   clearProviders,
   getProvider,
@@ -75,6 +76,15 @@ export interface FanoutSearchOptions {
   /** Explicit provider subset. Unknown ids become failed outcomes. */
   providers?: string[];
   limit?: number;
+  /**
+   * Listener market, forwarded to every provider as a region hint.
+   *
+   * This is a HINT, not a filter: providers that support a market parameter use
+   * it to prefer locally-available, locally-popular results, and providers
+   * that do not (Deezer) ignore it. It never restricts the catalogue, so
+   * international discovery stays reachable for a `VN` listener.
+   */
+  market?: Market;
 }
 
 export type TrackLookupRef =
@@ -203,6 +213,7 @@ export class ExtractorManager {
     const searchQuery: ProviderSearchQuery = {
       query: trimmed,
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      ...(options.market ? { market: options.market } : {}),
     };
 
     const requested = options.providers;

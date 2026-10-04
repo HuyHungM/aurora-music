@@ -1,5 +1,6 @@
 import type { Locale } from "@/lib/i18n/locale";
 import { getT } from "@/lib/i18n/translate";
+import { marketForLocale } from "@/lib/region/affinity";
 import { buildRecommendationSection } from "@/lib/recommendations/server";
 import type {
   RecommendationCategory,
@@ -58,7 +59,15 @@ export async function RecommendationSection({
   titleKey?: string;
 }) {
   const t = getT(locale);
-  const section = await buildRecommendationSection({ seed, excludeKeys, limit });
+  // `locale` is already resolved from the request by the caller, so the market
+  // is a pure function of it — no extra request, no stored preference, and no
+  // second place where "who is this listener" is decided.
+  const section = await buildRecommendationSection({
+    seed,
+    excludeKeys,
+    limit,
+    market: marketForLocale(locale),
+  });
   if (section.tracks.length === 0) {
     return null;
   }

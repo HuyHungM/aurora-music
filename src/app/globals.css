@@ -1686,6 +1686,12 @@ body {
   --aurora-music-mid: 0;
   --aurora-music-treble: 0;
   --aurora-music-energy: 0;
+  /* The transient, separate from the bands. It is a fast rise with a ~260ms
+     decay, so it reads as a percussive thump on top of the slow swell the
+     bands already produce — not as a second brightness channel fighting it.
+     Always multiplied into an existing artwork colour downstream; no hue is
+     ever derived from it. */
+  --aurora-music-beat: 0;
 }
 
 /* How far the player's light currently REACHES. Baseline 1, so with music
@@ -1694,7 +1700,8 @@ body {
    never replaces the artwork field, and a quiet passage never collapses it. */
 :root {
   --aurora-ambient-reach: calc(
-    1 + var(--aurora-music-bass) * 0.5 + var(--aurora-music-energy) * 0.2
+    1 + var(--aurora-music-bass) * 0.5 + var(--aurora-music-energy) * 0.2 +
+      var(--aurora-music-beat) * 0.12
   );
 }
 
@@ -1725,8 +1732,13 @@ body {
    shape of the maths rather than by restraint. */
 [data-aurora-glass][data-aurora-artwork="on"] [data-aurora-player] {
   /* Bass is the largest-scale response: it pushes the emitter outward, which is
-     what reads as the player breathing rather than a light flickering. */
-  --aurora-ambient-pulse: calc(1 + var(--aurora-music-bass) * 0.22);
+     what reads as the player breathing rather than a light flickering.
+     The beat ADDS to that push rather than replacing it, and at a third of the
+     bass weight on purpose: a transient is a much larger stimulus than a swell,
+     so giving it equal weight is what turns a thump into a flash. */
+  --aurora-ambient-pulse: calc(
+    1 + var(--aurora-music-bass) * 0.22 + var(--aurora-music-beat) * 0.07
+  );
   box-shadow:
     0 0 calc(var(--aurora-artwork-blur) * 2.2 * var(--aurora-ambient-pulse))
       color-mix(
@@ -1744,11 +1756,15 @@ body {
         var(--aurora-artwork-primary)
           calc(
             /* Energy lifts overall brightness; treble adds only a whisper, kept
-               small on purpose so hi-hats cannot strobe the whole surface. */
+               small on purpose so hi-hats cannot strobe the whole surface. The
+               beat is the one term allowed to spike, and it is still the
+               smallest of the three: it rides the existing colour and decays in
+               ~260ms, so a chorus reads as a pulse and not as a strobe. */
             (
               var(--p-appearance-aurora) * 16% +
               var(--aurora-music-energy) * 5% +
-              var(--aurora-music-treble) * 2%
+              var(--aurora-music-treble) * 2% +
+              var(--aurora-music-beat) * 3%
             ) * var(--aurora-artwork-strength) *
               var(--p-appearance-ambient-player)
           ),

@@ -16,6 +16,7 @@
  */
 
 import type { Track } from "@/lib/domain";
+import type { OfflineTrackFile } from "./types";
 
 /** Extensions treated as audio. Checked case-insensitively. */
 const AUDIO_EXTENSIONS: readonly string[] = [
@@ -113,6 +114,57 @@ export function parseFileName(fileName: string): { title: string; artist?: strin
     }
   }
   return { title: base === "" ? fileName : base };
+}
+
+/**
+ * THE canonical order of a local folder's tracks.
+ *
+ * Folder first, then file name with numeric collation. Exported rather than
+ * inlined so there is exactly ONE definition of "the order a local folder plays
+ * in": `scan.ts` sorts its result with it, and `playlistForFolder` sorts with it
+ * again, so a scan and a Play Folder can never disagree about what track 3 is.
+ *
+ * Numeric collation is the whole reason this is not a bare `<`: `10 - Outro`
+ * must follow `02 - Song A`, and plain lexicographic ordering puts it second.
+ *
+ * Files with an identical sort key keep their relative input order, which is
+ * what every `Array.prototype.sort` is stable in modern engines — so the order is
+ * total and deterministic rather than merely "usually right".
+ */
+export function compareOfflineTracks(
+  a: Pick<OfflineTrackFile, "name" | "folder">,
+  b: Pick<OfflineTrackFile, "name" | "folder">,
+): number {
+  const folderA = a.folder ?? "";
+  const folderB = b.folder ?? "";
+  if (folderA !== folderB) {
+    return folderA.localeCompare(folderB);
+  }
+  return a.name.localeCompare(b.name, undefined, { numeric: true });
+}
+
+/**
+ * The tracks a folder plays, in canonical order.
+ *
+ * FILTERS TO AUDIO AND SORTS, rather than trusting its input. `scanOfflineFolder`
+ * already does both, so for a scanned folder this is a no-op — which is the
+ * point. It means the function is correct for ANY list of files, so a caller that
+ * holds a subset, a cached list or a hand-built one still gets a playable,
+ * deterministically ordered result instead of a queue that silently contains a
+ * README.
+ *
+ * PURE: no file is opened, no object URL minted, no handle read. Building the
+ * `Track`s is metadata work only, so this stays testable without a browser and
+ * costs nothing on a large folder.
+ */
+export function playlistForFolder(
+  files: readonly OfflineTrackFile[],
+): Track[] {
+  return files
+    .filter((file) => isAudioFile(file.name))
+    .slice()
+    .sort(compareOfflineTracks)
+    .map((file) => localTrack({ id: file.id, folder: file.folder, name: file.name }));
 }
 
 export interface LocalTrackInput {

@@ -1,5 +1,6 @@
 import type { Album, Artist, Track } from "@/lib/domain";
 import type { ProviderId } from "@/lib/domain";
+import type { Market } from "@/lib/region/affinity";
 
 export interface ProviderPagination {
   limit?: number;
@@ -10,6 +11,13 @@ export interface ProviderSearchQuery {
   query: string;
   limit?: number;
   offset?: number;
+  /**
+   * Listener market, when known. A provider either has a native parameter for
+   * it (Spotify `market`, YouTube `gl`) or ignores it. Never a filter: an
+   * unknown market, or a provider without the capability, must return the same
+   * catalogue it always did.
+   */
+  market?: Market;
 }
 
 export interface ProviderListResult<T> {

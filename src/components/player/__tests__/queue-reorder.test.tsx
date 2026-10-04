@@ -183,8 +183,13 @@ describe("Queue reorder buttons", () => {
     // the old sequence while the engine played a different one. Track A is
     // still current, so it stays in the "Đang phát" section and only the
     // "Tiếp theo" sequence changes.
+    //
+    // B moved ABOVE the playhead, so it is behind the cursor and no longer
+    // upcoming. This used to expect ["Track B", "Track C"] because the panel
+    // listed every entry except the current one; the remaining queue is now the
+    // only thing rendered, and B genuinely will not play next.
     await waitFor(() => {
-      expect(renderedOrder()).toEqual(["Track B", "Track C"]);
+      expect(renderedOrder()).toEqual(["Track C"]);
       expect(renderedCurrent()).toBe("Track A");
     });
   });

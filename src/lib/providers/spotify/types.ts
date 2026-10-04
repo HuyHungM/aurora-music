@@ -133,6 +133,16 @@ export interface SpotifyPlaylist {
 export interface SpotifyPaging {
   limit?: number;
   offset?: number;
+  /**
+   * Spotify's own `market` search parameter (ISO 3166-1 alpha-2).
+   *
+   * It biases which results Spotify considers locally relevant and, unlike
+   * `available_markets`, is a soft signal rather than a licence filter — so
+   * an international track is still returned, just ranked as YouTube and
+   * Spotify see fit. Omitted means "no preference", which is what every caller
+   * sent before market existed.
+   */
+  market?: string;
 }
 
 /** Minimal token source injected into the transport (real or test double). */

@@ -120,6 +120,7 @@ export function createSpotifyProvider(
     text: string,
     limit: number | undefined,
     offset: number,
+    market: string | undefined,
   ): Promise<{ raw: SearchRaw[]; total: number | undefined }> {
     const want = limit ?? SEARCH_PAGE_SIZE;
     const pages = Math.min(Math.ceil(want / SEARCH_PAGE_SIZE), MAX_SEARCH_PAGES);
@@ -134,6 +135,7 @@ export function createSpotifyProvider(
       const response = await transport.search(text, [kind], {
         limit: pageSize,
         offset: pageOffset,
+        ...(market ? { market } : {}),
       });
       const section = kind === "track" ? response.tracks : kind === "artist" ? response.artists : response.albums;
       if (total === undefined) {
@@ -156,7 +158,7 @@ export function createSpotifyProvider(
     async searchTracks(query: ProviderSearchQuery): Promise<ProviderListResult<Track>> {
       const text = requireQuery(query, "searchTracks");
       const offset = query.offset ?? 0;
-      const { raw, total } = await searchPaged("track", text, query.limit, offset);
+      const { raw, total } = await searchPaged("track", text, query.limit, offset, query.market);
       const tracks: Track[] = [];
       for (const entry of raw) {
         const normalized = normalizeTrack(entry as SpotifyTrackObject);
@@ -176,7 +178,7 @@ export function createSpotifyProvider(
     async searchArtists(query: ProviderSearchQuery): Promise<ProviderListResult<Artist>> {
       const text = requireQuery(query, "searchArtists");
       const offset = query.offset ?? 0;
-      const { raw, total } = await searchPaged("artist", text, query.limit, offset);
+      const { raw, total } = await searchPaged("artist", text, query.limit, offset, query.market);
       const artists: Artist[] = [];
       for (const entry of raw) {
         const normalized = normalizeArtist(entry as SpotifyArtistObject);
@@ -196,7 +198,7 @@ export function createSpotifyProvider(
     async searchAlbums(query: ProviderSearchQuery): Promise<ProviderListResult<Album>> {
       const text = requireQuery(query, "searchAlbums");
       const offset = query.offset ?? 0;
-      const { raw, total } = await searchPaged("album", text, query.limit, offset);
+      const { raw, total } = await searchPaged("album", text, query.limit, offset, query.market);
       const albums: Album[] = [];
       for (const entry of raw) {
         const normalized = normalizeAlbum(entry as SpotifyAlbumObject);
