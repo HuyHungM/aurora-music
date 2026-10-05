@@ -1139,25 +1139,34 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
     closeFullPlayer: () => set({ isFullPlayerOpen: false }),
 
     moveQueueItem: (pos, direction) => {
-      countUserAction();
       const state = get();
       const { playOrder, position } = state;
+      // CURSOR-PINNED REORDER (§34.4). A swap that touches the cursor entry
+      // would move a consumed track back into the upcoming region (resurrect)
+      // or an upcoming track behind the cursor (skip) — e.g. with A current,
+      // moving A down orphans B behind the playhead without ever playing it.
+      // Both sides of the swap must therefore sit on the SAME side of the
+      // cursor; anything involving the cursor entry itself is a silent no-op,
+      // the same way removing the current track already is. Placed BEFORE
+      // countUserAction (the addToQueue precedent): a rejected move changes
+      // nothing, so it is not user intent and must not invalidate a restore.
+      if (position >= 0) {
+        const targetPos = direction === "up" ? pos - 1 : pos + 1;
+        const touchesCursor = pos === position || targetPos === position;
+        if (touchesCursor) return;
+      }
+      countUserAction();
       if (playOrder.length <= 1) return;
 
-      const targetPos = direction === "up" ? pos - 1 : pos + 1;
-      if (targetPos < 0 || targetPos >= playOrder.length) return;
+      const target = direction === "up" ? pos - 1 : pos + 1;
+      if (target < 0 || target >= playOrder.length) return;
 
       const newPlayOrder = [...playOrder];
-      [newPlayOrder[pos], newPlayOrder[targetPos]] = [newPlayOrder[targetPos], newPlayOrder[pos]];
+      [newPlayOrder[pos], newPlayOrder[target]] = [newPlayOrder[target], newPlayOrder[pos]];
 
-      let newPosition = position;
-      if (position === pos) {
-        newPosition = targetPos;
-      } else if (position === targetPos) {
-        newPosition = pos;
-      }
-
-      set({ playOrder: newPlayOrder, position: newPosition });
+      // No cursor adjustment: the guard above rejected every swap touching
+      // the cursor, so the current entry did not move and `position` stays.
+      set({ playOrder: newPlayOrder });
     },
 
     removeFromQueue: (pos) => {

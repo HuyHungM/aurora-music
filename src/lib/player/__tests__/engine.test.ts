@@ -398,6 +398,24 @@ describe("PlayerEngine same-source skip", () => {
     expect(surface.loadCalls).toBe(2);
     expect(surface.src).toBe("https://audio.example/t1b.mp3");
   });
+
+  it("keeps ended attribution when the same source reloads while playing", () => {
+    // REGRESSION: the same-source skip cleared playingKey before returning,
+    // so the next genuine `ended` arrived with completedKey null and the store
+    // refused to advance — the queue silently stalled on the current track.
+    const { surface, engine } = createEngine();
+    engine.load(makePlayableTrack("t1"), false);
+    surface.paused = false;
+    surface.dispatch(EventEnum.play);
+
+    // Same track, same URL, still playing: element untouched, attribution kept.
+    engine.load(makePlayableTrack("t1"), true);
+
+    const completed: Array<string | null | undefined> = [];
+    engine.on("ended", ({ completedKey }) => completed.push(completedKey));
+    surface.dispatch(EventEnum.ended);
+    expect(completed).toEqual(["jamendo:t1"]);
+  });
 });
 
 describe("mediaDiagnostics", () => {

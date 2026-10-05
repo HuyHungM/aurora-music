@@ -1417,18 +1417,42 @@ describe("moveQueueItem", () => {
     expect(usePlayerStore.getState().playOrder).toEqual(before);
   });
 
-  it("adjusts current position when the current track moves up", () => {
+  it("refuses to move the current track up", () => {
+    // CURSOR-PINNED REORDER (§34.4). Moving C above the cursor would resurrect
+    // B (consumed) into the upcoming region, so the swap is a silent no-op —
+    // the same way removing the current track already is. A rejected move
+    // changes nothing, so it is not user intent: the generation must not bump.
     usePlayerStore.getState().playAtPosition(2);
+    const before = usePlayerStore.getState().playOrder.slice();
+    const generation = usePlayerStore.getState().userActionGeneration;
     usePlayerStore.getState().moveQueueItem(2, "up");
-    expect(usePlayerStore.getState().position).toBe(1);
+    expect(usePlayerStore.getState().playOrder).toEqual(before);
+    expect(usePlayerStore.getState().position).toBe(2);
     expect(usePlayerStore.getState().currentTrack?.id).toBe("c");
+    expect(usePlayerStore.getState().userActionGeneration).toBe(generation);
   });
 
-  it("adjusts current position when the current track moves down", () => {
+  it("refuses to move the current track down", () => {
+    // The mirror: moving B below the cursor would orphan C behind the playhead
+    // without ever playing it, so the swap is a silent no-op.
     usePlayerStore.getState().playAtPosition(1);
+    const before = usePlayerStore.getState().playOrder.slice();
+    const generation = usePlayerStore.getState().userActionGeneration;
     usePlayerStore.getState().moveQueueItem(1, "down");
-    expect(usePlayerStore.getState().position).toBe(2);
+    expect(usePlayerStore.getState().playOrder).toEqual(before);
+    expect(usePlayerStore.getState().position).toBe(1);
     expect(usePlayerStore.getState().currentTrack?.id).toBe("b");
+    expect(usePlayerStore.getState().userActionGeneration).toBe(generation);
+  });
+
+  it("refuses to pull an upcoming track above the cursor", () => {
+    // B is current; pulling C up swaps with the cursor entry itself, which
+    // would strand B behind the playhead. Same silent no-op.
+    const before = usePlayerStore.getState().playOrder.slice();
+    usePlayerStore.getState().moveQueueItem(1, "up");
+    expect(usePlayerStore.getState().playOrder).toEqual(before);
+    expect(usePlayerStore.getState().position).toBe(0);
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("a");
   });
 
   it("does not change position when swapping items before current", () => {

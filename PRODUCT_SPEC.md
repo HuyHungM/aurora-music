@@ -272,7 +272,9 @@ Explicit rules:
   mutation to the store (one mutation path, no shadow queue).
 - **Operations:** replace queue, play collection, play track, play at
   position, next, previous, play next (insert after current), add to queue,
-  clear, move item (up/down), remove item, toggle shuffle, cycle repeat.
+  clear, move item (up/down, cursor-pinned per §34.4: a swap touching the
+  current entry is a silent no-op and a manager move touching or crossing the
+  cursor is rejected whole), remove item, toggle shuffle, cycle repeat.
 - **Repeat:** `off` → `all` → `one` → `off`. Repeat one replays the current
   track; repeat all wraps at the ends; repeat off stops at queue exhaustion
   (no auto-advance past the last item, no looping).

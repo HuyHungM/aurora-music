@@ -166,16 +166,20 @@ export function fakeEnv(initial: Partial<EngineStoreState> = {}): FakeEnv {
       if (target < 0 || target >= state.playOrder.length) {
         return;
       }
+      // Mirrors the store's cursor-pinned reorder (§34.4): swaps touching
+      // the cursor entry are silent no-ops. This fake exists so facade tests
+      // observe routing, not to define semantics — it must not define looser
+      // ones than the store it stands in for.
+      if (state.position >= 0 && (position === state.position || target === state.position)) {
+        return;
+      }
       const order = [...state.playOrder];
       const current = order[position] as number;
       order[position] = order[target] as number;
       order[target] = current;
       state.playOrder = order;
-      if (state.position === position) {
-        state.position = target;
-      } else if (state.position === target) {
-        state.position = position;
-      }
+      // No cursor adjustment, exactly like the store: the guard above rejected
+      // every swap touching the cursor, so `position` cannot move here.
     },
     removeFromQueue(position: number): void {
       record("removeFromQueue", [position]);

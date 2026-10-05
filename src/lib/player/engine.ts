@@ -291,13 +291,13 @@ export class PlayerEngine {
   /** Loads a track; no-op autoplay until [autoplay] is requested. */
   load(track: Track, autoplay = false): void {
     this.generation += 1;
-    // Nothing is playing the loaded source any more, so a completion already in
-    // flight can no longer be attributed to it. This is the single point where an
-    // `ended` loses its identity.
-    this.playingKey = null;
     const url = streamUrlOf(track);
 
     if (!url) {
+      // Nothing is playing the loaded source any more, so a completion already in
+      // flight can no longer be attributed to it. This is the single point where an
+      // `ended` loses its identity.
+      this.playingKey = null;
       this.loadedKey = null;
       this.surface.pause();
       this.emit("error", {
@@ -315,6 +315,11 @@ export class PlayerEngine {
     // element is left untouched and only the autoplay intent applies. A paused
     // or errored element takes the full path, so re-click-to-restart and
     // retry-after-error semantics are unchanged.
+    //
+    // `playingKey` is deliberately NOT cleared here. The element keeps
+    // producing the same playback, so a completion must still attribute to
+    // this track. Clearing it turned the next genuine `ended` into an
+    // unattributable report and the queue silently stopped advancing.
     if (
       this.loadedKey === trackKey(track) &&
       !this.surface.paused &&
@@ -326,6 +331,9 @@ export class PlayerEngine {
       return;
     }
 
+    // A new source replaces whatever was playing: a completion already in
+    // flight belongs to the old source and must not consume the new track.
+    this.playingKey = null;
     this.loadedKey = trackKey(track);
     this.surface.src = url;
     this.surface.load();

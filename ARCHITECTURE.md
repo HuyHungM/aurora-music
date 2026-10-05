@@ -3017,12 +3017,23 @@ track currently loaded must not be consumed at all.
 
 `PlayerEngine` therefore tracks `playingKey`: the track whose playback the
 element is actually producing. It is captured when the element reports `play` or
-`playing` and cleared by the next `load()`. `ended` is emitted with
+`playing` and cleared by the next `load()` that actually REPLACES the source
+(a different URL, or a load with no URL at all). `ended` is emitted with
 `completedKey: playingKey`, and `null` — not dropped — when the report raced a
 load. The store consumes a completion only when `completedKey` names the
 current track.
 
-This one rule closes three holes that were all live:
+The replacement qualifier on that clear is load-bearing, not pedantry. A
+`load()` for the same track and the same URL that the element is already playing
+is skipped outright — re-assigning `src` and calling `load()` would audibly
+restart playback for no reason, which is what the controller's same-source reuse
+path (re-clicking the track that is already playing) would otherwise do. Nothing
+was replaced there, so `playingKey` is deliberately KEPT: clearing it turned the
+next genuine `ended` into an unattributable report, the store refused to advance,
+and the queue sat on the current track forever. Re-selecting a song to hear it
+again ended the playlist.
+
+This one rule closes four holes that were all live:
 
 - The same playback reported twice (redundant `src` assignment, a recovery
   reload landing on the same source). Measured before the fix: one playback of
@@ -3031,6 +3042,8 @@ This one rule closes three holes that were all live:
 - `Next` pressed as a track finished. The advance had already happened, then the
   replaced track reported its own completion and the queue skipped the track
   `Next` had just selected.
+- The playing track re-selected while it played: the skipped reload stranded the
+  attribution and no completion was ever accepted again.
 - Any future emitter of `ended` that forgets to say which track finished.
 
 It also makes the guarantee uniform across every trigger — natural end, the
@@ -3048,6 +3061,32 @@ why the guard could not be written until the type was shared.
 `FakeAudioSurface` fires `play` as well as `playing`, because a real element
 does. Firing only `playing` hid the fact that a suite simulating a whole
 listening session never once told the engine which track was playing.
+
+### 34.4 Reorder is cursor-pinned
+
+`moveQueueItem` swaps one adjacent pair in `playOrder`; `QueueManager.move`
+walks those swaps toward its target. Both sides of every swap must sit on the
+SAME side of the cursor: both strictly before it (two consumed entries) or
+both strictly after it (two upcoming entries). Anything involving the cursor
+entry itself — moving the current track, or pulling the next track above it —
+is a silent no-op, the same way removing the current track already is. A
+manager move whose endpoints touch the cursor or straddle it is rejected whole
+before the first swap, so a cross-cursor walk can never partially apply.
+
+A rejected move changes nothing and therefore bumps no user-action
+generation. The current track never moves on a reorder, `position` never
+shifts on one, and `remainingQueue()` keeps meaning "what plays next" with no
+resurrection and no stranding. The panel renders only the cursor entry plus
+`remainingQueue()`, so consumed entries are unreachable by construction; this
+guard is the store's second line, not a UI filter.
+
+Vocabulary, kept distinct: the playback-order cursor is `position` (an index
+into `playOrder`); a queue index is a value stored in `playOrder` (a slot in
+`queue`, the stable entry id); an array offset is a slot's place inside the
+`queue` array. The current track is `queue[playOrder[position]]` and the
+upcoming queue is `remainingQueue()` — strictly after the cursor, with the
+strictly-before entries appended only under the repeat-queue loop the listener
+asked for.
 
 ## 35. Local folder playback
 

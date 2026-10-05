@@ -285,6 +285,37 @@ describe("queue progression / one completion consumes one track", () => {
     }
   });
 
+  it("keeps advancing after the playing track is re-selected while it plays", () => {
+    // THE REGRESSION, at the user-visible layer. Re-selecting the track that is
+    // already playing reuses the source the element is already producing, so the
+    // engine leaves the element alone. Before the fix that skip dropped the
+    // completion attribution, so the next genuine `ended` was refused and the
+    // queue sat on the current track forever: re-click a song to hear it again
+    // and the playlist never moved on.
+    stubController();
+    const { surface, dispose } = mountEngine();
+    try {
+      startAt(surface, fourTracks());
+      expect(title()).toBe("A");
+
+      // Re-select A: same track, same URL, element still playing it.
+      usePlayerStore.getState().playAtPosition(0);
+      expect(surface.loadCalls).toBe(1);
+
+      // The completion still names A, so exactly one track is consumed.
+      surface.dispatch(EventEnum.ended);
+      expect(title()).toBe("B");
+      expect(usePlayerStore.getState().position).toBe(1);
+
+      // And the session continues normally afterwards.
+      surface.dispatch(EventEnum.play);
+      surface.dispatch(EventEnum.ended);
+      expect(title()).toBe("C");
+    } finally {
+      dispose();
+    }
+  });
+
   it("does not skip a track when `ended` arrives after a manual Next", () => {
     // The race the brief names: Next mutates the cursor and starts a load, and
     // the track being replaced reports its own completion afterwards. The user

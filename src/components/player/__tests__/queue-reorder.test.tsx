@@ -157,7 +157,7 @@ describe("Queue reorder buttons", () => {
     expect(screen.getByRole("button", { name: "Chuyển “Track B” lên" })).toHaveProperty("disabled", false);
   });
 
-  it("moves an item up when Move Up is clicked", async () => {
+  it("refuses to move an upcoming item above the cursor", async () => {
     render(<PlayerHost />);
     await waitFor(() => expect(mocks.getDefaultEngine).toHaveBeenCalled());
 
@@ -172,24 +172,18 @@ describe("Queue reorder buttons", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Chuyển “Track B” lên" }));
 
+    // CURSOR-PINNED REORDER (§34.4). Pulling B above A would swap with the
+    // cursor entry and strand A behind the playhead (or resurrect a consumed
+    // track), so the store rejects the swap whole. The model, the current
+    // track, and the rendered upcoming list all stay put.
     await waitFor(() => {
       const { playOrder, queue } = usePlayerStore.getState();
-      expect(queue[playOrder[0]]?.id).toBe("b");
-      expect(queue[playOrder[1]]?.id).toBe("a");
+      expect(queue[playOrder[0]]?.id).toBe("a");
+      expect(queue[playOrder[1]]?.id).toBe("b");
       expect(queue[playOrder[2]]?.id).toBe("c");
     });
-    // The panel must repaint, not just the model. Regression: the rendered
-    // order came from a non-reactive facade read, so the list kept showing
-    // the old sequence while the engine played a different one. Track A is
-    // still current, so it stays in the "Đang phát" section and only the
-    // "Tiếp theo" sequence changes.
-    //
-    // B moved ABOVE the playhead, so it is behind the cursor and no longer
-    // upcoming. This used to expect ["Track B", "Track C"] because the panel
-    // listed every entry except the current one; the remaining queue is now the
-    // only thing rendered, and B genuinely will not play next.
     await waitFor(() => {
-      expect(renderedOrder()).toEqual(["Track C"]);
+      expect(renderedOrder()).toEqual(["Track B", "Track C"]);
       expect(renderedCurrent()).toBe("Track A");
     });
   });

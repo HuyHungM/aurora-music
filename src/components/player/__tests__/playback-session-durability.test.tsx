@@ -241,14 +241,16 @@ describe("playback session durability across app exit", () => {
     await settleExpectingWrite();
     expect(lastSavedSnapshot()?.playOrder).toEqual([0, 1, 2]);
 
-    usePlayerStore.getState().moveQueueItem(0, "down");
+    // Cursor-pinned (§34.4): position 0 is current, so the reorder must stay
+    // inside the upcoming region — swapping B/C, not A/B.
+    usePlayerStore.getState().moveQueueItem(1, "down");
     await settleExpectingWrite();
 
     const saved = lastSavedSnapshot();
     expect(saved?.playOrder).not.toEqual([0, 1, 2]);
     expect(
       saved?.playOrder.map((i) => saved.entries[i]?.providerTrackId),
-    ).toEqual(["b", "a", "c"]);
+    ).toEqual(["a", "c", "b"]);
   });
 
   it("persists removal from the queue", async () => {

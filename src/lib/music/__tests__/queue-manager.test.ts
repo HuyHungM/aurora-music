@@ -257,34 +257,46 @@ describe("move", () => {
     manager().replace([track("a"), track("b"), track("c")], { autoplay: false });
   }
 
-  it("moves first to last and last to first", () => {
+  it("reorders within the upcoming region", () => {
+    // Cursor is at 0 after replace, so positions 1..2 are upcoming: both
+    // sides of each swap sit on the same side of the cursor.
     const queue = manager();
     three();
-    queue.move(0, 2);
-    expect(raw().playOrder.map((index) => raw().queue[index]?.id)).toEqual(["b", "c", "a"]);
+    queue.move(2, 1);
+    expect(raw().playOrder.map((index) => raw().queue[index]?.id)).toEqual(["a", "c", "b"]);
+    expect(raw().position).toBe(0);
+    expect(raw().currentTrack?.id).toBe("a");
     expectPermutation(3);
-    queue.move(2, 0);
+    queue.move(1, 2);
     expect(raw().playOrder.map((index) => raw().queue[index]?.id)).toEqual(["a", "b", "c"]);
   });
 
-  it("tracks the current item through moves", () => {
+  it("refuses moves that touch or cross the cursor", () => {
+    // CURSOR-PINNED REORDER (§34.4). Any endpoint on the cursor entry, or
+    // endpoints straddling it, would resurrect a consumed track or strand an
+    // upcoming one behind the playhead — so the whole move is a silent no-op,
+    // never a partial walk.
     const queue = manager();
     three();
     queue.playAt(1);
+    const before = [...raw().playOrder];
     queue.move(1, 0);
-    expect(raw().currentTrack?.id).toBe("b");
-    expect(raw().position).toBe(0);
+    queue.move(0, 1);
     queue.move(0, 2);
+    queue.move(2, 0);
+    expect(raw().playOrder).toEqual(before);
+    expect(raw().position).toBe(1);
     expect(raw().currentTrack?.id).toBe("b");
-    expect(raw().position).toBe(2);
     expectPermutation(3);
   });
 
-  it("moves adjacent entries", () => {
+  it("moves adjacent upcoming entries", () => {
+    // Position 0 is current after replace, so the adjacent upcoming pair is
+    // (1, 2) — not (0, 1), which would touch the cursor and no-op.
     const queue = manager();
     three();
-    queue.move(0, 1);
-    expect(raw().playOrder.map((index) => raw().queue[index]?.id)).toEqual(["b", "a", "c"]);
+    queue.move(1, 2);
+    expect(raw().playOrder.map((index) => raw().queue[index]?.id)).toEqual(["a", "c", "b"]);
   });
 
   it("treats no-op moves as silent success", () => {

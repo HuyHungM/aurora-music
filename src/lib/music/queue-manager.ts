@@ -220,11 +220,27 @@ export function createQueueManager(deps: QueueManagerDeps): QueueManager {
     },
 
     move(from: number, to: number): void {
-      const length = getState().playOrder.length;
+      const state = getState();
+      const length = state.playOrder.length;
       checkIndex(length, from, "from");
       checkIndex(length, to, "to");
       if (from === to) {
         return;
+      }
+      // CURSOR-PINNED REORDER (§34.4). The walk below is stepwise adjacent
+      // swaps; without this pre-check a cross-cursor move would partially
+      // apply — the steps before the cursor no-op while the steps after it
+      // still swap, corrupting the order mid-walk. A move that touches the
+      // cursor entry or lands its endpoints on opposite sides of it is
+      // therefore rejected whole, the same silent no-op as one store swap.
+      const cursor = state.position;
+      if (cursor >= 0) {
+        const touches = from === cursor || to === cursor;
+        const crosses =
+          (from < cursor && to > cursor) || (from > cursor && to < cursor);
+        if (touches || crosses) {
+          return;
+        }
       }
       // moveQueueItem swaps one adjacent step; walk toward the target.
       // Identical walk to the previous facade so reorder semantics match.
