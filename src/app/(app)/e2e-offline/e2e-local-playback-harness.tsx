@@ -68,6 +68,11 @@ interface StoreSnapshot {
 export function E2ELocalPlaybackHarness() {
   useEffect(() => {
     let file: File | null = null;
+    // Unique per registration, so consecutive plays are distinct identities
+    // the way production tracks are — a constant id would make every replay
+    // look like the same track to identity-keyed logic under test.
+    let fixtureId = FIXTURE_ID;
+    let registrations = 0;
 
     /**
      * THE HARNESS'S OWN RESOLVER, not the controller's.
@@ -110,7 +115,7 @@ export function E2ELocalPlaybackHarness() {
       }
 
       const track = localTrack({
-        id: FIXTURE_ID,
+        id: fixtureId,
         folder: null,
         name: (file as File).name,
       });
@@ -184,7 +189,9 @@ export function E2ELocalPlaybackHarness() {
         getFile: async () => file as File,
       };
       // Exactly what a scan does: install a registry holding the handle.
-      replaceFileRegistry(new Map([[FIXTURE_ID, handle]]));
+      registrations += 1;
+      fixtureId = `${FIXTURE_ID}-${registrations}`;
+      replaceFileRegistry(new Map([[fixtureId, handle]]));
       return { ok: true, size: file.size, type: file.type };
     };
 
@@ -197,7 +204,7 @@ export function E2ELocalPlaybackHarness() {
         // current track is the fixture, or nothing is.
         const isFixture =
           current?.primarySource.source === "local" &&
-          current.primarySource.id === FIXTURE_ID;
+          current.primarySource.id === fixtureId;
         return {
           ok: isFixture,
           scheme: isFixture ? "blob" : null,

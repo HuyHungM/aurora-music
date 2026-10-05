@@ -43,10 +43,19 @@
  * identically to the loud fixture. That is why the ratio was 1.00x and the
  * comparison was meaningless.
  *
- * The fixtures below are placed at the two ends of the real window:
+ * The fixtures below are placed inside the real window, calibrated against
+ * the MEASURED sweep ladder (pure 80 Hz sines on this harness: digital
+ * 0.03/-30 dBFS -> ~0.55 shaped, 0.003/-50 dBFS -> ~0.16 shaped):
  *
- *   QUIET      -70 dBFS peak   -> shaped ~0.21, clearly above zero
- *   ENERGETIC  -52 dBFS peak   -> shaped ~0.93, clearly below saturation
+ *   QUIET      -60 dBFS broadband  -> shaped ~0.03-0.06, clearly above zero
+ *   ENERGETIC  -52 dBFS bed + a -30 dBFS 60 Hz kick-like tone under a 2 Hz
+ *              envelope            -> bass shaped ~0.4-0.5, clearly reactive
+ *
+ * Broadband energy spreads across bins where a pure tone piles into one or
+ * two, so a broadband fixture reads far lower than its peak dBFS suggests —
+ * an earlier -70 dBFS quiet read exactly 0.000 and a -52 dBFS energetic read
+ * 0.115, which stranded every gate above them. The tone carries the
+ * discrimination; the bed keeps the spectrum music-shaped.
  *
  * This does NOT prove real-world music behaviour. It proves the pipeline
  * discriminates across the range it can actually see.
@@ -116,29 +125,28 @@ function noise(seed) {
   };
 }
 
-const QUIET_AMP = Math.pow(10, -70 / 20); // 3.16e-4
-const LOUD_AMP = Math.pow(10, -52 / 20); // 2.51e-3
+const QUIET_AMP = Math.pow(10, -60 / 20); // 1e-3
+const BED_AMP = Math.pow(10, -52 / 20); // 2.51e-3
+const TONE_AMP = Math.pow(10, -30 / 20); // 3.16e-2
 
-/** -70 dBFS broadband: fills many bins so the mean term of `bandLevel` is real. */
+/** -60 dBFS pure broadband noise: fills many bins so the mean term of `bandLevel` is real. */
+const quietGen = noise(0x5eed);
 const QUIET = wav(
-  Float32Array.from({ length: N }, (_, i) => {
-    const rnd = noise(0x5eed)();
-    return QUIET_AMP * (rnd * 0.5 + 0.5 * Math.sin((2 * Math.PI * 110 * i) / RATE));
-  }),
+  Float32Array.from({ length: N }, () => QUIET_AMP * quietGen()),
   RATE,
 );
 
 /**
- * -52 dBFS broadband + a 60 Hz bass tone + a 2 Hz envelope, so there are real
- * transients for the detector to find. The beats are IN THE AUDIO, not injected
- * into the analyser.
+ * -52 dBFS broadband bed + a -30 dBFS 60 Hz kick-like tone under a 2 Hz
+ * envelope, so there are real transients for the detector to find. The beats
+ * are IN THE AUDIO, not injected into the analyser.
  */
+const bedGen = noise(0xc0ffee);
 const ENERGETIC = wav(
   Float32Array.from({ length: N }, (_, i) => {
     const t = i / RATE;
-    const rnd = noise(0xc0ffee)();
     const env = 0.5 + 0.5 * Math.pow(Math.max(0, Math.sin(2 * Math.PI * 2 * t)), 3);
-    return LOUD_AMP * env * (rnd * 0.6 + 0.7 * Math.sin(2 * Math.PI * 60 * t));
+    return env * (BED_AMP * bedGen() * 0.6 + TONE_AMP * 0.7 * Math.sin(2 * Math.PI * 60 * t));
   }),
   RATE,
 );
@@ -484,19 +492,35 @@ const rec = (page, ms) => page.evaluate((d) => window.__record(d), ms);
       (loudRun.playing.ok ? "" : ` | energetic why: ${loudRun.playing.why}`),
   );
 
-  if (requireSignal("Quiet vs energetic: signal present", quietRows, "--aurora-music-bass", 0.02) &&
+  // Presence is judged on the MEAN for broadband material. The band level is
+  // peak-sensitive by design (`bandLevel` blends loudest bin with mean), so a
+  // white-noise peak over a 3 s window is stochastic run to run — the same
+  // bytes read 0.000, 0.312 and 0.000 across three plays — while the mean is
+  // stable (~0.03-0.05 here). The 0.312 was analyser-smoothing residue
+  // decaying from the previous loud track (0.72 smoothing lingers ~10
+  // frames and is not flushable), not the quiet fixture's own level: a
+  // settled quiet track reads ~0.000 peak. Peak gates would grade that
+  // residue, not the product. The energetic tone is narrowband and
+  // deterministic, so its peak gate stands.
+  const quietMean = meanOf(quietRows, "--aurora-music-bass");
+  const quietAudible = quietRows.length >= 5 && quietMean > 0.01;
+  if (!quietAudible) {
+    record("Quiet vs energetic: signal present", "NOT MEASURED",
+      `quiet mean bass = ${f(quietMean)} over ${quietRows.length} frames - no floor to compare against`);
+  }
+  if (quietAudible &&
       requireSignal("Quiet vs energetic: signal present", loudRows, "--aurora-music-bass", 0.3)) {
-    // The threshold is derived, not guessed: the analysis ceiling sits at 1.0 and
-    // the saturation knee at raw 0.676. A discriminating pipeline must clear the
-    // 1.5x noise floor comfortably, so this demands 3x - if quiet and energetic
-    // were both pinned near 1.0 it would fail, which is the bug it exists to catch.
-    const ratio = loudPeak / Math.max(quietPeak, 1e-9);
+    // The ratio is on MEANS for the same reason as the gate above: peaks of
+    // broadband material are stochastic, means carry its level. 3x demands a
+    // discriminating pipeline with margin — pinned-near-1.0 on both ends
+    // still fails, which is the bug this exists to catch.
+    const loudMean = meanOf(loudRows, "--aurora-music-bass");
+    const ratio = loudMean / Math.max(quietMean, 1e-9);
     record(
       "Quiet vs energetic: loud response clearly stronger",
       ratio >= 3 ? "PASS" : "FAIL",
-      `bass peak quiet=${f(quietPeak)} energetic=${f(loudPeak)} ratio=${f(ratio)}x (need >=3x); ` +
-        `mean quiet=${f(meanOf(quietRows, "--aurora-music-bass"))} ` +
-        `energetic=${f(meanOf(loudRows, "--aurora-music-bass"))}; ` +
+      `bass mean quiet=${f(quietMean)} energetic=${f(loudMean)} ratio=${f(ratio)}x (need >=3x); ` +
+        `peak quiet=${f(quietPeak)} energetic=${f(loudPeak)} (peaks informational only); ` +
         `energy peak quiet=${f(maxOf(quietRows, "--aurora-music-energy"))} ` +
         `energetic=${f(maxOf(loudRows, "--aurora-music-energy"))}`,
     );
@@ -610,25 +634,35 @@ const rec = (page, ms) => page.evaluate((d) => window.__record(d), ms);
     );
   }
   /* ---- 4: track transition ---- */
+  // Played LOUD on purpose: this cell proves the output is still live after
+  // a transition, and liveness needs a deterministic signal. The quiet
+  // fixture's peak is stochastic (see the note above), so it cannot carry a
+  // presence gate; the energetic tone reads ~0.44 run after run.
   const beforeCounts = await page.evaluate(() => window.__counts);
-  const second = await ensureLiveSignal(page, QUIET, "second.wav");
+  const second = await ensureLiveSignal(page, ENERGETIC, "second.wav");
   const secondRows = second.playing.ok ? await rec(page, 1500) : [];
   const afterCounts = await page.evaluate(() => window.__counts);
 
   record(
     "Track transition creates no second audio graph",
+    // The tap follows the track: a new MediaStreamSource on the SAME context
+    // and analyser, because a capture belongs to one element state and the
+    // old one reads silence after a src swap. Contexts and analysers frozen,
+    // sources allowed to grow by the one rebuild — pinning sources frozen
+    // here would pin the stale-tap bug, not the feature.
     afterCounts.contexts === beforeCounts.contexts &&
       afterCounts.analysers === beforeCounts.analysers &&
-      afterCounts.mediaStreams === beforeCounts.mediaStreams
+      afterCounts.mediaStreams >= beforeCounts.mediaStreams &&
+      afterCounts.mediaStreams <= beforeCounts.mediaStreams + 1
       ? "PASS" : "FAIL",
     `contexts ${beforeCounts.contexts}->${afterCounts.contexts}, ` +
       `analysers ${beforeCounts.analysers}->${afterCounts.analysers}, ` +
-      `mediaStreamSources ${beforeCounts.mediaStreams}->${afterCounts.mediaStreams}`,
+      `mediaStreamSources ${beforeCounts.mediaStreams}->${afterCounts.mediaStreams} (one rebuild allowed)`,
   );
   record(
     "Track transition: reactive output still live",
     second.playing.ok &&
-    requireSignal("Track transition: output live", secondRows, "--aurora-music-bass", 0.01)
+    requireSignal("Track transition: output live", secondRows, "--aurora-music-bass", 0.3)
       ? "PASS" : "NOT MEASURED",
     `store isPlaying=${second.playing.store?.isPlaying} ` +
       `t=${f(second.playing.diag?.currentTime)}; ` +

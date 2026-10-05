@@ -26,7 +26,7 @@ import { DEFAULT_APPEARANCE, type Appearance } from "@/lib/appearance/appearance
 
 /* ------------------------------------------------------------------ doubles */
 
-const created = { contexts: 0, analysers: 0, closed: 0 };
+const created = { contexts: 0, analysers: 0, sources: 0, closed: 0 };
 
 /** Bin values the fake analyser hands back, driven per test. */
 let spectrum = new Uint8Array(256).fill(0);
@@ -52,7 +52,10 @@ class FakeAudioContext {
   close = vi.fn(async () => {
     created.closed += 1;
   });
-  createMediaStreamSource = vi.fn(() => ({ connect: vi.fn() }));
+  createMediaStreamSource = vi.fn(() => {
+    created.sources += 1;
+    return { connect: vi.fn(), disconnect: vi.fn() };
+  });
   createAnalyser() {
     created.analysers += 1;
     return new FakeAnalyser();
@@ -61,7 +64,12 @@ class FakeAudioContext {
 
 /** Engine stand-in: an element that reports it is playing and yields a stream. */
 function makeEngine(isPlaying: boolean) {
-  const state = { isPlaying };
+  const state = {
+    isPlaying,
+    currentTrack: null as null | {
+      primarySource: { source: string; id: string };
+    },
+  };
   const listeners = new Set<() => void>();
   return {
     state,
@@ -73,6 +81,12 @@ function makeEngine(isPlaying: boolean) {
     /** Test-only: flip playback the way the real engine's subscription does. */
     setPlaying(next: boolean) {
       state.isPlaying = next;
+      for (const cb of listeners) cb();
+    },
+    /** Test-only: switch the track identity the way a store advance does. */
+    setTrack(id: string | null) {
+      state.currentTrack =
+        id === null ? null : { primarySource: { source: "local", id } };
       for (const cb of listeners) cb();
     },
     analysisStream: () =>
@@ -166,6 +180,7 @@ function loudSpectrum(): void {
 beforeEach(() => {
   created.contexts = 0;
   created.analysers = 0;
+  created.sources = 0;
   created.closed = 0;
   spectrum = new Uint8Array(256);
   appearance = { ...DEFAULT_APPEARANCE, artworkAmbient: true };
@@ -339,5 +354,65 @@ describe("MusicReactiveAmbient / reduced motion", () => {
     render(<MusicReactiveAmbient />);
     for (let i = 0; i < 40; i += 1) pump();
     expect(published("--aurora-music-bass")).toBeGreaterThan(0);
+  });
+});
+
+describe("MusicReactiveAmbient / tap lifecycle", () => {
+  it("retries a trackless first capture instead of standing down forever", () => {
+    // A just-loaded element yields zero audio tracks for its first frames, so
+    // the first capture attempt legitimately finds nothing. Latching that as
+    // a permanent failure silences the session; retrying while playing heals.
+    loudSpectrum();
+    engine.analysisStream = () => null as unknown as MediaStream;
+    render(<MusicReactiveAmbient />);
+    for (let i = 0; i < 3; i += 1) pump();
+    expect(created.analysers).toBe(0);
+
+    engine.analysisStream = () =>
+      ({
+        getAudioTracks: () => [{}],
+        getTracks: () => [],
+      }) as unknown as MediaStream;
+    for (let i = 0; i < 40; i += 1) pump();
+    expect(created.analysers).toBe(1);
+    expect(published("--aurora-music-bass")).toBeGreaterThan(0);
+  });
+
+  it("rebuilds the tap when the track changes, keeping one graph", () => {
+    // The tap is bound to one capture: after a src swap the old one reads
+    // silence while the loop keeps publishing it. A new identity rebuilds the
+    // source on the SAME context and analyser.
+    loudSpectrum();
+    engine.setTrack("a");
+    render(<MusicReactiveAmbient />);
+    for (let i = 0; i < 40; i += 1) pump();
+    expect(published("--aurora-music-bass")).toBeGreaterThan(0);
+    expect(created.contexts).toBe(1);
+
+    engine.setTrack("b");
+    for (let i = 0; i < 40; i += 1) pump();
+    expect(published("--aurora-music-bass")).toBeGreaterThan(0);
+    expect(created.contexts).toBe(1);
+    expect(created.analysers).toBe(1);
+    // A second source on the same graph: the tap follows the track.
+    expect(created.sources).toBe(2);
+  });
+
+  it("rebuilds the tap on resume, so a stale pause cannot stick", () => {
+    // Pause tears the loop down; resume must not resurrect the previous tap
+    // blindly. One more source on the same graph, never a second graph.
+    loudSpectrum();
+    engine.setTrack("a");
+    render(<MusicReactiveAmbient />);
+    for (let i = 0; i < 40; i += 1) pump();
+    expect(created.contexts).toBe(1);
+
+    engine.setPlaying(false);
+    engine.setPlaying(true);
+    for (let i = 0; i < 40; i += 1) pump();
+    expect(published("--aurora-music-bass")).toBeGreaterThan(0);
+    expect(created.contexts).toBe(1);
+    expect(created.analysers).toBe(1);
+    expect(created.sources).toBe(2);
   });
 });

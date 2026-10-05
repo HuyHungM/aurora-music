@@ -140,6 +140,7 @@ export function MusicReactiveAmbient() {
 
     let context: AudioContext | null = null;
     let analyser: AnalyserNode | null = null;
+    let sourceNode: MediaStreamAudioSourceNode | null = null;
     // `Uint8Array<ArrayBuffer>` rather than bare `Uint8Array`: the DOM signature
     // of `getByteFrequencyData` pins the buffer kind, and the explicit
     // `new ArrayBuffer(...)` below is what satisfies it.
@@ -149,47 +150,100 @@ export function MusicReactiveAmbient() {
     const beatDetector = createBeatDetector();
     let frame = 0;
     let last = 0;
-    let failed = false;
+    /**
+     * True only when the browser cannot do this at all (no `AudioContext`).
+     * Everything else — an element with no audio tracks yet, a capture that
+     * throws mid-transition — is TRANSIENT and retried on a later tick while
+     * playing. Latching the first empty capture as permanent silenced whole
+     * sessions: a just-loaded element yields zero tracks for its first
+     * frames, so the first attempt legitimately finds nothing.
+     */
+    let unsupported = false;
+    /**
+     * Identity of the track the current tap belongs to. The tap is bound to
+     * one capture: after a src swap the old one reads silence while the loop
+     * keeps publishing it, so a new track, a committed load, or a restart
+     * drops the source and lets the next tick rebuild it — on the SAME
+     * context and analyser, never a second graph.
+     */
+    let tapKey: string | null = null;
+    let wasPlaying = playing;
+    let wasLoading = engine?.getState().isResolving ?? false;
+
+    const tapKeyOf = (): string | null => {
+      const primary = engine?.getState().currentTrack?.primarySource ?? null;
+      return primary ? `${primary.source}:${primary.id}` : null;
+    };
+
+    /** Drops the source and its stream; the context, analyser and bins stay. */
+    const teardownTap = () => {
+      try {
+        sourceNode?.disconnect();
+      } catch {
+        /* already gone */
+      }
+      sourceNode = null;
+      if (stream) {
+        for (const track of stream.getAudioTracks()) {
+          try {
+            track.stop();
+          } catch {
+            /* best-effort cleanup */
+          }
+        }
+      }
+      stream = null;
+    };
 
     /** Lazily built, and only if this browser can do it at all. */
     const ensureAnalyser = (): AnalyserNode | null => {
-      if (analyser) return analyser;
-      if (failed) return null;
+      if (analyser && sourceNode) return analyser;
+      if (unsupported) return null;
       const engine = getDefaultEngine();
       const captured = engine?.analysisStream?.() ?? null;
+      // A just-loaded element yields zero audio tracks for its first frames,
+      // and a provider stream throws mid-transition: both read as "nothing
+      // to tap right now", not "never". The tick retries while playing.
+      // A torn-down tap (track change, restart) rebuilds only its source, on
+      // the SAME context and analyser — never a second graph.
       if (!captured) {
-        failed = true;
         return null;
       }
       try {
-        const Ctor =
-          window.AudioContext ??
-          (window as unknown as { webkitAudioContext?: typeof AudioContext })
-            .webkitAudioContext;
-        if (!Ctor) {
-          failed = true;
-          return null;
+        let ctx = context;
+        if (!analyser || !ctx) {
+          const Ctor =
+            window.AudioContext ??
+            (window as unknown as { webkitAudioContext?: typeof AudioContext })
+              .webkitAudioContext;
+          if (!Ctor) {
+            unsupported = true;
+            return null;
+          }
+          ctx = new Ctor();
+          context = ctx;
+          // iOS starts contexts suspended; playback may have unlocked it already.
+          if (ctx.state === "suspended") void ctx.resume().catch(() => {});
+          const node = ctx.createAnalyser();
+          node.fftSize = MUSIC_FFT_SIZE;
+          // Light touch only: this smooths per-bin jitter before we band it,
+          // and keeps a hard floor so the field never fully collapses in a
+          // quiet bar.
+          node.smoothingTimeConstant = 0.72;
+          node.minDecibels = -85;
+          analyser = node;
+          // `frequencyBinCount` is a length, so the buffer is allocated once
+          // and reused every frame — no per-frame allocation.
+          bins = new Uint8Array(new ArrayBuffer(node.frequencyBinCount));
         }
-        context = new Ctor();
-        // iOS starts contexts suspended; playback may have unlocked it already.
-        if (context.state === "suspended") void context.resume().catch(() => {});
-        const source = context.createMediaStreamSource(captured);
-        analyser = context.createAnalyser();
-        analyser.fftSize = MUSIC_FFT_SIZE;
-        // Light touch only: this smooths per-bin jitter before we band it, and
-        // keeps a hard floor so the field never fully collapses in a quiet bar.
-        analyser.smoothingTimeConstant = 0.72;
-        analyser.minDecibels = -85;
+        const source = ctx.createMediaStreamSource(captured);
         source.connect(analyser);
         // NOT connected to the destination: this graph exists only to observe.
         // Routing it onward would be a second output path for the same audio.
+        sourceNode = source;
         stream = captured;
-        // `frequencyBinCount` is a length, so the buffer is allocated once and
-        // reused every frame — no per-frame allocation.
-        bins = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
         return analyser;
       } catch {
-        failed = true;
         return null;
       }
     };
@@ -246,15 +300,9 @@ export function MusicReactiveAmbient() {
 
       const node = ensureAnalyser();
       if (!node || !bins) {
-        // No analysis available: hold a quiet baseline so the ambient still
-        // illuminates, and stop asking every frame.
-        if (failed) {
-          smoother.reset();
-          beatDetector.reset();
-          publish(SILENT_ENERGY, 0);
-          frame = 0;
-          return;
-        }
+        // No analysis available (yet): hold a quiet baseline so the ambient
+        // still illuminates, and keep asking on later ticks while playing.
+        // Stopping here is what used to silence whole sessions.
         publish(SILENT_ENERGY, 0);
         return;
       }
@@ -267,12 +315,28 @@ export function MusicReactiveAmbient() {
 
     // Playback state drives the loop from OUTSIDE React, so pause and resume
     // cost one cancelled or restarted frame handle instead of a graph rebuild.
+    // A new track, a committed load, or a restart additionally drops the tap:
+    // the capture belongs to one element state, and the next tick rebuilds it
+    // on the same graph. Resets ride along for the same reason as the pause
+    // path below — a new track must not inherit the previous track's impulse.
     arm = () => {
-      if (playing) start();
-      else {
+      const state = engine?.getState() ?? null;
+      const key = tapKeyOf();
+      const loading = state?.isResolving ?? false;
+      if (playing) {
+        if (key !== tapKey || (!loading && wasLoading) || !wasPlaying) {
+          teardownTap();
+          smoother.reset();
+          beatDetector.reset();
+        }
+        tapKey = key;
+        start();
+      } else {
         stop();
         publish(SILENT_ENERGY, 0);
       }
+      wasPlaying = playing;
+      wasLoading = loading;
     };
     if (playing) start();
 
@@ -291,16 +355,15 @@ export function MusicReactiveAmbient() {
       document.removeEventListener("visibilitychange", onVisibility);
       for (const property of MUSIC_PROPERTIES) root.style.removeProperty(property);
       // Disconnect before closing so the tap is released promptly.
+      teardownTap();
       try {
         analyser?.disconnect();
       } catch {
         /* the context may already be gone */
       }
-      stream?.getTracks().forEach((track) => track.stop());
       void context?.close().catch(() => {});
       context = null;
       analyser = null;
-      stream = null;
       bins = null;
     };
   }, [enabled, reactivity, engine]);
