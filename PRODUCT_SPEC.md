@@ -690,14 +690,17 @@ screenshot.
 - Dialogs, menus, and cards adapt grid columns by breakpoint
   (2 → 3 → 4 → 5); detail headers stack vertically on small screens.
 - **The header wordmark collapses to the logomark below 393px.** The header is
-  one row of fixed-width items — brand, search, language, settings, and the
-  account group when signed in — and below `md` the search *field* is hidden in
-  favour of its icon, so the row's slack is a function of the viewport alone.
-  Measured signed in, the row needs 393px of content (44px logomark + 47px
-  wordmark + four 44px controls + the 98px account group + gaps + 32px page
-  padding), so the wordmark is the 47px that makes the difference between
-  fitting and scrolling sideways. It is gone, not truncated, and the link keeps
-  its full accessible name. At 393px and above there is room and it stays.
+  one row of fixed-width items — brand, search field (`md` and up), settings
+  below `lg`, and the account group when signed in (desktop chip from `lg`,
+  Profile trigger below it) — and below `md` the search *field* is hidden, so
+  the row's slack is a function of the viewport alone. Search below `md` lives
+  on the `/search` route via the bottom navigation, and the language switcher
+  lives on `/settings`, which the header settings link reaches at every width
+  below `lg`. Measured signed in under the previous, wider composition, the row
+  needed 393px of content; the current row is narrower, so the threshold now
+  hides earlier than strictly needed — the safe direction. It is gone, not
+  truncated, and the link keeps its full accessible name. At 393px and above
+  there is room and it stays.
   The threshold is derived from that measurement rather than picked as a round
   number, and the brand wrapper is elastic rather than fixed-width, so the
   row's slack is spent on the wordmark first and on the controls never.
@@ -1009,7 +1012,7 @@ NON-GOALS
 ## 17. Appearance (Aurora Glass)
 
 **Reachability.** Appearance lives on `/settings`, reached from the sidebar
-footer on desktop and a header control on mobile. It is not a top-level
+footer on desktop and a header control below `lg`. It is not a top-level
 destination and adds no navigation item: a presentation preference is not a
 place, and the Settings route was already reachable from the shell.
 

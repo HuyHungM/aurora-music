@@ -1,14 +1,12 @@
 import type { User } from "@/lib/domain";
 import type { AuthAvailability } from "@/lib/auth/availability";
 import type { Locale } from "@/lib/i18n/locale";
-import Link from "next/link";
 import { getT } from "@/lib/i18n/translate";
 import { Brand } from "./brand";
 import { SignInControl, SignOutControl } from "@/components/auth/controls";
-import { LocaleSwitcher } from "@/components/i18n/locale-switcher";
+import { ProfileMenu } from "@/components/shell/profile-menu";
 import { SettingsLink } from "@/components/shell/settings-link";
 import { Avatar } from "@/components/ui/avatar";
-import { SearchIcon } from "@/components/ui/icons";
 import { SearchField } from "@/components/search/search-field";
 
 export function Header({
@@ -88,43 +86,40 @@ export function Header({
           `md:hidden` is load-bearing and must not be flipped: at `md` and up
           the real search field takes over the slack instead. */}
       <div className="flex-1 md:hidden" />
-      {/* `Link`, not a raw anchor: a plain href is a document navigation,
-          which is the exact behaviour this fix removes. */}
-      <Link
-        href="/search"
-        aria-label={t("header.searchButton")}
-        className="aurora-touch grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary md:hidden"
-      >
-        <SearchIcon size={20} />
-      </Link>
-      {/* One shared header slot, two owners by band. Below `md` — every
-          phone — this compact switcher is the only in-header language
-          control. From `md` to `lg` — every tablet — the slot carries the
-          compact Settings link (next sibling) instead: a tablet has room for
-          the real search field, and Settings is the route that already hosts
-          the full language switcher, so no preference becomes unreachable
-          when the header control yields. From `lg` up the sidebar footer
-          carries the full switcher, so this copy is gone entirely. One slot,
-          never two controls at once. */}
-      <div className="shrink-0 md:hidden">
-        <LocaleSwitcher compact />
-      </div>
-      {/* The tablet route to Settings (Phase 53, re-owned to `md`–`lg`). The
-          sidebar that hosts the desktop copy is `hidden lg:flex`, so below
-          `lg` a header copy is the only way to reach Appearance. */}
-      <div className="hidden shrink-0 md:block lg:hidden">
+      {/* THE ROUTE TO SETTINGS below `lg`, and the mobile navbar's replacement
+          for the language switcher it used to carry.
+
+          Two owners used to share one slot by band: a compact language switcher
+          below `md`, and this link from `md` to `lg`. The band split existed
+          because a phone had no room for a second destination — and it bought a
+          language control on the one surface where changing the interface
+          language is the least useful thing a listener can do mid-listen.
+
+          Settings is strictly better in that slot: it is the route that already
+          hosts the full language switcher, so removing the compact copy makes no
+          preference unreachable, while adding a destination that was previously
+          unreachable below `lg` at all. One control, one band, no `md:`
+          arithmetic left to reason about. */}
+      <div className="shrink-0 lg:hidden">
         <SettingsLink compact />
       </div>
       {user ? (
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="flex items-center gap-2 rounded-full border border-border-subtle bg-surface-1 py-1 pl-1 pr-3">
-            <Avatar name={user.name} image={user.image} size={28} />
-            <span className="hidden max-w-36 truncate text-sm font-medium text-text-primary sm:block">
-              {user.name ?? user.email ?? t("header.account")}
+        <>
+          {/* Desktop keeps the full account block: the avatar with the name
+              beside it and its own sign-out, exactly as before. The popover is
+              a mobile refinement, not a replacement, so a desktop user never
+              sees two sign-out controls. */}
+          <div className="hidden shrink-0 items-center gap-2 lg:flex">
+            <span className="flex items-center gap-2 rounded-full border border-border-subtle bg-surface-1 py-1 pl-1 pr-3">
+              <Avatar name={user.name} image={user.image} size={28} />
+              <span className="max-w-36 truncate text-sm font-medium text-text-primary">
+                {user.name ?? user.email ?? t("header.account")}
+              </span>
             </span>
-          </span>
-          <SignOutControl name={user.name} locale={locale} />
-        </div>
+            <SignOutControl name={user.name} locale={locale} />
+          </div>
+          <ProfileMenu user={user} locale={locale} />
+        </>
       ) : (
         <SignInControl availability={availability} locale={locale} />
       )}

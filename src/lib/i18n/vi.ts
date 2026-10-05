@@ -35,7 +35,6 @@ const vi = {
   header: {
     searchPlaceholder: "Tìm bài hát, nghệ sĩ, album…",
     searchLabel: "Tìm bài hát, nghệ sĩ, album",
-    searchButton: "Tìm kiếm",
     account: "Tài khoản",
   },
   sidebar: {
@@ -480,6 +479,7 @@ const vi = {
     signIn: "Đăng nhập",
     signOut: "Đăng xuất",
     signOutLabel: "Đăng xuất {name}",
+    accountMenuLabel: "Menu tài khoản của {name}",
     signInUnavailable: "Chưa hỗ trợ đăng nhập",
     signInUnavailableTitle:
       "Phiên bản này chưa cấu hình nhà cung cấp đăng nhập",

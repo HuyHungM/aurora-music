@@ -41,12 +41,15 @@ export const SILENT_ENERGY: MusicEnergy = {
 };
 
 /**
- * Band edges as a fraction of the spectrum, low to high.
+ * Band edges in hertz, because the historical comment got this wrong.
  *
- * Bass stops at 12% (~250 Hz at 44.1 kHz), which is where a bassline lives;
- * treble starts at 55% (~2.3 kHz), where cymbals and air live. The mid band is
- * deliberately the widest because that is where most melodic content sits, and
- * mid drives the subtlest response anyway.
+ * Bass stops at 12% of the 512-point spectrum: `floor(256 * 0.12) = 30`, so
+ * the band is indices 0..30 (31 bins), and at 44.1 kHz a bin is ~86 Hz, so
+ * the effective edge sits near 2.6 kHz — NOT "250 Hz". (An earlier comment said
+ * "~250 Hz at 44.1 kHz"; reproducing that would need a 12% fraction of a
+ * ~2 kHz Nyquist, which no sample rate produces.) The constant is unchanged
+ * — only the description was wrong — and the test below pins the fraction so
+ * a future edit moves it knowingly.
  */
 const BASS_END = 0.12;
 const MID_END = 0.55;

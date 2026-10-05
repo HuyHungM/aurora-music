@@ -33,15 +33,18 @@ export function Brand({ compact = false }: { compact?: boolean }) {
       {!compact ? (
         // THE WORDMARK YIELDS, AND THE THRESHOLD IS MEASURED.
         //
-        // The header is one flex row: brand, search button, language, settings,
-        // and - when signed in - a 98px account group (a 46px avatar pill plus
-        // the 44px sign-out target). Below `md` the search *field* is `hidden`
-        // and only its icon button remains, so the row is five fixed-width
-        // items plus the brand, and the slack between them is a function of
-        // the viewport and nothing else. Signed in, the row needs 393px:
-        // 44 mark + 47 wordmark + 4x44 controls + 98 account + 4x12 gaps
-        // + 32 padding. The wordmark's 47px is the difference between a row
-        // that fits and one that scrolls sideways.
+        // The header is one flex row: brand, search field (`md` and up),
+        // settings below `lg`, and - when signed in - the account group
+        // (desktop chip from `lg`, Profile trigger below it). Below `md`
+        // the search *field* is `hidden`, so the row is the brand plus the
+        // settings and account controls, and the slack between them is a
+        // function of the viewport and nothing else. Signed in under the
+        // previous composition (search shortcut + language + settings +
+        // account), the row needed 393px: 44 mark + 47 wordmark + 4x44
+        // controls + 98 account + 4x12 gaps + 32 padding. The current row
+        // carries fewer controls, so 392px now hides earlier than strictly
+        // needed — the safe direction, since hiding early only costs a
+        // wordmark.
         //
         // The alternative - dropping the wordmark for every phone - would cost
         // a phone that has room for it, so it is revealed from the width where

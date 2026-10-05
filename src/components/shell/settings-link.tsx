@@ -13,14 +13,12 @@ import { SlidersHorizontalIcon } from "@/components/ui/icons";
  * `hidden lg:flex`, so below `lg` a header copy is the only way to reach
  * Appearance, and a feature nobody can reach is not a feature.
  *
- * The header copy owns ONE slot across two bands, never both at once: below
- * `md` — every phone — the slot carries the compact language switcher, and
- * from `md` to `lg` — every tablet — it carries this compact link, because
- * Settings is the route that already hosts the full language switcher, so
- * no preference becomes unreachable when the header control yields. From
- * `lg` up the sidebar exists, so a header copy would be redundant. The
- * `hidden md:block lg:hidden` wrapper lives in `header.tsx` with the rest
- * of the band logic; this component only knows its two sizes.
+ * The header copy owns ONE slot across every width below `lg`: the compact
+ * link, because Settings is the route that already hosts the full language
+ * switcher, so no preference becomes unreachable. From `lg` up the sidebar
+ * exists, so a header copy would be redundant. The `lg:hidden` wrapper lives
+ * in `header.tsx` with the rest of the band logic; this component only knows
+ * its two sizes.
  * A `Link` and not a button. Settings is a real route, it is deep-linkable,
  * and a link can be opened in a new tab, copied, and reached with the back
  * button - all of which `router.push` quietly takes away. The rule that

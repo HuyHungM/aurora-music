@@ -369,6 +369,54 @@ describe("folder queue progression", () => {
     }
   });
 
+  it("steps over an unplayable folder track instead of stalling", () => {
+    // A local file can vanish between the scan and playback — deleted, moved, or
+    // the grant revoked — and the resolver then refuses it. The brief's case is
+    // A -> B(broken) -> C -> D becoming A -> C -> D, NOT A -> STOP.
+    //
+    // The recovery itself belongs to the controller and is already covered in
+    // `skip-unavailable.test.tsx`; this asserts the FOLDER half of the
+    // composition, which nothing covered: that the existing skip transition
+    // advances a local queue correctly and leaves the tracks after it intact.
+    stubController();
+    const { surface, dispose } = mountEngine();
+    try {
+      startAt(surface, TITLES); // A, B, C, D
+      completeTrack(surface); // A -> B
+      expect(title()).toBe("02 - Song A");
+
+      // The controller reports B exhausted after its recovery budget. This is the
+      // existing store action, called exactly as the controller calls it.
+      usePlayerStore.getState().skipUnavailableTrack();
+      surface.dispatch(EventEnum.play);
+
+      expect(title()).toBe("03 - Song B");
+      expect(remaining()).toEqual(["10 - Outro"]);
+      // And the queue is not corrupted: B is gone, nothing duplicated, and the
+      // track after the failure is still reachable.
+      const state = usePlayerStore.getState();
+      expect(state.queue.map((t) => t.title)).toEqual(TITLES);
+      expect(state.position).toBe(2);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("stops cleanly when the final folder track is unplayable", () => {
+    stubController();
+    const { surface, dispose } = mountEngine();
+    try {
+      startAt(surface, TITLES);
+      for (let i = 0; i < 3; i += 1) completeTrack(surface);
+      expect(title()).toBe("10 - Outro");
+      usePlayerStore.getState().skipUnavailableTrack();
+      expect(usePlayerStore.getState().isPlaying).toBe(false);
+      expect(remaining()).toEqual([]);
+    } finally {
+      dispose();
+    }
+  });
+
   it("previous does not duplicate folder tracks", () => {
     stubController();
     const { surface, dispose } = mountEngine();

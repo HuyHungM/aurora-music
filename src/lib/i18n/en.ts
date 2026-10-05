@@ -35,7 +35,6 @@ const en: Messages = {
   header: {
     searchPlaceholder: "Search tracks, artists, albums…",
     searchLabel: "Search tracks, artists, albums",
-    searchButton: "Search",
     account: "Account",
   },
   sidebar: {
@@ -479,6 +478,7 @@ const en: Messages = {
     signIn: "Sign in",
     signOut: "Sign out",
     signOutLabel: "Sign out {name}",
+    accountMenuLabel: "Account menu for {name}",
     signInUnavailable: "Sign-in unavailable",
     signInUnavailableTitle: "No sign-in providers are configured for this instance",
     authRequiredTitle: "Sign in required",

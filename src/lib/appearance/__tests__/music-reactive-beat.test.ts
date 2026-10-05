@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   BEAT,
+  MUSIC_FFT_SIZE,
   MUSIC_REACTIVE_GAIN,
   MUSIC_REACTIVE_IDS,
   createBeatDetector,
   createSmoother,
   isMusicReactiveId,
+  readBands,
 } from "@/lib/appearance/music-reactive";
 import {
   DEFAULT_LOCAL_AMBIENT,
@@ -322,5 +324,41 @@ describe("smoothing / attack-release", () => {
     expect(smoother.current().energy).toBeGreaterThan(0);
     smoother.reset();
     expect(smoother.current().energy).toBe(0);
+  });
+});
+
+describe("band boundaries", () => {
+  /**
+   * The documented hertz edge is DERIVED, not magic: bass owns the bins up to
+   * 12% of the 512-point spectrum, and each bin is sampleRate / 512 wide. At
+   * 44.1 kHz that lands near 2.6 kHz — which is why the old "~250 Hz" comment
+   * was wrong by an order of magnitude. Moving the fraction below changes what
+   * "bass" hears, so it is pinned here rather than re-derived in silence.
+   */
+  const NYQUIST_44K = 44100 / 2;
+  const bassEdgeHz = (sampleRate: number) =>
+    Math.floor((MUSIC_FFT_SIZE / 2) * 0.12 + 1) * (sampleRate / MUSIC_FFT_SIZE);
+
+  it("stops the bass band at 12% of the spectrum", () => {
+    expect(bassEdgeHz(44100)).toBeGreaterThan(2000);
+    expect(bassEdgeHz(44100)).toBeLessThan(3000);
+    expect(bassEdgeHz(44100)).toBeGreaterThan(NYQUIST_44K * 0.1);
+  });
+
+  it("hears a low tone in bass but not a high tone", () => {
+    // Bin placement for each tone: a bin index maps to bin * rate / FFT hertz,
+    // so these land one tone inside each side of the 12% edge.
+    const data = (peakBin: number) => {
+      const bins = new Uint8Array(MUSIC_FFT_SIZE / 2);
+      bins[peakBin] = 255;
+      // A whisper of floor elsewhere, the way real spectrum frames look.
+      for (let i = 0; i < bins.length; i += 1) bins[i] = Math.max(bins[i], 8);
+      return bins;
+    };
+    const edge = Math.floor((MUSIC_FFT_SIZE / 2) * 0.12);
+    const inside = readBands(data(Math.max(0, edge - 4)));
+    const outside = readBands(data(Math.min(MUSIC_FFT_SIZE / 2 - 1, edge + 40)));
+    expect(inside.bass).toBeGreaterThan(outside.bass);
+    expect(outside.treble + outside.mid).toBeGreaterThan(outside.bass);
   });
 });
