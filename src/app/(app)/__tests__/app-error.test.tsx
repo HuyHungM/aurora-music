@@ -70,7 +70,11 @@ describe("AppError", () => {
     });
     try {
       render(<AppError error={makeError()} reset={vi.fn()} />);
-      expect(screen.getByText(/Bạn đang ngoại tuyến/)).toBeTruthy();
+      // The hint's job is to say that local files keep playing offline — it
+      // used to open with "Bạn đang ngoại tuyến" and claim music needed the
+      // internet, which is false for a local file.
+      expect(screen.getByText(/Tệp cục bộ/)).toBeTruthy();
+      expect(screen.getByText(/vẫn phát được/)).toBeTruthy();
     } finally {
       Object.defineProperty(window.navigator, "onLine", {
         value: true,

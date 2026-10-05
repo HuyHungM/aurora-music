@@ -66,6 +66,7 @@ import {
 import type { SourceReference } from "@/lib/domain";
 import type { PlayerErrorKind } from "@/lib/player/engine";
 import { PlayerError } from "@/lib/player/engine";
+import { isOfflineSource } from "@/lib/offline/isolation";
 import {
   createResolutionGuard,
   withPlaybackSource,
@@ -949,6 +950,34 @@ export function createPlaybackController(
       sourceGeneration = null;
       hasLoadedSource = false;
       reportError(toControllerError(error));
+      // A LOCAL FILE THAT CANNOT BE READ IS UNPLAYABLE, not transient. The
+      // folder grant outlives any network, so nothing can substitute for the
+      // bytes: retrying spends budget that only re-discovers the same missing
+      // file, and the provider path cannot help either. Without this the queue
+      // simply STALLED on a file the user has already deleted — which is the
+      // one thing that turns an offline listening session into a dead end.
+      //
+      // Scoped to offline identities on purpose. A provider track's permanent
+      // resolution failure keeps reporting and waiting exactly as before, so
+      // provider semantics are untouched; only the local source, where "no
+      // network can help" is a fact rather than a guess, reaches the skip.
+      //
+      // Reported first, then skipped — the same ordering `finalizeCycle` uses,
+      // so the banner and the advance never race.
+      if (
+        isOfflineSource(identity.primarySource.source) &&
+        classifyFailure(error).category === "permanent"
+      ) {
+        try {
+          onUnavailableTrack?.({
+            trackKey: identityKey(identity),
+            attemptsUsed: 0,
+            category: "permanent",
+          });
+        } catch {
+          // Advancing the queue must never break the terminal path it annotates.
+        }
+      }
       return;
     }
     if (!isCurrent(generation)) {

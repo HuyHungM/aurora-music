@@ -8,6 +8,7 @@ import { PlayerEngine, PlayerError } from "./engine";
 import type { EngineEventPayload, PlayerErrorKind } from "./engine";
 import { trackKey } from "./identity";
 import { isQualifiedPlay } from "./qualification";
+import { isOfflineTrack } from "@/lib/offline/isolation";
 import type { PlaybackController } from "@/lib/playback/controller";
 
 /** Server action for recording a qualified play. Injected by PlayerHost. */
@@ -298,6 +299,31 @@ function isDataSaverActive(): boolean {
 }
 
 /**
+ * THE prefetch policy, for both entry points: next-up warming and hover intent.
+ *
+ * AN OFFLINE FILE IS NEVER WARMED. The browser opens a local file instantly, so
+ * warming it buys no latency — while it does spend an object URL out of the
+ * small session budget (`MAX_LIVE_OBJECT_URLS`), which the LIVE element shares.
+ * That budget is tight enough that a warmed URL can be revoked while the
+ * controller still holds it in its one-entry prefetch slot, and the next load
+ * of that track then installs a revoked URL and fails. Same reasoning the
+ * `MusicEngine` facade already applies to its own prefetch gate.
+ *
+ * Nothing is invented here: the controller's prefetch remains total for every
+ * caller that reaches it directly.
+ */
+function warmResolution(track: Track): void {
+  if (isOfflineTrack(track)) {
+    return;
+  }
+  try {
+    playbackController?.prefetchTrack(track);
+  } catch {
+    // Speculation must never break playback.
+  }
+}
+
+/**
  * Warms the resolution for whatever plays next, if anything does. Called when
  * the current track starts producing audio — the earliest moment the next
  * track is knowable — so a natural or manual advance finds a hot prefetch
@@ -324,11 +350,7 @@ function prefetchNextTrack(state: {
   if (!next) {
     return;
   }
-  try {
-    playbackController.prefetchTrack(next);
-  } catch {
-    // Speculation must never break playback.
-  }
+  warmResolution(next);
 }
 
 /** Next queue-index under the current repeat mode, or null when playback ends. */
@@ -566,8 +588,12 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
         ) {
           const key = trackKey(snapshot.currentTrack);
           set({ qualifiedTrackKey: key });
-          if (recordPlayedAction) {
-            void recordPlayedAction(snapshot.currentTrack);
+          // A LOCAL FILE IS NOT CATALOG DATA, so there is nothing to record: the
+          // action refuses it server-side anyway, which makes the call a
+          // guaranteed failed request the moment the listener is offline — and
+          // an unguarded one, since nothing below awaits it.
+          if (recordPlayedAction && !isOfflineTrack(snapshot.currentTrack)) {
+            void recordPlayedAction(snapshot.currentTrack).catch(() => undefined);
           }
         }
       }
@@ -1116,12 +1142,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => {
       if (isDataSaverActive()) {
         return;
       }
-      try {
-        playbackController?.prefetchTrack(track);
-      } catch {
-        // The controller's own contract is total, but the store must not
-        // depend on that: a prefetch can never break playback.
-      }
+      warmResolution(track);
     },
 
     bindEngine: (target) => {

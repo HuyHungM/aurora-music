@@ -492,13 +492,14 @@ const en: Messages = {
     reloadApp: "Reload app",
     backHome: "Back to home",
     offlineTitle: "You're offline",
-    offlineHint: "You're offline. Check your connection — music needs internet.",
-    offlineBar: "You're offline. Music playback requires an internet connection.",
+    offlineHint: "Local files on this device still play while you're offline.",
+    offlineBar:
+      "You're offline. Local files still play; online music needs a connection.",
     reference: "Reference: {id}",
     errorCode: "Error code: {code}",
     notFoundTitle: "Page not found",
     networkUnavailable: "Couldn't reach the service. Check your connection and try again.",
-    offlineMessage: "You're offline. Music playback requires an internet connection.",
+    offlineMessage: "You're offline. This needs a connection.",
     playbackUnavailable: "This track can't be played right now.",
     providerUnavailable: "That isn't available from the current sources right now.",
     providerEmpty: "The music service didn't return that track.",
@@ -761,7 +762,15 @@ const en: Messages = {
     // and the local-files feature. They were merged rather than renamed
     // because both are "the thing Aurora calls offline", and splitting the
     // dictionary to avoid one collision would make the key space worse.
-    message: "You're offline. Music playback requires an internet connection.",
+    //
+    // `message` is the NETWORK notice, and it must never claim that playback is
+    // impossible offline: a local file plays with no connectivity at all
+    // (`ARCHITECTURE.md` §35.1), verified in a real browser. It therefore says
+    // what is actually true — local files keep playing, online music does not —
+    // rather than the shorter "music needs internet", which was false for
+    // exactly the case a listener holding a folder most cares about.
+    message:
+      "You're offline. Local files still play; online music needs a connection.",
     navLabel: "Local files",
     title: "Local files",
     subtitle:

@@ -170,6 +170,18 @@ Explicit rules:
   server: it never resolves server-side and never becomes catalog data (not a
   playlist entry, not a like, not recently-played, not part of a persisted
   queue snapshot). Provider audio remains non-downloadable.
+- **A local track plays with no internet at all.** "Offline" here means the actual
+  audio bytes reach the element with zero connectivity, not an app shell served
+  from a cache. Play / pause / next / previous, Play Folder, queue progression
+  between local tracks, loop track, loop queue and shuffle all work offline,
+  because resolution dispatches on source type to the local resolver and nothing
+  else in the path consults the network (`ARCHITECTURE.md` §35.1). Offline
+  playback never falls back to a provider, and a provider or network failure
+  never poisons a local track that is already available. A local file the browser
+  can no longer read (deleted, moved, grant revoked) is **stepped over** — the
+  same skip an unplayable provider track gets — rather than stalling the queue,
+  and it is never reported as a network problem. Playback needs no service
+  worker: that is only what a *reload* while offline would additionally need.
 - **Offline tracks are queue-only:** the `/offline` list is re-scanned from the
   folder on each visit, because a server-side "local track" has no identity
   that outlives the folder grant. Unsupported browsers (no File System Access

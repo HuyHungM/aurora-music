@@ -140,6 +140,88 @@ describe("translation coverage", () => {
   });
 });
 
+describe("offline copy is truthful about local playback", () => {
+  /**
+   * A local file plays with NO connectivity — real browser verification,
+   * `ARCHITECTURE.md` §35.1. So no offline string may claim that music needs an
+   * internet connection: that was true of provider playback only, and the copy
+   * said it about ALL playback, which is how a listener holding a folder was told
+   * their own music had become unplayable.
+   *
+   * These assertions are about MEANING, not exact prose: the wording is free to
+   * change, the claim is not. Each locale is checked separately because a
+   * corrected English string with a stale Vietnamese one is the failure this
+   * exists to catch.
+   */
+  const OFFLINE_KEYS = [
+    "offline.message",
+    "errors.offlineBar",
+    "errors.offlineHint",
+    "errors.offlineMessage",
+  ] as const;
+
+  function valueAt(locale: "en" | "vi", key: string): string {
+    const dicts = getDictionaries();
+    let node: unknown = dicts[locale];
+    for (const part of key.split(".")) {
+      node = (node as Record<string, unknown>)[part];
+    }
+    expect(typeof node, `${key} is not a string in ${locale}`).toBe("string");
+    return node as string;
+  }
+
+  it("never claims playback requires a connection, in any locale", () => {
+    for (const locale of ["en", "vi"] as const) {
+      for (const key of OFFLINE_KEYS) {
+        const value = valueAt(locale, key);
+        expect(value, `${locale} ${key}`).not.toMatch(
+          /music playback requires|requires an internet connection|needs internet|nghe nhạc cần/i,
+        );
+      }
+    }
+  });
+
+  it("says local files still play, in English and Vietnamese", () => {
+    // The banner and the offline hint are the two strings a listener actually
+    // reads while disconnected, so both have to carry the reassurance. The
+    // terms are the project's own: "Local files" in English, "tệp cục bộ" in
+    // Vietnamese (`offline.unsupportedTitle` already uses it).
+    expect(valueAt("en", "offline.message")).toMatch(/local files still play/i);
+    expect(valueAt("en", "errors.offlineHint")).toMatch(/local files/i);
+    expect(valueAt("en", "errors.offlineHint")).toMatch(/still play/i);
+
+    expect(valueAt("vi", "offline.message")).toContain("Tệp cục bộ vẫn phát được");
+    expect(valueAt("vi", "errors.offlineHint")).toContain("Tệp cục bộ");
+    expect(valueAt("vi", "errors.offlineHint")).toContain("vẫn phát được");
+  });
+
+  it("still says what genuinely does need a connection", () => {
+    // The correction must not become "everything works offline". Online music
+    // and the network-failure copy keep naming the connection, because for those
+    // it is true.
+    expect(valueAt("en", "offline.message")).toMatch(/online music needs a connection/i);
+    expect(valueAt("vi", "offline.message")).toContain("nhạc trực tuyến cần có kết nối");
+    expect(valueAt("en", "errors.offlineMessage")).toMatch(/needs a connection/i);
+    expect(valueAt("vi", "errors.offlineMessage")).toContain("cần có kết nối");
+  });
+
+  it("leaves the provider and network failure copy alone", () => {
+    // Unrelated translations, pinned so the change above cannot have drifted
+    // them: these still name the service or the connection, and none of them
+    // talks about local playback.
+    expect(valueAt("en", "errors.networkUnavailable")).toContain("Check your connection");
+    expect(valueAt("en", "errors.providerUnavailable")).toContain(
+      "isn't available from the current sources",
+    );
+    expect(valueAt("en", "errors.providerEmpty")).toContain("The music service");
+    expect(valueAt("en", "errors.playbackUnavailable")).toBe(
+      "This track can't be played right now.",
+    );
+    expect(valueAt("vi", "errors.networkUnavailable")).toContain("Kiểm tra mạng");
+    expect(valueAt("vi", "errors.playbackUnavailable")).toContain("không phát được");
+  });
+});
+
 describe("pluralization", () => {
   it("selects forms via Intl.PluralRules, never manual suffixing", () => {
     expect(plural("en", 1, { one: "{count} track", other: "{count} tracks" })).toBe(

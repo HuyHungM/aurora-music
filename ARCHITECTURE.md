@@ -3120,6 +3120,73 @@ For a scanned folder both are already done, which is the point: it makes the
 function correct for any list, so a caller holding a subset cannot build a queue
 containing a README.
 
+### 35.1 A local file plays with no network at all
+
+Offline playback means the actual bytes reach the element with zero
+connectivity — not an app shell served from a cache. The chain is
+network-free end to end, and every hop of it is asserted:
+
+```text
+local Track -> store -> PlaybackController -> resolver registry
+            -> createLocalSourceResolver -> File -> object URL
+            -> PlayerEngine -> media element
+```
+
+**The registry is what separates the two source kinds.** `PlaybackResolver` is a
+map keyed by source type and picks the first identity reference that has a
+resolver, so a `local` identity reaches `createLocalSourceResolver` and never
+touches the server resolver — which is registered *first* in `PlayerHost`, so
+local-first dispatch is a property of the source types rather than of ordering.
+That resolver opens a `File` the browser already holds and mints an object URL.
+Nothing else in the chain consults connectivity: no `navigator.onLine` check
+gates a load, and the offline indicator is display-only. Resolution failures that
+DO involve the network are reported as network problems; a local file that cannot
+be read is never described as one.
+
+**What the offline path deliberately does not do**, each measured rather than
+assumed, and each a place where a local file used to spend something it had no
+need for:
+
+- **No speculative prefetch.** Next-up warming calls the controller's one-entry
+  prefetch slot, which mints an object URL from the very session budget
+  (`MAX_LIVE_OBJECT_URLS`, `lib/offline/session.ts`) the live element shares.
+  The budget is small enough that a warmed URL can be revoked while the
+  controller still holds it, and the next load of that track then installs a
+  revoked URL and fails. A local file is opened instantly by the browser, so
+  warming it buys no latency at all. `warmResolution` in `lib/player/store.ts` is
+  the single policy for both prefetch entry points (next-up and hover intent) and
+  refuses offline tracks; `MusicEngine.prefetchTrack` applies the same reasoning
+  to its own gate.
+- **No recently-played write.** A qualified local play fires `recordPlayedAction`,
+  a server action. The action refuses offline tracks server-side anyway, so the
+  call is pure waste and, with no connectivity, a guaranteed failed request —
+  previously unguarded, so it was also an unhandled rejection. The store skips it
+  for offline tracks and swallows the rejection for every other source.
+- **No silent stall on a file that is gone.** A local resolution failure is
+  non-retryable by construction: the folder grant outlives any network, so no
+  retry and no provider can substitute for the bytes. Such a failure now reaches
+  the same injected `onUnavailableTrack` decision the recovery terminal path uses,
+  so `skipUnavailableTrack` steps over it and the existing one-pass guard still
+  terminates an all-dead queue. Scoped to offline identities: a provider track's
+  permanent resolution failure still reports and waits exactly as before, so
+  provider semantics are unchanged.
+
+**Object URLs keep their correct lifetime.** One URL per played file, bounded,
+oldest-first revoked, everything revoked on a rescan or session reset
+(`lib/offline/session.ts`). Resuming a loaded local file reuses the URL already
+on the element rather than minting another, and a recovery round re-resolves the
+same identity to a fresh URL rather than reusing a revoked one.
+
+**What offline does NOT cover, by decision.** A local file is never persisted:
+`serializeQueueSnapshot` drops offline entries, because `providerTrackId` is the
+track's folder-relative path and that row is the durable server-side session.
+Session restoration for local files therefore belongs to the client — the
+directory handle in `lib/offline/folder-store.ts` plus a rescan — and never to the
+queue snapshot. A restored session's local entry still resolves offline once the
+folder is available, because that first play goes through the same local
+resolver; with the folder gone, the honest answer is the existing
+"re-open /offline and scan" prompt, not a half-restored queue.
+
 ## ARCHITECTURAL INVARIANTS
 
 1. Single `MusicEngine` — one mounted facade; orchestration only.

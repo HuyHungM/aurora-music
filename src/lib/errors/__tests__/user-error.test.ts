@@ -9,6 +9,7 @@ import {
 } from "@/lib/domain";
 import { PlayerError } from "@/lib/player/engine";
 import { toUserFacingError } from "@/lib/errors/user-error";
+import { t } from "@/lib/i18n/translate";
 
 const FORBIDDEN = [
   "googlevideo",
@@ -133,6 +134,44 @@ describe("toUserFacingError", () => {
     expect(toUserFacingError(new Error("NetworkError boom")).category).toBe(
       "network",
     );
+  });
+
+  it("keeps the English offline message identical to the dictionary", () => {
+    // The Phase 42 contract: `msg()` returns an English literal for English
+    // callers and the dictionary for everyone else, so the two must not drift.
+    // This one drifted before — the literal and `errors.offlineMessage` both said
+    // playback requires an internet connection, which is false for a local file.
+    const english = toUserFacingError(new TypeError("fetch failed"), {
+      online: false,
+    }).message;
+    expect(english).toBe(t("en", "errors.offlineMessage"));
+
+    const vietnamese = toUserFacingError(new TypeError("fetch failed"), {
+      online: false,
+    }, "vi").message;
+    expect(vietnamese).toBe(t("vi", "errors.offlineMessage"));
+  });
+
+  it("never tells a listener that playback needs a connection", () => {
+    // This taxonomy is reached from error boundaries, and the errors that land
+    // here are request failures — not the player. A local file plays with no
+    // connectivity, so a message claiming otherwise is wrong whatever the
+    // failure was.
+    for (const locale of ["en", "vi"] as const) {
+      const message = toUserFacingError(
+        new PlaybackResolutionError(
+          { provider: "youtube", providerTrackId: "x" },
+          "resolve",
+          "boom",
+          { retryable: true },
+        ),
+        { online: false },
+        locale,
+      ).message;
+      expect(message, locale).not.toMatch(
+        /requires an internet connection|needs internet|nghe nhạc cần/i,
+      );
+    }
   });
 
   it("maps unknown values to a safe default", () => {

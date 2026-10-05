@@ -496,14 +496,15 @@ const vi = {
     backHome: "Về trang chủ",
     offlineTitle: "Bạn đang ngoại tuyến",
     offlineHint:
-      "Bạn đang ngoại tuyến. Hãy kiểm tra kết nối — nghe nhạc cần internet.",
-    offlineBar: "Bạn đang ngoại tuyến. Nghe nhạc cần có kết nối internet.",
+      "Tệp cục bộ trên thiết bị này vẫn phát được khi bạn ngoại tuyến.",
+    offlineBar:
+      "Bạn đang ngoại tuyến. Tệp cục bộ vẫn phát được; nhạc trực tuyến cần có kết nối.",
     reference: "Mã tham chiếu: {id}",
     errorCode: "Mã lỗi: {code}",
     notFoundTitle: "Không tìm thấy trang",
     networkUnavailable:
       "Không kết nối được dịch vụ. Kiểm tra mạng rồi thử lại.",
-    offlineMessage: "Bạn đang ngoại tuyến. Nghe nhạc cần có kết nối internet.",
+    offlineMessage: "Bạn đang ngoại tuyến. Nội dung này cần có kết nối.",
     playbackUnavailable: "Bài hát này hiện không phát được.",
     providerUnavailable: "Hiện không lấy được bài hát từ các nguồn.",
     providerEmpty: "Dịch vụ nhạc không trả về bài hát này.",
@@ -764,7 +765,15 @@ const vi = {
     // tính năng tệp cục bộ. Gộp lại thay vì đổi tên, vì cả hai đều là "thứ
     // Aurora gọi là offline"; tách khoá chỉ để tránh một va chạm sẽ làm không
     // gian khoá tệ hơn.
-    message: "Bạn đang ngoại tuyến. Nghe nhạc cần có kết nối internet.",
+    //
+    // `message` là thông báo MẤT MẠNG, và nó không được nói rằng không thể
+    // nghe nhạc khi ngoại tuyến: một tệp cục bộ phát được hoàn toàn không cần
+    // mạng (`ARCHITECTURE.md` §35.1), đã kiểm chứng trên trình duyệt thật. Vì
+    // vậy nó nói đúng điều đang đúng — tệp cục bộ vẫn phát, nhạc trực tuyến thì
+    // không — thay vì câu ngắn hơn "nghe nhạc cần internet", vốn sai đúng với
+    // trường hợp mà người dùng đang cầm một thư mục nhạc quan tâm nhất.
+    message:
+      "Bạn đang ngoại tuyến. Tệp cục bộ vẫn phát được; nhạc trực tuyến cần có kết nối.",
     navLabel: "Offline",
     title: "Offline",
     subtitle:

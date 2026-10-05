@@ -58,6 +58,55 @@ async function recordRealAudio(page: import("@playwright/test").Page): Promise<n
   });
 }
 
+interface DemuxedState {
+  readyState: number | null;
+  duration: number;
+  errorCode: number | null;
+  errorMessage: string | null;
+}
+
+/**
+ * Polls until the element has actually DEMUXED the source, then returns it.
+ *
+ * WHY THIS IS NOT A SINGLE READ. The harness settles `__auroraLocalPlay` on the
+ * `play` event, which fires when playback is REQUESTED — before the container has
+ * been parsed. A diagnostics read taken at that instant legitimately reports
+ * `readyState: 0`. Measured while offline: 0 at settle, then HAVE_ENOUGH_DATA
+ * with a real parsed duration within half a second. Sampling an instant asserts
+ * a race; the condition is the thing under test.
+ */
+const waitForDemuxed = (page: import("@playwright/test").Page, timeout = 20_000) =>
+  page
+    .waitForFunction(
+      () => {
+        const read = (window as unknown as {
+          __auroraLocalDiagnostics?: () => {
+            readyState: number | null;
+            duration: number;
+            errorCode: number | null;
+            errorMessage: string | null;
+          } | null;
+        }).__auroraLocalDiagnostics;
+        const state = read?.();
+        if (!state) return false;
+        // A failure settles the wait too, so the caller asserts on the reason.
+        if (state.errorCode !== null || state.errorMessage !== null) return true;
+        return (state.readyState ?? 0) >= 1 && state.duration > 0;
+      },
+      undefined,
+      { timeout },
+    )
+    .then(() => true)
+    .catch(() => false);
+
+const readDemuxed = (page: import("@playwright/test").Page) =>
+  page.evaluate(() => {
+    const read = (window as unknown as {
+      __auroraLocalDiagnostics?: () => DemuxedState | null;
+    }).__auroraLocalDiagnostics;
+    return read?.() ?? null;
+  });
+
 test.describe("local file playback", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(FIXTURE_ROUTE);
@@ -87,21 +136,9 @@ test.describe("local file playback", () => {
       const played = await w.__auroraLocalPlay(8000);
       return {
         outcome: played.outcome,
-        // The decisive assertion: the browser demuxed the object URL and
-        // reported HAVE_METADATA, which it only does after parsing the
-        // container. A CSP-blocked source pins readyState at 0 with errorCode 4.
-        //
-        // Sampled as >= 1 rather than >= 2 on purpose. `loadedmetadata` is the
-        // event this waits on, and Chromium reports exactly that state at the
-        // moment it fires, climbing to HAVE_ENOUGH_DATA as `play()` proceeds.
-        // Demanding >= 2 here asserts on how far the fetch happened to have got
-        // at an instant when metadata was already proven, and failed against a
-        // genuinely working player.
-        readyState: Number(played.diagnostics?.readyState ?? -1),
+        sourceScheme: played.diagnostics?.sourceScheme ?? null,
         errorCode: played.diagnostics?.errorCode ?? null,
         errorMessage: played.diagnostics?.errorMessage ?? null,
-        sourceScheme: played.diagnostics?.sourceScheme ?? null,
-        duration: Number(played.diagnostics?.duration ?? 0),
       };
     }, bytes);
 
@@ -111,10 +148,16 @@ test.describe("local file playback", () => {
     expect(result.errorCode).toBeNull();
     expect(result.errorMessage).toBeNull();
     expect(result.outcome).not.toBe("error");
-    // HAVE_METADATA: the container was opened and parsed.
-    expect(result.readyState).toBeGreaterThanOrEqual(1);
-    // A parsed duration is proof the demuxer ran, not merely that bytes arrived.
-    expect(result.duration).toBeGreaterThan(0);
+
+    // HAVE_METADATA and a parsed duration: the container was opened and the
+    // demuxer ran, rather than merely bytes having arrived. Polled, not sampled —
+    // see `waitForDemuxed`.
+    expect(await waitForDemuxed(page)).toBe(true);
+    const demuxed = await readDemuxed(page);
+    expect(demuxed?.errorCode ?? null).toBeNull();
+    expect(demuxed?.errorMessage ?? null).toBeNull();
+    expect(demuxed?.readyState ?? 0).toBeGreaterThanOrEqual(1);
+    expect(demuxed?.duration ?? 0).toBeGreaterThan(0);
 
     // And the element is genuinely rendering audio, not sitting ready. This is
     // the assertion that could not pass on a stream that never played.
@@ -159,11 +202,39 @@ test.describe("local file playback", () => {
       }> = [];
       for (let i = 0; i < 3; i += 1) {
         const played = await w.__auroraLocalPlay(8000);
-        results.push({
-          outcome: played.outcome,
-          readyState: played.diagnostics.readyState,
-          errorCode: played.diagnostics.errorCode,
-        });
+        // Poll INSIDE the page: the element must be demuxed before the next
+        // playback mints another URL, which is the whole point of this spec.
+        const settled = await new Promise<{ readyState: number | null; errorCode: number | null }>(
+          (done) => {
+            const deadline = Date.now() + 15_000;
+            const tick = () => {
+              const read = (window as unknown as {
+                __auroraLocalDiagnostics?: () => {
+                  readyState: number | null;
+                  errorCode: number | null;
+                  errorMessage: string | null;
+                  duration: number;
+                } | null;
+              }).__auroraLocalDiagnostics;
+              const state = read?.();
+              if (!state || Date.now() > deadline) {
+                done({ readyState: state?.readyState ?? null, errorCode: state?.errorCode ?? null });
+                return;
+              }
+              if (state.errorCode !== null || state.errorMessage !== null) {
+                done({ readyState: state.readyState, errorCode: state.errorCode });
+                return;
+              }
+              if ((state.readyState ?? 0) >= 1 && state.duration > 0) {
+                done({ readyState: state.readyState, errorCode: state.errorCode });
+                return;
+              }
+              setTimeout(tick, 100);
+            };
+            tick();
+          },
+        );
+        results.push({ outcome: played.outcome, ...settled });
       }
       return results;
     }, bytes);
@@ -174,44 +245,142 @@ test.describe("local file playback", () => {
     for (const outcome of outcomes) {
       expect(outcome.errorCode).toBeNull();
       expect(outcome.outcome).not.toBe("error");
-      // HAVE_METADATA each time: see the note in the first test.
+      // HAVE_METADATA each time, once the demuxer has actually had it.
       expect(outcome.readyState).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  test("plays a real local file with the browser genuinely offline", async ({
+    page,
+    context,
+  }) => {
+    // THE OFFLINE CLAIM, in a real browser. Everything else in this file proves
+    // that local bytes reach the element; this proves they do so with NO
+    // connectivity at all, which is the requirement that actually matters.
+    //
+    // `context.setOffline(true)` is not a stub: Chromium drops every network
+    // request AND flips `navigator.onLine`, so a playback path that secretly
+    // needed the network would fail here rather than quietly pass. The page is
+    // loaded FIRST, because the app shell legitimately needs the network once —
+    // what is under test is what happens after connectivity is gone.
+    const bytes = await recordRealAudio(page);
+    await context.setOffline(true);
+
+    const attempted: string[] = [];
+    page.on("request", (request) => {
+      attempted.push(request.url());
+    });
+
+    const result = await page.evaluate(async (data) => {
+      const w = window as unknown as {
+        __auroraLocalRegister: (s: { bytes: number[]; name: string; type?: string }) => void;
+        __auroraLocalPlay: (t?: number) => Promise<{
+          outcome: string;
+          diagnostics: Record<string, unknown> | null;
+        }>;
+        __auroraLocalDiagnostics: () => Record<string, unknown> | null;
+      };
+      w.__auroraLocalRegister({ bytes: data, name: "offline.opus", type: "" });
+      const played = await w.__auroraLocalPlay(15_000);
+      return { onLine: navigator.onLine, played };
+    }, bytes);
+
+    // The browser really is offline; this is not `navigator.onLine` pretended.
+    expect(result.onLine).toBe(false);
+    expect(result.played.outcome).not.toBe("error");
+    expect(result.played.diagnostics?.sourceScheme).toBe("blob");
+    expect(result.played.diagnostics?.errorCode ?? null).toBeNull();
+
+    // WAIT for the demuxer rather than sampling the instant the harness settled.
+    // See `waitForDemuxed`: `play` fires before the container is parsed.
+    expect(await waitForDemuxed(page)).toBe(true);
+
+    // Real decoding, not a ready-but-silent element.
+    const advanced = await page
+      .waitForFunction(
+        () => {
+          const read = (window as unknown as {
+            __auroraLocalDiagnostics?: () => { currentTime: number } | null;
+          }).__auroraLocalDiagnostics;
+          return (read?.()?.currentTime ?? 0) > 0.05;
+        },
+        undefined,
+        { timeout: 15_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    expect(advanced).toBe(true);
+
+    // And the element ended in the state real decoding produces.
+    const final = await readDemuxed(page);
+    expect(final?.readyState ?? 0).toBeGreaterThanOrEqual(1);
+    expect(final?.duration ?? 0).toBeGreaterThan(0);
+    expect(final?.errorCode ?? null).toBeNull();
+    expect(final?.errorMessage ?? null).toBeNull();
+
+    // NOTHING REACHED THE NETWORK. A `blob:` URL is the local file itself and
+    // Playwright reports it as a request, so it is excluded explicitly; every
+    // other entry would be a dependency the local path should not have had —
+    // and with `setOffline(true)` each one would also have failed the playback.
+    expect(attempted.filter((url) => !url.startsWith("blob:"))).toEqual([]);
   });
 
   test("an unplayable file still fails cleanly, with a usable diagnosis", async ({
     page,
   }) => {
-    const result = await page.evaluate(async () => {
+    await page.evaluate(async () => {
       const w = window as unknown as {
-        __auroraLocalRegister: (s: {
-          bytes: number[];
-          name: string;
-          type?: string;
-        }) => void;
-        __auroraLocalPlay: (t?: number) => Promise<{
-          outcome: string;
-          diagnostics: { errorCode: number | null; errorMessage: string | null };
-        }>;
+        __auroraLocalRegister: (s: { bytes: number[]; name: string; type?: string }) => void;
+        __auroraLocalPlay: (t?: number) => Promise<{ outcome: string }>;
       };
       // Zero bytes: a real, genuinely unplayable local file.
       w.__auroraLocalRegister({ bytes: [], name: "empty.mp3", type: "audio/mpeg" });
-      const played = await w.__auroraLocalPlay(5000);
-      return {
-        outcome: played.outcome,
-        errorCode: played.diagnostics.errorCode,
-        errorMessage: played.diagnostics.errorMessage,
-      };
+      await w.__auroraLocalPlay(5000);
+    });
+
+    // WAIT for the terminal media error rather than trusting the harness's
+    // settle. The harness settles on the FIRST of play / playing /
+    // loadedmetadata / error, and a zero-byte blob can reach `play` before the
+    // decoder rejects it — which is exactly what happened here: the settle
+    // reported "playing" while the element was already failing. The condition
+    // under test is that the failure is reported, so wait for it and then read
+    // what the element actually said.
+    const reported = await page
+      .waitForFunction(
+        () => {
+          const read = (window as unknown as {
+            __auroraLocalDiagnostics?: () => {
+              errorCode: number | null;
+              errorMessage: string | null;
+            } | null;
+          }).__auroraLocalDiagnostics;
+          const state = read?.();
+          return Boolean(state && (state.errorCode !== null || state.errorMessage !== null));
+        },
+        undefined,
+        { timeout: 15_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    expect(reported).toBe(true);
+
+    const failure = await page.evaluate(() => {
+      const read = (window as unknown as {
+        __auroraLocalDiagnostics?: () => {
+          errorCode: number | null;
+          errorMessage: string | null;
+        } | null;
+      }).__auroraLocalDiagnostics;
+      return read?.() ?? null;
     });
 
     // Genuinely invalid input must still be reported, not swallowed. This is
     // the guard against "fixing" the bug by making failures silent.
-    expect(result.outcome).toBe("error");
-    expect(result.errorCode).toBe(4);
+    expect(failure?.errorCode).toBe(4);
     // The distinguishing part. While CSP was blocking every blob: source this
     // reported "Media load rejected by URL safety check", identical to the
     // local-file bug itself; it now names the real cause.
-    expect(result.errorMessage).toContain("Format error");
-    expect(result.errorMessage).not.toContain("URL safety check");
+    expect(failure?.errorMessage).toContain("Format error");
+    expect(failure?.errorMessage).not.toContain("URL safety check");
   });
 });

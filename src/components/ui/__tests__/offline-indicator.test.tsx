@@ -81,7 +81,12 @@ describe("OfflineIndicator", () => {
     });
     const banner = screen.getByRole("status");
     expect(banner.textContent).toContain("Bạn đang ngoại tuyến");
-    expect(banner.textContent).toContain("kết nối internet");
+    // The notice says what is actually true offline: local files keep playing.
+    // It used to assert "kết nối internet" here, which is why this file needed
+    // changing — the old wording claimed playback needed a connection, and a
+    // local file does not.
+    expect(banner.textContent).toContain("Tệp cục bộ vẫn phát được");
+    expect(banner.textContent).toContain("nhạc trực tuyến");
     setOnline(true);
     act(() => {
       window.dispatchEvent(new Event("online"));

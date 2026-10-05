@@ -102,11 +102,13 @@ function networkOrOffline(
     return {
       category: "offline",
       code: "OFFLINE",
-      message: msg(
-        locale,
-        "You're offline. Music playback requires an internet connection.",
-        "errors.offlineMessage",
-      ),
+      // About THE THING THAT FAILED, not about music: this taxonomy is only
+      // reached from error boundaries, and the errors that classify here are
+      // network failures on a request. It used to claim playback required an
+      // internet connection, which is false for a local file — those play with
+      // no connectivity (`ARCHITECTURE.md` §35.1). Must stay byte-identical to
+      // `errors.offlineMessage` in `en.ts`; the parity test enforces that.
+      message: msg(locale, "You're offline. This needs a connection.", "errors.offlineMessage"),
       retryable: true,
       preservePlayback: true,
     };
