@@ -80,3 +80,4 @@ next-env.d.ts
 /.kilo/
 /.opencode/
 tmp-*
+.worktrees/
