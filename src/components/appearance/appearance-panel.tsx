@@ -42,7 +42,7 @@ import { useAppearance } from "./appearance-root";
 import { useLocale } from "@/components/i18n/locale-provider";
 import { usePresence } from "@/components/ui/presence";
 import { Button } from "@/components/ui/button";
-import { Select } from "@/components/ui/select";
+import { MenuSelect } from "@/components/ui/menu-select";
 import { CheckIcon, ImageIcon, ArrowDownIcon, ArrowUpIcon } from "@/components/ui/icons";
 
 /**
@@ -494,13 +494,13 @@ function BackgroundSection() {
    the same person. So OFF shows one row, and ON reveals the depth layer.
 
    The controls reuse the primitives this panel already has rather than
-   introducing a second set: `AppearanceSlider` for the numeric ones, and a
-   native `<select>` for the enumerated ones. That is deliberate — a settings
+   introducing a second set: `AppearanceSlider` for the numeric ones, and the
+   shared menu select for the enumerated ones. That is deliberate — a settings
    page with two slider styles and two enumerated-control behaviours is worse
-   than a slightly long one. The enumerated ones go through the shared `Select`
-   precisely so that keyboard support, the mobile picker and the screen-reader
-   announcement are the platform's job rather than this file's — see
-   `ui/select.tsx` for why the trigger is ours and the popup is not.
+   than a slightly long one. The enumerated ones go through `MenuSelect`
+   precisely so that every closed set of choices reads as one control — see
+   `ui/menu-select.tsx` for what the menu vocabulary costs and why the panel
+   pays it here.
 
    INTENSITY APPEARS TWICE, and that is not an oversight. `--p-appearance-aurora`
    drives the general aurora wash AND the artwork field, so it is genuinely
@@ -833,17 +833,17 @@ function AmbientMoreControls({ children }: { children: ReactNode }) {
 /**
  * The enumerated Ambient Light controls, each a named set of choices.
  *
- * A thin wrapper over the shared `Select`. It exists for ONE reason: every one
- * of these controls is a list of STORED IDs (`subtle`, `fast`, `left`) whose
- * DISPLAY is a translated sentence, and that mapping is a decision this file
- * makes rather than the primitive. The primitive takes `value`/`label` pairs,
- * so this is where a value becomes a word.
+ * A thin wrapper over the shared `MenuSelect`. It exists for ONE reason: every
+ * one of these controls is a list of STORED IDs (`subtle`, `fast`, `left`)
+ * whose DISPLAY is a translated sentence, and that mapping is a decision this
+ * file makes rather than the primitive. The primitive takes `value`/`label`
+ * pairs, so this is where a value becomes a word.
  *
- * Accessibility is the platform's, and that is the point rather than a
- * compromise — see `ui/select.tsx` for why the popup stays native while the
- * trigger is ours. One tab stop, arrow keys change the value, the label is a
- * real `<label for>`, the option text is what a screen reader reads, and a
- * phone gets the OS picker instead of a listbox.
+ * The menu is the product's own surface — trigger button plus check-marked
+ * options, the same vocabulary `LocaleSwitcher` and the track menus use —
+ * rather than the platform's popup. See `ui/menu-select.tsx` for what that
+ * trade costs (the mobile picker, the announcement, the type-ahead) and why
+ * the product pays it here: every enumerated control reads as one control.
  */
 function AmbientSelect({
   label,
@@ -863,13 +863,10 @@ function AmbientSelect({
   const { t } = useLocale();
 
   return (
-    // The shared primitive, not a second hand-written select. This was the only
-    // `<select>` left in the product, and it carried its own trigger class
-    // string — so "make every select look the same" was a change in two files
-    // that had to agree by hand. `ui/select.tsx` owns the trigger, the chevron,
-    // the focus ring, and the right padding that keeps a long label clear of
-    // the arrow; this wrapper only translates.
-    <Select
+    // The shared menu primitive, not a second hand-written control. `MenuSelect`
+    // owns the trigger, the chevron, the focus ring and the check-marked
+    // options; this wrapper only translates.
+    <MenuSelect
       // `max-w-sm` matches the switch row above, so the section keeps ONE
       // measure. A full-width control over three options reads as a form field
       // that expects more than the control can ever contain.

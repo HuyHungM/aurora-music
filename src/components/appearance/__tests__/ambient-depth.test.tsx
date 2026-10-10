@@ -441,7 +441,7 @@ describe("Appearance panel: Ambient Light is a first-class, progressive setting"
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("labels every preset, direction, transition and motion option", () => {
+  it("labels every preset, direction, transition and motion option", async () => {
     renderPanel({ artworkAmbient: true });
     openMore();
     const section = within(screen.getByTestId("appearance-ambient"));
@@ -449,65 +449,80 @@ describe("Appearance panel: Ambient Light is a first-class, progressive setting"
     // motion level, and "Balanced" also names a glass preset. The labels are
     // correct as specified; they are simply only unambiguous inside their own
     // control, which is how they are rendered.
-    const group = (name: string) =>
-      section.getByRole("combobox", { name });
+    //
+    // A menu vocabulary, not a native popup: opening each trigger lists its
+    // options as `menuitemradio` rows inside the menu it owns.
+    const openLabels = async (testId: string): Promise<string[]> => {
+      fireEvent.click(section.getByTestId(testId));
+      const menu = await screen.findByRole("menu");
+      const labels = within(menu)
+        .getAllByRole("menuitemradio")
+        .map((item) => item.textContent ?? "");
+      fireEvent.click(section.getByTestId(testId));
+      return labels;
+    };
 
-    const preset = group("Preset");
-    expect(within(preset).getByText("Subtle")).toBeTruthy();
-    expect(within(preset).getByText("Balanced")).toBeTruthy();
-    expect(within(preset).getByText("Immersive")).toBeTruthy();
-    expect(within(preset).getByText("Custom")).toBeTruthy();
-
-    const direction = group("Direction");
-    expect(within(direction).getByText("All")).toBeTruthy();
-    expect(within(direction).getByText("Top")).toBeTruthy();
-    expect(within(direction).getByText("Bottom")).toBeTruthy();
-
-    const transition = group("Transition");
-    expect(within(transition).getByText("Smooth")).toBeTruthy();
-    expect(within(transition).getByText("Fast")).toBeTruthy();
-    expect(within(transition).getByText("None")).toBeTruthy();
-
-    const motion = group("Motion");
-    expect(within(motion).getByText("Off")).toBeTruthy();
-    expect(within(motion).getByText("Full")).toBeTruthy();
+    expect(await openLabels("ambient-preset")).toEqual([
+      "Subtle",
+      "Balanced",
+      "Immersive",
+      "Custom",
+    ]);
+    expect(await openLabels("ambient-ambientDirection")).toEqual(
+      expect.arrayContaining(["All", "Top", "Bottom"]),
+    );
+    expect(await openLabels("ambient-ambientTransition")).toEqual(
+      expect.arrayContaining(["Smooth", "Fast", "None"]),
+    );
+    expect(await openLabels("ambient-ambientMotion")).toEqual(
+      expect.arrayContaining(["Off", "Full"]),
+    );
   });
 
-  it("the enumerated controls are native selects: one tab stop, and the platform moves the value", () => {
+  it("the enumerated controls are menu buttons: one tab stop, and the menu checks the current value", async () => {
     renderPanel({ artworkAmbient: true });
 
     const section = within(screen.getByTestId("appearance-ambient"));
-    const preset = section.getByRole("combobox", { name: "Preset" }) as HTMLSelectElement;
+    const preset = section.getByRole("button", { name: "Preset" });
 
-    // The whole point of a native control: it is ONE tab stop, and it is the
-    // browser that owns arrow keys, the mobile picker and the announcement.
-    // The previous hand-built radiogroup asserted all of that itself, in ~90
-    // lines, and was one refactor away from getting it subtly wrong.
-    expect(preset.tagName).toBe("SELECT");
+    // One tab stop while closed: the menu is the platform's job no longer —
+    // the rows live behind the trigger, and this is the control the Tab key
+    // lands on.
+    expect(preset.tagName).toBe("BUTTON");
     expect(preset.getAttribute("tabindex")).toBeNull();
-    expect(section.getAllByRole("combobox", { name: "Preset" })).toHaveLength(1);
+    expect(section.getAllByRole("button", { name: "Preset" })).toHaveLength(1);
+    expect(preset.textContent).toContain("Balanced");
 
-    expect(preset.value).toBe("balanced");
-    fireEvent.change(preset, { target: { value: "immersive" } });
-    expect(
-      (section.getByRole("combobox", { name: "Preset" }) as HTMLSelectElement).value,
-    ).toBe("immersive");
+    fireEvent.click(preset);
+    const menu = await screen.findByRole("menu");
+    const checked = within(menu)
+      .getAllByRole("menuitemradio")
+      .filter((item) => item.getAttribute("aria-checked") === "true");
+    expect(checked).toHaveLength(1);
+    expect(checked[0]!.textContent).toContain("Balanced");
+
+    fireEvent.click(within(menu).getByTestId("ambient-preset-immersive"));
+    expect(preset.textContent).toContain("Immersive");
   });
 
-    it("the select shows the stored direction, and every option carries its own value", () => {
+  it("the select shows the stored direction, and every option carries its own value", async () => {
     renderPanel({ artworkAmbient: true, ambientDirection: "bottom" });
     openMore();
 
-    const select = screen.getByRole("combobox", { name: "Direction" }) as HTMLSelectElement;
-    expect(select.value).toBe("bottom");
-    // The selected value must be reachable by name too, so the menu shows a word
-    // rather than an id or a colour.
+    const select = screen.getByRole("button", { name: "Direction" });
+    expect(select.textContent).toContain("Bottom");
+
+    fireEvent.click(select);
+    const menu = await screen.findByRole("menu");
+    // The selected value must be reachable by name too, so the menu shows a
+    // word rather than an id or a colour — and every row keeps its own testid
+    // so a test can name a VALUE not a position.
+    expect(within(menu).getByTestId("ambient-ambientDirection-top").textContent).toContain(
+      "Top",
+    );
     expect(
-      (select.selectedOptions[0] as HTMLOptionElement).textContent,
-    ).toBe("Bottom");
-    expect(
-      screen.getByTestId("ambient-ambientDirection-top").getAttribute("value"),
-    ).toBe("top");
+      within(menu).getByTestId("ambient-ambientDirection-bottom").getAttribute("aria-checked"),
+    ).toBe("true");
   });
 
   it("editing a slider switches the preset to Custom", () => {
@@ -527,12 +542,12 @@ describe("Appearance panel: Ambient Light is a first-class, progressive setting"
     ).toBe(0.2);
   });
 
-  it("choosing a preset applies its values and does not touch the feature flag", () => {
+  it("choosing a preset applies its values and does not touch the feature flag", async () => {
     const { root } = renderPanel({ artworkAmbient: true });
 
-    fireEvent.change(screen.getByTestId("ambient-preset"), {
-      target: { value: "immersive" },
-    });
+    fireEvent.click(screen.getByTestId("ambient-preset"));
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(within(menu).getByTestId("ambient-preset-immersive"));
 
     expect(root?.getAttribute("data-aurora-artwork")).toBe("on");
     expect(
@@ -557,23 +572,35 @@ describe("Appearance panel: Ambient Light is a first-class, progressive setting"
     expect(root?.getAttribute("data-aurora-artwork-motion")).toBe("off");
   });
 
-  it("renders Vietnamese labels for the whole section", () => {
+  it("renders Vietnamese labels for the whole section", async () => {
     renderPanel({ artworkAmbient: true }, "vi");
     openMore();
     const section = within(screen.getByTestId("appearance-ambient"));
-    // A `<label for>` rather than `aria-label`: the association is the
-    // platform's, and that is what survives translation.
-    const group = (name: string) => section.getByRole("combobox", { name });
+    // The name comes from the label element the trigger names, so it survives
+    // translation the same way the platform association did.
+    const openButton = async (name: string) => {
+      const button = section.getByRole("button", { name });
+      fireEvent.click(button);
+      return screen.findByRole("menu");
+    };
 
     expect(screen.getByText("Ánh sáng môi trường")).toBeTruthy();
     expect(section.getByText("Bật ánh sáng môi trường")).toBeTruthy();
 
-    const preset = group("Kiểu");
-    expect(within(preset).getByText("Cân bằng")).toBeTruthy();
-    expect(within(preset).getByText("Đắm chìm")).toBeTruthy();
-    expect(within(preset).getByText("Tùy chỉnh")).toBeTruthy();
-    expect(within(group("Hướng")).getByText("Mọi hướng")).toBeTruthy();
-    expect(within(group("Chuyển tiếp")).getByText("Mượt mà")).toBeTruthy();
+    const presetMenu = await openButton("Kiểu");
+    expect(within(presetMenu).getByText("Cân bằng")).toBeTruthy();
+    expect(within(presetMenu).getByText("Đắm chìm")).toBeTruthy();
+    expect(within(presetMenu).getByText("Tùy chỉnh")).toBeTruthy();
+    fireEvent.click(section.getByRole("button", { name: "Kiểu" }));
+
+    const directionMenu = await openButton("Hướng");
+    expect(within(directionMenu).getByText("Mọi hướng")).toBeTruthy();
+    fireEvent.click(section.getByRole("button", { name: "Hướng" }));
+
+    const transitionMenu = await openButton("Chuyển tiếp");
+    expect(within(transitionMenu).getByText("Mượt mà")).toBeTruthy();
+    fireEvent.click(section.getByRole("button", { name: "Chuyển tiếp" }));
+
     expect(section.getByText("Độ lan")).toBeTruthy();
     expect(section.getByText("Độ chuyển mờ")).toBeTruthy();
     // The two glow multipliers are localized too, not left as English keys.

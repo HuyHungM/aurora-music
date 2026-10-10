@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLocale } from "@/components/i18n/locale-provider";
-import { SlidersHorizontalIcon } from "@/components/ui/icons";
+import { GearIcon } from "@/components/ui/icons";
 
 /**
  * The one control that routes to Settings (Phase 53).
@@ -53,7 +53,7 @@ export function SettingsLink({ compact = false }: { compact?: boolean }) {
           : "aurora-touch flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm text-text-secondary transition-colors hover:bg-surface-2 hover:text-text-primary"
       }
     >
-      <SlidersHorizontalIcon size={18} className="shrink-0" />
+      <GearIcon size={18} className="shrink-0" />
       {!compact && <span className="truncate">{t("nav.settings")}</span>}
     </Link>
   );

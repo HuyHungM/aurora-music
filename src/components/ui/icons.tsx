@@ -195,6 +195,26 @@ export function SlidersHorizontalIcon(props: IconProps) {
   );
 }
 
+/**
+ * Settings gear.
+ *
+ * A ring with a centre hole and eight trapezoidal teeth, each its own path so
+ * the teeth read as solid blocks at 18px rather than as a dashed circle. The
+ * teeth sit on the diagonals as well as the axes — that is what separates a
+ * gear from a sun, which has only radial spikes. Used by the Settings entry
+ * in the shell; `SlidersHorizontalIcon` stays for any surface that means
+ * "adjust" rather than "settings".
+ */
+export function GearIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="3.2" />
+      <circle cx="12" cy="12" r="6.1" />
+      <path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M18.5 5.5l-1.8 1.8M7.3 16.7l-1.8 1.8" />
+    </svg>
+  );
+}
+
 export function PlayIcon(props: IconProps) {
   return (
     <svg {...base(props)} fill="currentColor" stroke="none">
